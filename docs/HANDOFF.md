@@ -5,7 +5,7 @@ the memory notes in the assistant's store point here.
 
 ## Where everything stands
 
-- **Repo**: `main` at **0.19.14**, pushed to github.com/RavenIron/FireFront,
+- **Repo**: `main` at **0.19.14**, pushed to github.com/RavenIron-Games/FireFront,
   every version tagged through `v0.19.14`. GitHub releases published for
   v0.19.8, v0.19.9, v0.19.11 and v0.19.14 (each with the bare DLL and the
   mod-manager zip attached, SHA256s in the notes).
