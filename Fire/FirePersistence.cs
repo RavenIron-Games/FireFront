@@ -41,7 +41,11 @@ namespace FireFront.Fire
                 if (world == null) return null;
 
                 long uid = AccessTools.FieldRefAccess<World, long>(world, "m_uid");
-                string dir = World.GetWorldSavePath(FileHelpers.FileSource.Local);
+                // Valheim 1.0.7 deleted World.GetWorldSavePath; SaveSystem.GetWorldsSaveRootPath
+                // is the same method rehoused, same body and same "/worlds_local" for Local.
+                // 1.0.7 also renumbered FileSource into a [Flags] enum (Local is 2, was 1) —
+                // pass the symbol, never the number.
+                string dir = SaveSystem.GetWorldsSaveRootPath(FileHelpers.FileSource.Local);
                 if (string.IsNullOrEmpty(dir)) return null;
 
                 return Path.Combine(dir, $"{FileStem}_{(ulong)uid}.txt");

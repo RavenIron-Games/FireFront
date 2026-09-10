@@ -683,7 +683,11 @@ namespace FireFront.Commands
             }
 
             FireLogger.Info($"[RELAY] {name} from peer {sender}: '{commandLine}'");
-            var fakeArgs = new Terminal.ConsoleEventArgs(commandLine, null);
+            // 1.0.7 added a third ConsoleCommand parameter. It is only stored on the new
+            // ConsoleEventArgs.Commmand field (vanilla's spelling) and nothing in the console
+            // reads it back, so null keeps this relay behaving exactly as it did before — our
+            // handlers take the args object and never touch that field.
+            var fakeArgs = new Terminal.ConsoleEventArgs(commandLine, null, null);
             _replySink = line => ValheimBridge.SendStatusResponse(sender, line);
             ValheimBridge.SetPositionOverride(ValheimBridge.PeerRefPosition(sender));
             try

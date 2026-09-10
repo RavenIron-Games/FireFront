@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.20.0
+
+- **Valheim 1.0.7 support. This release REQUIRES it, and does not run on 0.2x.** Three
+  separate breaks, only two of which the compiler could see:
+  - `World.GetWorldSavePath` was deleted, so the fire store could not resolve a path and
+    **fires stopped surviving a restart**. It now goes through
+    `SaveSystem.GetWorldsSaveRootPath`, the same method rehoused — your existing
+    `firefront_fires_*.txt` is found exactly where it was, with nothing to move.
+  - `Terminal.ConsoleEventArgs` gained a third parameter, which broke the admin command
+    relay — the path that lets a remote admin run FireFront commands on the server.
+  - **The silent one:** Valheim renamed `ZoneSystem`'s singleton field `m_instance` to
+    `s_instance`. Nothing failed to compile and nothing threw. The lookup simply returned
+    null, the world's water level read as -10000, and **ground fire stopped treating water
+    as a firebreak** — fire crossing rivers and shorelines, with only a debug line to say so.
+    Both spellings are now tried, so this works on either game version.
+- No gameplay, balance or config change. Same spread, same damage, same defaults.
+
 ## 0.19.14
 
 - **`fireset smoulderafter <0.05-1>` and `fireset smouldering true|false`.**

@@ -1172,8 +1172,19 @@ namespace FireFront.Utils
         // --- Terrain height ---
         private static readonly MethodInfo ZoneSystemGetGroundHeightMethod =
             typeof(ZoneSystem).GetMethod("GetGroundHeight", AnyInstance, null, new[] { typeof(Vector3) }, null);
+        // Valheim 1.0.7 RENAMED this backing field m_instance -> s_instance (ZNetScene and
+        // EnvMan below were always s_; ZoneSystem and GameCamera were the m_ holdouts, and
+        // only ZoneSystem moved). Nothing about that is compile-visible: the lookup simply
+        // returned null, GetWaterLevel fell back to -10000, and the "water blocks ground
+        // spread" rule silently stopped applying — fire crossing rivers, with only a Debug
+        // line to say so. Both spellings are tried so this works on either game version.
+        //
+        // The sturdier answer is the public `ZoneSystem.instance` PROPERTY, which exists
+        // under that name in both versions and cannot be renamed out from under us without
+        // breaking the build loudly. Left as reflection here only to keep this port minimal.
         private static readonly FieldInfo ZoneSystemInstanceField =
-            typeof(ZoneSystem).GetField("m_instance", AnyStatic);
+            typeof(ZoneSystem).GetField("s_instance", AnyStatic)
+            ?? typeof(ZoneSystem).GetField("m_instance", AnyStatic);
 
         // Valheim's own terrain colliders live on a layer literally named
         // "terrain" — a standard Unity LayerMask lookup by name, not fragile
