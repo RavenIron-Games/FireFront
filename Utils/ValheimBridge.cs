@@ -56,7 +56,11 @@ namespace FireFront.Utils
         // --- TreeLog (felled logs) ---
         private static readonly FieldInfo LogNviewField = typeof(TreeLog).GetField("m_nview", AnyInstance);
         private static readonly MethodInfo LogDestroyMethod =
-            typeof(TreeLog).GetMethod("Destroy", AnyInstance, null, new[] { typeof(HitData) }, null);
+            // 1.0.7: Destroy(HitData) -> Destroy(HitData, bool cheatedTool). No default on the
+            // new parameter, so the old types array simply stopped matching and felled logs
+            // stopped being removed.
+            typeof(TreeLog).GetMethod("Destroy", AnyInstance, null,
+                new[] { typeof(HitData), typeof(bool) }, null);
 
         // --- Vanilla's own "Fire" gameplay class (Ashlands wildfire component) ---
         // Used ONLY for the emergency purge command — see PurgeAllVanillaFireInstances.
@@ -208,9 +212,13 @@ namespace FireFront.Utils
             public Vector3 Position;
         }
 
+        // 1.0.7 retyped this whole call: the sector is a Vector2s now, and the two ring
+        // integers collapsed into one SimulationDistance. It is looked up by explicit types, so
+        // the change did not warn — the lookup returned null and the burnable-object scan that
+        // feeds ground fire silently found nothing at all.
         private static readonly MethodInfo ZdoManFindSectorObjectsMethod =
             typeof(ZDOMan).GetMethod("FindSectorObjects", AnyInstance, null,
-                new[] { typeof(Vector2i), typeof(int), typeof(int), typeof(List<ZDO>), typeof(List<ZDO>) }, null);
+                new[] { typeof(Vector2s), typeof(SimulationDistance), typeof(List<ZDO>), typeof(List<ZDO>) }, null);
         private static readonly FieldInfo ZNetSceneNamedPrefabsField =
             typeof(ZNetScene).GetField("m_namedPrefabs", AnyInstance);
 
@@ -329,8 +337,11 @@ namespace FireFront.Utils
             int rings = Mathf.Max(1, Mathf.CeilToInt(radius / 64f));
             try
             {
+                // GetZone already returns the Vector2s 1.0.7 wants. classic:true is what keeps
+                // this a full square sweep of `rings` rings with no distant pass — without it
+                // the near ring gets radius-filtered and the distant loop re-walks it.
                 ZdoManFindSectorObjectsMethod.Invoke(man,
-                    new object[] { ZoneSystem.GetZone(center), rings, 0, _zdoScanScratch, null });
+                    new object[] { ZoneSystem.GetZone(center), new SimulationDistance(rings, 0, true), _zdoScanScratch, null });
             }
             catch (System.Exception ex)
             {
@@ -522,7 +533,8 @@ namespace FireFront.Utils
 
                 case BurnKind.Log:
                     ClaimOwnershipIfNeeded(AsZNetView(LogNviewField, target));
-                    LogDestroyMethod?.Invoke(target, new object[] { null });
+                    // cheatedTool: false — 1.0.7's added parameter; false is the honest path.
+                    LogDestroyMethod?.Invoke(target, new object[] { null, false });
                     break;
 
                 case BurnKind.Tree:
@@ -785,15 +797,23 @@ namespace FireFront.Utils
         // purely runtime. Test-world only until proven safe over real use.
         private static readonly MethodInfo TerrainCompFindMethod =
             typeof(TerrainComp).GetMethod("FindTerrainCompiler", AnyStatic, null, new[] { typeof(Vector3) }, null);
+        // 1.0.7 restructured this: (worldPos, radius, paintType, heightCheck, apply) became
+        // (worldPos, rot, TerrainOp.Settings). The five loose arguments are fields on the
+        // settings object now, and the trailing `apply` — which used to make the method call
+        // Save() and Poke() for you — is gone. We already call Save() ourselves right after
+        // the batch, so nothing is lost. See the invoke site for the field-by-field mapping.
         private static readonly MethodInfo TerrainCompPaintClearedMethod =
             typeof(TerrainComp).GetMethod("PaintCleared", AnyInstance, null,
-                new[] { typeof(Vector3), typeof(float), typeof(TerrainModifier.PaintType), typeof(bool), typeof(bool) }, null);
+                new[] { typeof(Vector3), typeof(Vector3), typeof(TerrainOp.Settings) }, null);
         private static readonly FieldInfo TerrainCompNviewField =
             typeof(TerrainComp).GetField("m_nview", AnyInstance);
         private static readonly MethodInfo TerrainCompIsOwnerMethod =
             typeof(TerrainComp).GetMethod("IsOwner", AnyInstance, null, System.Type.EmptyTypes, null);
         private static readonly MethodInfo TerrainCompSaveMethod =
-            typeof(TerrainComp).GetMethod("Save", AnyInstance, null, System.Type.EmptyTypes, null);
+            // 1.0.7: Save() -> Save(bool paintOnly = false). A default argument still changes
+            // the signature, so an EmptyTypes lookup no longer matches. false is the old
+            // behaviour: a full save, not the paint-only fast path.
+            typeof(TerrainComp).GetMethod("Save", AnyInstance, null, new[] { typeof(bool) }, null);
 
         /// <summary>
         /// Paints real bare dirt at a world position via vanilla's own terrain
@@ -835,8 +855,10 @@ namespace FireFront.Utils
         /// Cultivator use normally leaves nothing behind).
         /// </summary>
         private static readonly MethodInfo PlayerPlacePieceMethod =
+            // 1.0.7 appended `bool cheated = false`. A default argument still changes the
+            // signature, so the old four-type lookup no longer matches.
             typeof(Player).GetMethod("PlacePiece", AnyInstance, null,
-                new[] { typeof(Piece), typeof(Vector3), typeof(Quaternion), typeof(bool) }, null);
+                new[] { typeof(Piece), typeof(Vector3), typeof(Quaternion), typeof(bool), typeof(bool) }, null);
 
         /// <summary>
         /// Spawns the real vanilla "cultivate" piece at a position to paint the
@@ -913,7 +935,8 @@ namespace FireFront.Utils
             object result;
             try
             {
-                result = PlayerPlacePieceMethod.Invoke(local, new object[] { piecePrefabComponent, worldPos, Quaternion.identity, false });
+                // trailing false = 1.0.7's `cheated`, which is its own default.
+                result = PlayerPlacePieceMethod.Invoke(local, new object[] { piecePrefabComponent, worldPos, Quaternion.identity, false, false });
             }
             catch (System.Exception ex)
             {
@@ -1138,12 +1161,33 @@ namespace FireFront.Utils
                     nv.ClaimOwnership();
                 }
 
+                // Built once per TerrainComp rather than per splat: radius is constant for the
+                // whole batch and PaintCleared only reads this object.
+                var scorchPaintSettings = new TerrainOp.Settings
+                {
+                    m_paintCleared = true,
+                    m_paintType = TerrainModifier.PaintType.Dirt,
+                    m_paintRadius = radius,
+                    m_paintHeightCheck = false,
+                };
+
                 int paintedOnComp = 0;
                 foreach (Vector3 pos in kv.Value)
                 {
                     try
                     {
-                        TerrainCompPaintClearedMethod.Invoke(comp, new object[] { pos, radius, TerrainModifier.PaintType.Dirt, false, true });
+                        // Field-by-field from the pre-1.0.7 call (pos, radius, Dirt, false, true):
+                        //   m_paintRadius      <- radius
+                        //   m_paintType        <- Dirt
+                        //   m_paintHeightCheck <- false
+                        //   apply:true         -> no equivalent; the Save() below IS that.
+                        // Defaults left alone on purpose: m_halfOffset stays true because the
+                        // old method ALWAYS shifted worldPos by -0.5 on x and z (it was
+                        // unconditional in the 0.2x body), and m_centerMultiplicationFactor
+                        // stays 0, which is the branch that skips mask multiplication — the old
+                        // method had no such concept. rot is Vector3.zero: m_rotation is off,
+                        // so a round dirt splat has no orientation to give it.
+                        TerrainCompPaintClearedMethod.Invoke(comp, new object[] { pos, Vector3.zero, scorchPaintSettings });
                         paintedOnComp++;
                     }
                     catch (System.Exception ex)
@@ -1157,7 +1201,7 @@ namespace FireFront.Utils
                     painted += paintedOnComp;
                     try
                     {
-                        TerrainCompSaveMethod?.Invoke(comp, null);
+                        TerrainCompSaveMethod?.Invoke(comp, new object[] { false });
                     }
                     catch (System.Exception ex)
                     {
@@ -1393,26 +1437,40 @@ namespace FireFront.Utils
 
         // --- Player feedback messages ---
         private static readonly MethodInfo PlayerMessageMethod =
+            // 1.0.7 appended `bool log = false`, which changes the signature even though it
+            // has a default — an explicit types lookup stops matching and the player stops
+            // getting told anything.
             typeof(Player).GetMethod("Message", AnyInstance, null,
-                new[] { typeof(MessageHud.MessageType), typeof(string), typeof(int), typeof(Sprite) }, null);
+                new[] { typeof(MessageHud.MessageType), typeof(string), typeof(int), typeof(Sprite), typeof(bool) }, null);
 
         /// <summary>Shows a top-left HUD message to the local player, if one exists.</summary>
         public static void ShowPlayerMessage(string text)
         {
             Player local = LocalPlayerField?.GetValue(null) as Player;
             if (local == null || PlayerMessageMethod == null) return;
-            PlayerMessageMethod.Invoke(local, new object[] { MessageHud.MessageType.TopLeft, text, 0, null });
+            // trailing false = 1.0.7's `log`, its own default.
+            PlayerMessageMethod.Invoke(local, new object[] { MessageHud.MessageType.TopLeft, text, 0, null, false });
         }
         private static readonly MethodInfo CharacterAddFireDamageMethod =
-            typeof(Character).GetMethod("AddFireDamage", AnyInstance, null, new[] { typeof(float) }, null);
+            // 1.0.7: AddFireDamage(float) -> AddFireDamage(float, short variant), with NO
+            // default on the new parameter. This is the break that mattered most here — the
+            // lookup returned null and fire simply stopped hurting anything. `variant` is
+            // handed straight to SEMan.AddStatusEffect, whose own default is -1, so -1 is the
+            // value that means "the burning effect as it was before 1.0".
+            typeof(Character).GetMethod("AddFireDamage", AnyInstance, null,
+                new[] { typeof(float), typeof(short) }, null);
         private static readonly MethodInfo CharacterGetSEManMethod =
             typeof(Character).GetMethod("GetSEMan", AnyInstance, null, System.Type.EmptyTypes, null);
         private static readonly FieldInfo SEManBurningStatusField =
             typeof(SEMan).GetField("s_statusEffectBurning", AnyStatic);
         private static readonly MethodInfo SEManAddStatusEffectIntMethod =
-            typeof(SEMan).GetMethod("AddStatusEffect", AnyInstance, null, new[] { typeof(int), typeof(bool), typeof(int), typeof(int) }, null);
+            // 1.0.7 changed the fourth parameter's TYPE (int skillLevel -> float) and appended
+            // `short variant = -1`. Two reasons one lookup can go stale at once.
+            typeof(SEMan).GetMethod("AddStatusEffect", AnyInstance, null,
+                new[] { typeof(int), typeof(bool), typeof(int), typeof(float), typeof(short) }, null);
         private static readonly MethodInfo SEManAddStatusEffectObjMethod =
-            typeof(SEMan).GetMethod("AddStatusEffect", AnyInstance, null, new[] { typeof(StatusEffect), typeof(bool), typeof(int), typeof(int) }, null);
+            typeof(SEMan).GetMethod("AddStatusEffect", AnyInstance, null,
+                new[] { typeof(StatusEffect), typeof(bool), typeof(int), typeof(float), typeof(short) }, null);
 
         private static readonly FieldInfo EffectAreaCharacterMaskField =
             typeof(EffectArea).GetField("s_characterMask", AnyStatic);
@@ -1502,17 +1560,19 @@ namespace FireFront.Utils
                     object burningRef = SEManBurningStatusField?.GetValue(null);
                     if (burningRef is int hash && SEManAddStatusEffectIntMethod != null)
                     {
-                        SEManAddStatusEffectIntMethod.Invoke(seman, new object[] { hash, true, 1, 1 });
+                        // 1f, not 1: skillLevel is a float in 1.0.7. Trailing -1 is `variant`,
+                        // vanilla's own default, meaning the plain burning effect.
+                        SEManAddStatusEffectIntMethod.Invoke(seman, new object[] { hash, true, 1, 1f, (short)-1 });
                         addedStatusEffect = true;
                     }
                     else if (burningRef != null && SEManAddStatusEffectObjMethod != null)
                     {
-                        SEManAddStatusEffectObjMethod.Invoke(seman, new object[] { burningRef, true, 1, 1 });
+                        SEManAddStatusEffectObjMethod.Invoke(seman, new object[] { burningRef, true, 1, 1f, (short)-1 });
                         addedStatusEffect = true;
                     }
                 }
 
-                CharacterAddFireDamageMethod?.Invoke(character, new object[] { damage });
+                CharacterAddFireDamageMethod?.Invoke(character, new object[] { damage, (short)-1 });
 
                 if (!_fireDamageTickLoggedOnce)
                 {

@@ -2,19 +2,37 @@
 
 ## 0.20.0
 
-- **Valheim 1.0.7 support. This release REQUIRES it, and does not run on 0.2x.** Three
-  separate breaks, only two of which the compiler could see:
+- **Valheim 1.0.7 support. This release REQUIRES it, and does not run on 0.2x.** Eleven
+  separate breaks. Only two of them failed to compile; the other nine are reflection lookups,
+  which fail by returning null, which means a feature switches itself off in silence.
+
+  The two loud ones:
   - `World.GetWorldSavePath` was deleted, so the fire store could not resolve a path and
     **fires stopped surviving a restart**. It now goes through
     `SaveSystem.GetWorldsSaveRootPath`, the same method rehoused — your existing
     `firefront_fires_*.txt` is found exactly where it was, with nothing to move.
   - `Terminal.ConsoleEventArgs` gained a third parameter, which broke the admin command
     relay — the path that lets a remote admin run FireFront commands on the server.
-  - **The silent one:** Valheim renamed `ZoneSystem`'s singleton field `m_instance` to
-    `s_instance`. Nothing failed to compile and nothing threw. The lookup simply returned
-    null, the world's water level read as -10000, and **ground fire stopped treating water
-    as a firebreak** — fire crossing rivers and shorelines, with only a debug line to say so.
-    Both spellings are now tried, so this works on either game version.
+
+  The quiet ones, each of which built perfectly:
+  - **Fire stopped hurting anything.** `Character.AddFireDamage(float)` gained a required
+    `short variant`, so the lookup missed and every damage tick did nothing.
+  - **Ground fire stopped seeing anything to burn.** `ZDOMan.FindSectorObjects` was retyped
+    to take a `Vector2s` and a `SimulationDistance`, so the scan that finds burnable objects
+    came back empty.
+  - **Water stopped being a firebreak.** Valheim renamed `ZoneSystem`'s singleton field
+    `m_instance` to `s_instance`; the world's water level then read as -10000 and fire
+    crossed rivers and shorelines, with only a debug line to say so.
+  - Burning status effects, scorch marks, felled-log cleanup, the dirt-paint piece and
+    on-screen messages were all broken the same way, by
+    `SEMan.AddStatusEffect` (whose fourth parameter changed type *and* which gained a fifth),
+    `TerrainComp.PaintCleared` (restructured into a settings object), `TerrainComp.Save`,
+    `TreeLog.Destroy`, `Player.PlacePiece` and `Player.Message` (each gained a parameter —
+    a default argument still changes the signature).
+
+  All 50 of the mod's compiler-invisible game dependencies are now verified to resolve
+  against the real 1.0.7 assemblies, by a probe kept in the Ragnarok's Wrath repo so the
+  next game update gets checked instead of guessed at.
 - No gameplay, balance or config change. Same spread, same damage, same defaults.
 
 ## 0.19.14
