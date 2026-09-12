@@ -689,19 +689,66 @@ namespace FireFront.Utils
         };
 
         /// <summary>
-        /// Shader.Find can return null if a shader was stripped from the build
-        /// (confirmed: "Particles/Standard Unlit" isn't present in Valheim's
-        /// build). Try a fallback chain; null if literally none are available.
+        /// Shader.Find returns null for anything stripped from the build, so we
+        /// try a chain and take the first that resolves; null if none do.
         /// </summary>
+        /// <remarks>
+        /// Settled against the shipped build, because a first pass got this
+        /// exactly backwards and nearly committed the inversion.
+        ///
+        /// Parsing the ScriptMapper in globalgamemanagers (225 entries, laid out
+        /// PPtr-first then name — reading it name-first shifts every mapping by
+        /// one and inverts the answer) and cross-checking the object table of
+        /// Resources/unity_builtin_extra:
+        ///
+        ///   Particles/Standard Unlit                NULL — stripped
+        ///   Particles/Standard Surface              NULL — stripped
+        ///   Legacy Shaders/Particles/Additive       NULL — stripped
+        ///   Legacy Shaders/Particles/Alpha Blended  NULL — stripped
+        ///   Sprites/Default                         ships (pathID 10753)
+        ///   UI/Default                              ships (pathID 10770)
+        ///
+        /// So the first FOUR candidates can never resolve and this chain lands
+        /// on candidate 5, Sprites/Default. The reason Standard Unlit misses is
+        /// mundane: the game ships it renamed. Its own shader declares
+        /// "Particles/Standard Unlit2", with a trailing 2, so Shader.Find on the
+        /// un-suffixed name finds nothing.
+        ///
+        /// Two consequences worth keeping in mind. Sprites/Default is ALPHA
+        /// BLENDED, so smoke is already compositing correctly and the flames are
+        /// not truly additive despite reading that way. And it draws an untextured
+        /// particle as a hard-edged quad, which is exactly why
+        /// GetOrCreateSoftParticleTexture exists. The log line below prints which
+        /// candidate actually won, so this never has to be argued from memory again.
+        /// </remarks>
         private static Shader FindUsableParticleShader()
         {
             foreach (string name in CandidateParticleShaders)
             {
                 Shader shader = Shader.Find(name);
-                if (shader != null) return shader;
+                if (shader != null)
+                {
+                    if (!_loggedResolvedParticleShader)
+                    {
+                        _loggedResolvedParticleShader = true;
+                        FireLogger.Info($"[SHADER-DIAG] particle shader resolved to \"{name}\" " +
+                                        $"(candidate {System.Array.IndexOf(CandidateParticleShaders, name) + 1} " +
+                                        $"of {CandidateParticleShaders.Length}).");
+                    }
+                    return shader;
+                }
+            }
+
+            if (!_loggedResolvedParticleShader)
+            {
+                _loggedResolvedParticleShader = true;
+                FireLogger.Warn("[SHADER-DIAG] none of the " + CandidateParticleShaders.Length +
+                                " candidate particle shaders resolved in this build.");
             }
             return null;
         }
+
+        private static bool _loggedResolvedParticleShader;
 
         // --- EffectArea (vanilla's own "standing in fire hurts you" detection zone) ---
         private static readonly FieldInfo EffectAreaTypeField = typeof(EffectArea).GetField("m_type", AnyInstance);
@@ -1799,42 +1846,241 @@ namespace FireFront.Utils
         /// </summary>
         public static GameObject CreateProceduralFireVfx(Vector3 position)
         {
+            return CreateProceduralFireVfx(position, 0f);
+        }
+
+        /// <summary>
+        /// As above, but sized to the thing that is burning.
+        /// </summary>
+        /// <remarks>
+        /// A burner shorter than TallBurnerMinHeight gets exactly the effect it
+        /// always got. Above it the flame becomes a COLUMN rather than a bigger
+        /// puddle: the emitter changes to a cone VOLUME whose length spans the
+        /// trunk, so Unity distributes particles up the whole height natively.
+        /// That distinction is the entire point. A wild Valheim fir stands
+        /// 15.8-31.7 m — FirTree is 10.55 m at scale 1, and ZoneSystem plants it
+        /// only in Black Forest at scale 2-2.5 and Mountain at 1.5-3 — and it
+        /// used to get a 1.5 m plume at the foot of the trunk, which read as a
+        /// campfire beside an untouched tree rather than a tree on fire. Only a
+        /// player-planted sapling is ever short enough for the old effect to
+        /// have covered it.
+        ///
+        /// The sizing is deliberately sub-linear. Particle COUNT and emission
+        /// rate grow with height, since a taller column needs more to stay
+        /// dense, but particle SIZE barely does: scaling the whole effect
+        /// uniformly just produces a giant campfire. Everything is clamped, and
+        /// the height itself is clamped by MaxFlameHeight, so one freak bounds
+        /// measurement cannot turn a single tree into a particle storm.
+        /// </remarks>
+        public static GameObject CreateProceduralFireVfx(Vector3 position, float burnerHeight)
+        {
             var go = new GameObject("FireFrontVfx_Procedural");
             go.transform.position = position;
 
-            BuildFlameParticles(go);
+            float height = ResolveFlameHeight(burnerHeight);
+            if (height > 0f && !TryReserveTallVfx(go)) height = 0f;
+
+            BuildFlameParticles(go, height);
             if (FireFront.Config.FireConfig.FireSmokeEnabled.Value)
             {
-                BuildSmokeParticles(go);
+                BuildSmokeParticles(go, height);
+            }
+            if (height > 0f && FireFront.Config.FireConfig.EffectiveCrownSparksEnabled)
+            {
+                BuildCrownSparks(go, height);
             }
 
             Light light = go.AddComponent<Light>();
             light.color = new Color(1f, 0.5f, 0.2f);
-            light.intensity = 2.5f;
-            light.range = 6f;
+            light.intensity = height > 0f ? Mathf.Min(2.5f + height * 0.10f, 4f) : 2.5f;
+            // Range is the dominant cost of a realtime light, so it grows slowly
+            // and stops early. See the note in DowngradeVfxToSmoulder.
+            light.range = height > 0f ? Mathf.Min(6f + height * 0.45f, 12f) : 6f;
 
             return go;
         }
 
-        private static void BuildFlameParticles(GameObject go)
+        /// <summary>
+        /// Live tall-fire effects, so their total can be bounded.
+        /// </summary>
+        /// <remarks>
+        /// Object fire has never had the aggregate cap that ground fire gives
+        /// itself through GroundVfxMaxConcurrent, and a tall burner costs roughly
+        /// 4x a short one. Without a ceiling, a forest going up would multiply a
+        /// cost that was already unbounded.
+        ///
+        /// Bounded at SPAWN, deliberately, not by a per-frame sweep: picking the
+        /// nearest N every frame is exactly the shape of managed work that caused
+        /// the spikes this repo keeps re-learning about. Once the budget is full,
+        /// later ignitions simply get the ordinary small effect and still burn,
+        /// spread and damage normally. Destroyed entries are pruned here, which
+        /// is why the list self-heals as fires burn out — Unity's overloaded ==
+        /// reports a destroyed GameObject as null.
+        /// </remarks>
+        private static readonly List<GameObject> _tallVfx = new List<GameObject>();
+
+        private static bool TryReserveTallVfx(GameObject go)
         {
+            for (int i = _tallVfx.Count - 1; i >= 0; i--)
+            {
+                if (_tallVfx[i] == null) _tallVfx.RemoveAt(i);
+            }
+
+            if (_tallVfx.Count >= FireFront.Config.FireConfig.EffectiveTallFireMaxConcurrent) return false;
+
+            _tallVfx.Add(go);
+            return true;
+        }
+
+        /// <summary>Burners below this keep exactly the effect they always had.</summary>
+        private const float TallBurnerMinHeight = 3f;
+
+        /// <summary>
+        /// Height, in metres, past which a fire stops getting MORE EXPENSIVE —
+        /// as distinct from MaxFlameHeight, which bounds how TALL it is drawn.
+        /// </summary>
+        /// <remarks>
+        /// These have to be two numbers. Particle counts, emission rates, sizes
+        /// and lifetimes are driven by min(height, this), so a 30 m tree costs
+        /// exactly what a 14 m one does; only the geometry — column length and
+        /// where smoke and sparks sit — follows the real height. Without the
+        /// split, raising MaxFlameHeight to cover a real tree would have raised
+        /// the particle bill with it, and LowSpecPreset could not have bounded
+        /// smoke at all, since smoke size and lifetime keyed off nothing but the
+        /// "is it tall" boolean.
+        /// </remarks>
+        private const float CostHeightCeiling = 14f;
+
+        /// <summary>
+        /// Clamps a measured burner height into the range the flame builder will
+        /// honour. Returns 0 for anything short enough to keep the original
+        /// small-fire look, which is what every caller reads as "not tall".
+        /// </summary>
+        private static float ResolveFlameHeight(float burnerHeight)
+        {
+            if (!FireFront.Config.FireConfig.TreeFlameScaling.Value) return 0f;
+            if (burnerHeight < TallBurnerMinHeight) return 0f;
+            return Mathf.Min(burnerHeight, FireFront.Config.FireConfig.EffectiveMaxFlameHeight);
+        }
+
+        /// <summary>
+        /// World-space height of a burning thing, from its own origin to the top
+        /// of its renderers. Zero when nothing can be measured.
+        /// </summary>
+        /// <remarks>
+        /// Renderer.bounds is a world AABB that already accounts for LOD meshes
+        /// and leaf cards, which is what we want: the flame should cover the
+        /// silhouette, not the trunk capsule. ParticleSystemRenderers are skipped
+        /// so a fire already attached to the target can never feed its own bounds
+        /// back in and grow the next measurement.
+        ///
+        /// The allocation in GetComponentsInChildren is fine here. This runs once
+        /// per ignition, on a path already doing far more work, and never per
+        /// frame. The result is clamped on the way out.
+        /// </remarks>
+        public static float MeasureBurnerHeight(Component target)
+        {
+            if (target == null) return 0f;
+
+            GameObject go = target.gameObject;
+            if (go == null) return 0f;
+
+            float baseY = go.transform.position.y;
+            float top = baseY;
+            bool found = false;
+
+            // INACTIVE renderers count, deliberately. An LODGroup keeps only the
+            // current LOD enabled and disables the rest, so a tree ignited while
+            // it is far away or culled would measure 0 and keep the small flame
+            // for its entire burn, even once you walked up to it. Bounds are
+            // valid whether or not the renderer is drawing, and every LOD of the
+            // same tree reports the same top, so reading them all is both safe
+            // and the only way to get a stable answer regardless of view.
+            Renderer[] renderers = go.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer r = renderers[i];
+                if (r == null) continue;
+                if (r is ParticleSystemRenderer) continue;
+                float t = r.bounds.max.y;
+                if (t > top) { top = t; found = true; }
+            }
+
+            if (!found) return 0f;
+            return Mathf.Clamp(top - baseY, 0f, 40f);
+        }
+
+        /// <summary>
+        /// Points a cone emitter along world +Y.
+        /// </summary>
+        /// <remarks>
+        /// Unity emits a Cone along its LOCAL +Z and ShapeModule.rotation
+        /// defaults to zero, so a system built in code with AddComponent fires
+        /// SIDEWAYS. The Editor hides this: its own "Particle System" menu item
+        /// creates the GameObject pre-rotated -90 on X, which is why the default
+        /// looks upward there and nowhere else. Vanilla Valheim follows the same
+        /// convention. In fire_pit.prefab every directional emitter (flames,
+        /// low_flames, flames (1), smoke (1), smok_small) carries exactly -90 X,
+        /// while the two non-directional ones (flare, sparcs (1)) sit at 0.
+        ///
+        /// Assigning the rotation ABSOLUTELY, rather than rotating the transform,
+        /// keeps this idempotent: calling it twice, or on a system whose default
+        /// ever changes, still ends up pointing up instead of flipping over.
+        ///
+        /// One correction to the survey above: "sparcs (1)" is NOT an exception.
+        /// It is a Cone that carries its -90 on the ShapeModule rather than on
+        /// the Transform — the very mechanism used here — which leaves "flare",
+        /// a billboard glow with no direction to point, as the only emitter in
+        /// that prefab legitimately sitting at zero.
+        /// </remarks>
+        private static void AimShapeUp(ParticleSystem.ShapeModule shape)
+        {
+            shape.rotation = new Vector3(-90f, 0f, 0f);
+        }
+
+        private static void BuildFlameParticles(GameObject go, float height)
+        {
+            bool tall = height > 0f;
+            float cost = Mathf.Min(height, CostHeightCeiling);
             ParticleSystem ps = go.AddComponent<ParticleSystem>();
             ParticleSystem.MainModule main = ps.main;
-            main.startLifetime = new ParticleSystem.MinMaxCurve(0.7f, 1.1f);
-            main.startSpeed = new ParticleSystem.MinMaxCurve(1.2f, 1.9f);
-            main.startSize = new ParticleSystem.MinMaxCurve(0.3f, 0.55f);
+            main.startLifetime = tall
+                ? new ParticleSystem.MinMaxCurve(0.9f, 1.5f)
+                : new ParticleSystem.MinMaxCurve(0.7f, 1.1f);
+            main.startSpeed = tall
+                ? new ParticleSystem.MinMaxCurve(1.6f, 2.6f)
+                : new ParticleSystem.MinMaxCurve(1.2f, 1.9f);
+            main.startSize = tall
+                ? new ParticleSystem.MinMaxCurve(0.4f, 0.8f)
+                : new ParticleSystem.MinMaxCurve(0.3f, 0.55f);
             main.startRotation = new ParticleSystem.MinMaxCurve(0f, 360f * Mathf.Deg2Rad);
             main.startColor = new Color(1f, 0.55f, 0.15f);
             main.simulationSpace = ParticleSystemSimulationSpace.World;
-            main.maxParticles = 120;
+            main.maxParticles = tall ? Mathf.Clamp(Mathf.RoundToInt(120f + cost * 20f), 120, 400) : 120;
 
             ParticleSystem.EmissionModule emission = ps.emission;
-            emission.rateOverTime = 40f;
+            emission.rateOverTime = tall ? Mathf.Clamp(40f + cost * 6f, 40f, 140f) : 40f;
 
             ParticleSystem.ShapeModule shape = ps.shape;
-            shape.shapeType = ParticleSystemShapeType.Cone;
-            shape.angle = 12f;
-            shape.radius = 0.25f;
+            if (tall)
+            {
+                // ConeVolume, not Cone: the volume form spreads emission ALONG
+                // the axis instead of only across the base disc. That is what
+                // puts fire up the trunk rather than in a ring around its foot,
+                // and it costs nothing, because Unity samples the volume itself
+                // instead of us placing particles from managed code every frame.
+                shape.shapeType = ParticleSystemShapeType.ConeVolume;
+                shape.angle = 9f;
+                shape.radius = Mathf.Clamp(height * 0.07f, 0.3f, 1.1f);
+                shape.length = height * 0.85f;
+            }
+            else
+            {
+                shape.shapeType = ParticleSystemShapeType.Cone;
+                shape.angle = 12f;
+                shape.radius = 0.25f;
+            }
+            AimShapeUp(shape);
 
             // Flame licks: particles grow slightly through their first half-life,
             // then shrink as they burn out — reads much more like a living flame
@@ -1926,6 +2172,18 @@ namespace FireFront.Utils
                 ParticleSystem ps = systems[i];
                 if (ps == null) continue;
 
+                // Sparks are SILENCED rather than reduced. A smouldering tree
+                // throwing sparks reads as still-raging, and the generic flame
+                // branch below would make it worse: it writes startSize 0.18-0.34
+                // absolutely, which is 2-5x BIGGER than a spark starts, so the
+                // one thing meant to shrink would visibly grow.
+                if (ps.gameObject.name == "Sparks")
+                {
+                    ParticleSystem.EmissionModule sparkEmission = ps.emission;
+                    sparkEmission.enabled = false;
+                    continue;
+                }
+
                 bool isSmoke = ps.gameObject.name == "Smoke";
                 // Smoke is the SIGNATURE of smouldering, so it is barely reduced.
                 // Flames drop hard but not to nothing — 0.12 was invisible.
@@ -1962,29 +2220,44 @@ namespace FireFront.Utils
                 }
             }
         }
-        private static void BuildSmokeParticles(GameObject parent)
+        private static void BuildSmokeParticles(GameObject parent, float height)
         {
+            bool tall = height > 0f;
+            float cost = Mathf.Min(height, CostHeightCeiling);
             var smokeGo = new GameObject("Smoke");
             smokeGo.transform.SetParent(parent.transform, false);
-            smokeGo.transform.localPosition = Vector3.up * 0.4f;
+            // On a tall burner the smoke belongs at the CANOPY, not at the foot.
+            // Smoke born at ground level inside a burning tree spends its life
+            // behind the trunk and the flame column in front of it.
+            smokeGo.transform.localPosition = Vector3.up * (tall ? height * 0.72f : 0.4f);
 
             ParticleSystem ps = smokeGo.AddComponent<ParticleSystem>();
             ParticleSystem.MainModule main = ps.main;
-            main.startLifetime = new ParticleSystem.MinMaxCurve(2.5f, 4f);
-            main.startSpeed = new ParticleSystem.MinMaxCurve(0.6f, 1.1f);
-            main.startSize = new ParticleSystem.MinMaxCurve(0.5f, 0.9f);
+            // Scaled from `cost`, not stepped off `tall`. A boolean step meant a
+            // 3 m bush and a 30 m fir got identical smoke, and left the biggest
+            // fill-rate term in the effect answering to no cap at all.
+            main.startLifetime = tall
+                ? new ParticleSystem.MinMaxCurve(2.5f + cost * 0.11f, 4f + cost * 0.18f)
+                : new ParticleSystem.MinMaxCurve(2.5f, 4f);
+            main.startSpeed = tall
+                ? new ParticleSystem.MinMaxCurve(0.6f + cost * 0.02f, 1.1f + cost * 0.04f)
+                : new ParticleSystem.MinMaxCurve(0.6f, 1.1f);
+            main.startSize = tall
+                ? new ParticleSystem.MinMaxCurve(0.5f + cost * 0.03f, 0.9f + cost * 0.05f)
+                : new ParticleSystem.MinMaxCurve(0.5f, 0.9f);
             main.startRotation = new ParticleSystem.MinMaxCurve(0f, 360f * Mathf.Deg2Rad);
             main.startColor = new Color(0.2f, 0.2f, 0.2f, 0.45f);
             main.simulationSpace = ParticleSystemSimulationSpace.World;
-            main.maxParticles = 60;
+            main.maxParticles = tall ? Mathf.Clamp(Mathf.RoundToInt(60f + cost * 6f), 60, 150) : 60;
 
             ParticleSystem.EmissionModule emission = ps.emission;
-            emission.rateOverTime = 8f;
+            emission.rateOverTime = tall ? Mathf.Clamp(8f + cost * 0.9f, 8f, 24f) : 8f;
 
             ParticleSystem.ShapeModule shape = ps.shape;
             shape.shapeType = ParticleSystemShapeType.Cone;
             shape.angle = 18f; // wider than the flame — smoke drifts and spreads, doesn't stay a tight column
-            shape.radius = 0.2f;
+            shape.radius = tall ? Mathf.Clamp(cost * 0.10f, 0.2f, 1.2f) : 0.2f;
+            AimShapeUp(shape);
 
             // Smoke expands as it rises and disperses, unlike the flame which
             // shrinks — this is the key visual distinction between the two.
@@ -2021,6 +2294,79 @@ namespace FireFront.Utils
         }
 
         /// <summary>
+        /// Sparks thrown off the upper half of a tall burner: bright, stretched,
+        /// and falling.
+        /// </summary>
+        /// <remarks>
+        /// This is the cheapest of the three tall-burner effects and carries the
+        /// most of the read. Flames say "there is fire here"; sparks say the fire
+        /// is IN THE CROWN, well above head height, which is the thing a plume at
+        /// the foot of a trunk can never convey.
+        ///
+        /// Stretch render mode is what makes them read as sparks rather than
+        /// orange dots. Positive gravity is deliberate: they arc and fall, unlike
+        /// everything else in this file, which rises.
+        ///
+        /// Emission is flat-rate and tiny (a handful a second, hard-capped) and
+        /// there is no per-frame managed work, so the cost is bounded per burner
+        /// rather than growing with how much of the forest is alight.
+        /// </remarks>
+        private static void BuildCrownSparks(GameObject parent, float height)
+        {
+            var sparkGo = new GameObject("Sparks");
+            sparkGo.transform.SetParent(parent.transform, false);
+            sparkGo.transform.localPosition = Vector3.up * (height * 0.55f);
+
+            ParticleSystem ps = sparkGo.AddComponent<ParticleSystem>();
+            ParticleSystem.MainModule main = ps.main;
+            main.startLifetime = new ParticleSystem.MinMaxCurve(1.2f, 2.2f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(2f, 5f);
+            main.startSize = new ParticleSystem.MinMaxCurve(0.06f, 0.14f);
+            main.startColor = new Color(1f, 0.85f, 0.4f);
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+            main.gravityModifier = 0.3f;
+            float cost = Mathf.Min(height, CostHeightCeiling);
+            main.maxParticles = Mathf.Clamp(Mathf.RoundToInt(20f + cost * 2f), 20, 60);
+
+            ParticleSystem.EmissionModule emission = ps.emission;
+            emission.rateOverTime = Mathf.Clamp(3f + cost * 0.5f, 3f, 12f);
+
+            ParticleSystem.ShapeModule shape = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.Cone;
+            shape.angle = 35f; // much wider than the flame — sparks scatter outward
+            shape.radius = Mathf.Clamp(cost * 0.09f, 0.2f, 1f);
+            AimShapeUp(shape);
+
+            ParticleSystem.SizeOverLifetimeModule sizeOverLifetime = ps.sizeOverLifetime;
+            sizeOverLifetime.enabled = true;
+            var sizeCurve = new AnimationCurve(new Keyframe(0f, 1f), new Keyframe(1f, 0.2f));
+            sizeOverLifetime.size = new ParticleSystem.MinMaxCurve(1f, sizeCurve);
+
+            ParticleSystem.ColorOverLifetimeModule colorOverLifetime = ps.colorOverLifetime;
+            colorOverLifetime.enabled = true;
+            var grad = new Gradient();
+            grad.SetKeys(
+                new[]
+                {
+                    new GradientColorKey(new Color(1f, 0.9f, 0.55f), 0f),
+                    new GradientColorKey(new Color(1f, 0.3f, 0.05f), 1f)
+                },
+                new[]
+                {
+                    new GradientAlphaKey(1f, 0f),
+                    new GradientAlphaKey(0.9f, 0.6f),
+                    new GradientAlphaKey(0f, 1f)
+                });
+            colorOverLifetime.color = grad;
+
+            var renderer = sparkGo.GetComponent<ParticleSystemRenderer>();
+            renderer.renderMode = ParticleSystemRenderMode.Stretch;
+            renderer.lengthScale = 3f;
+            renderer.velocityScale = 0.05f;
+            ApplyParticleShader(renderer, nameof(BuildCrownSparks));
+        }
+
+        /// <summary>
         /// Deliberately CHEAPER than CreateProceduralFireVfx — no Light (the
         /// most expensive part per-instance), fewer/smaller/shorter-lived
         /// particles. Ground cells can have up to GroundMaxConcurrent (default
@@ -2051,6 +2397,7 @@ namespace FireFront.Utils
             shape.shapeType = ParticleSystemShapeType.Cone;
             shape.angle = 12f;
             shape.radius = 0.35f;
+            AimShapeUp(shape);
 
             ParticleSystem.ColorOverLifetimeModule colorOverLifetime = ps.colorOverLifetime;
             colorOverLifetime.enabled = true;

@@ -1237,6 +1237,7 @@ namespace FireFront.Fire
                    $"trees {FireConfig.BurnTreesAndLogs.Value}, " +
                    $"burnbuildings {FireConfig.BurnPlayerBuildings.Value}, " +
                    $"vfx '{FireConfig.VfxPrefabName.Value}', procedural {FireConfig.UseProceduralVfx.Value}, " +
+                   $"treeflames {FireConfig.TreeFlameScaling.Value} (max {FireConfig.EffectiveMaxFlameHeight}m, tallcap {FireConfig.EffectiveTallFireMaxConcurrent}, sparks {FireConfig.EffectiveCrownSparksEnabled}), " +
                    $"hurts {FireConfig.FireHurtsEnabled.Value} (playerOnly {FireConfig.FireHurtsPlayerOnly.Value}, {FireConfig.FireDamagePerTick.Value}dmg/{FireConfig.FireDamageTickInterval.Value}s), " +
                    $"dirtpaint {FireConfig.UseVanillaDirtPaint.Value}, " +
                    $"exhaustion {FireConfig.EffectiveGroundFuelExhaustionEnabled} (regrow {FireConfig.GroundFuelRegrowSeconds.Value}s), " +
@@ -1627,7 +1628,7 @@ namespace FireFront.Fire
                 EventId = eventId
             };
             FireLogger.Debug($"Ignited ({_burning.Count}/{FireConfig.MaxConcurrentBurning.Value}): {ValheimBridge.NameOf(target)}");
-            SpawnVfxFor(id, position);
+            SpawnVfxFor(id, position, target);
 
             // Only ever called on the server (TryIgnite is server-gated — see the
             // Harmony patches), so this is always the real fire starting. Tell
@@ -1636,7 +1637,7 @@ namespace FireFront.Fire
             ValheimBridge.BroadcastFireEvent(id, started: true);
         }
 
-        private void SpawnVfxFor(ZDOID id, Vector3 position)
+        private void SpawnVfxFor(ZDOID id, Vector3 position, Component target = null)
         {
             if (_vfx.ContainsKey(id)) return;
 
@@ -1647,7 +1648,8 @@ namespace FireFront.Fire
             GameObject instance = null;
             if (FireConfig.UseProceduralVfx.Value)
             {
-                instance = ValheimBridge.CreateProceduralFireVfx(position);
+                instance = ValheimBridge.CreateProceduralFireVfx(
+                    position, ValheimBridge.MeasureBurnerHeight(target));
             }
             else if (!string.IsNullOrEmpty(FireConfig.VfxPrefabName.Value))
             {
@@ -1840,7 +1842,8 @@ namespace FireFront.Fire
             GameObject instance = null;
             if (FireConfig.UseProceduralVfx.Value)
             {
-                instance = ValheimBridge.CreateProceduralFireVfx(ValheimBridge.PositionOf(target));
+                instance = ValheimBridge.CreateProceduralFireVfx(
+                    ValheimBridge.PositionOf(target), ValheimBridge.MeasureBurnerHeight(target));
             }
             else
             {

@@ -21,6 +21,10 @@ namespace FireFront.Config
         public static ConfigEntry<string> VfxPrefabName;
         public static ConfigEntry<bool> UseProceduralVfx;
         public static ConfigEntry<bool> FireSmokeEnabled;
+        public static ConfigEntry<bool> TreeFlameScaling;
+        public static ConfigEntry<bool> CrownSparksEnabled;
+        public static ConfigEntry<float> MaxFlameHeight;
+        public static ConfigEntry<int> TallFireMaxConcurrent;
 
         public static ConfigEntry<bool> GroundSpreadEnabled;
         public static ConfigEntry<float> GroundCellSize;
@@ -86,6 +90,8 @@ namespace FireFront.Config
         private const int LowSpecGroundVfxMaxConcurrent = 10;
         private const int LowSpecGroundDamageMaxConcurrent = 20;
         private const float LowSpecSpreadCheckInterval = 2f;
+        private const float LowSpecMaxFlameHeight = 12f;
+        private const int LowSpecTallFireMaxConcurrent = 4;
 
         private static bool LowSpec => LowSpecPreset != null && LowSpecPreset.Value;
 
@@ -107,6 +113,23 @@ namespace FireFront.Config
 
         /// <summary>Scorch decals are cosmetic; the preset drops them entirely.</summary>
         public static bool EffectiveScorchMarksEnabled => !LowSpec && ScorchMarksEnabled.Value;
+
+        /// <summary>Crown sparks are pure decoration; the preset drops them entirely.</summary>
+        public static bool EffectiveCrownSparksEnabled =>
+            !LowSpec && TreeFlameScaling.Value && CrownSparksEnabled.Value;
+
+        /// <summary>
+        /// Tall flames SURVIVE the low-spec preset, capped rather than switched
+        /// off, because the column is a correctness fix as much as a visual one -
+        /// without it a burning tree reads as a campfire at the foot of an
+        /// untouched tree. The cap is what keeps it affordable.
+        /// </summary>
+        public static float EffectiveMaxFlameHeight =>
+            LowSpec ? Mathf.Min(MaxFlameHeight.Value, LowSpecMaxFlameHeight) : MaxFlameHeight.Value;
+
+        public static int EffectiveTallFireMaxConcurrent =>
+            LowSpec ? Mathf.Min(TallFireMaxConcurrent.Value, LowSpecTallFireMaxConcurrent)
+            : TallFireMaxConcurrent.Value;
 
         // --- Watch The World Burn ------------------------------------------
         //
@@ -330,6 +353,39 @@ namespace FireFront.Config
                 "addition to the flame itself. Ground fire never gets smoke — it's deliberately " +
                 "kept cheap since up to 200 cells can be burning at once. Turn off if a big fire " +
                 "with many burning objects starts affecting performance.");
+
+            TreeFlameScaling = config.Bind(
+                "Visuals", "TreeFlameScaling", true,
+                "Fire on a tall object (a tree, a raised building) climbs it, instead of " +
+                "burning as one small plume at its base. The flame becomes a column spanning " +
+                "the burner's measured height, its smoke starts at the canopy rather than the " +
+                "ground, and its light reaches further. Turn off to go back to the one small " +
+                "flame every burning thing used to get regardless of size.");
+
+            CrownSparksEnabled = config.Bind(
+                "Visuals", "CrownSparksEnabled", true,
+                "Tall burners throw sparks off their upper half - stretched, bright, and " +
+                "falling. This is what makes a burning tree read as alight in the CROWN rather " +
+                "than at the foot. Costs a few particles a second per burning tree and stops " +
+                "entirely once that tree drops to smouldering. Ignored when TreeFlameScaling " +
+                "is off, and forced off by LowSpecPreset.");
+
+            MaxFlameHeight = config.Bind(
+                "Visuals", "MaxFlameHeight", 30f,
+                "Ceiling on how tall a single fire column is DRAWN, in metres. This bounds " +
+                "geometry, not cost: particle counts and sizes stop growing at 14m regardless, " +
+                "so raising this stretches the same particles over a taller tree rather than " +
+                "buying more of them. The default covers a real Valheim fir, which stands 15.8 " +
+                "to 31.7m in the world - 14 would have clamped every wild tree in the game. " +
+                "LowSpecPreset caps this at 12.");
+
+            TallFireMaxConcurrent = config.Bind(
+                "Visuals", "TallFireMaxConcurrent", 12,
+                "How many tall fire columns may be drawn at once. Past this, further ignitions " +
+                "get the ordinary small flame - they still burn, spread and do damage exactly " +
+                "the same, they just cost what fire always cost. Object fire otherwise has no " +
+                "aggregate visual cap the way ground fire does, and a tall burner costs about " +
+                "four times a short one. LowSpecPreset caps this at 4.");
 
             GroundSpreadEnabled = config.Bind(
                 "Ground", "GroundSpreadEnabled", true,

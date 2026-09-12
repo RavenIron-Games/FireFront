@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.20.1
+
+- **Fire climbs what it is burning.** A wild Valheim fir stands 15.8 to 31.7 m - FirTree is
+  10.55 m at scale 1, and the world plants it at 2-2.5x in Black Forest and 1.5-3x in
+  Mountain - and every one of them used to get the same 1.5 m plume as a burning bush,
+  parked at the foot of the trunk. A forest fire read as a row of campfires standing next
+  to untouched trees. Fire on anything over 3 m now spans the burner's measured height: the
+  flame emitter becomes a cone VOLUME along the trunk, so Unity distributes the particles up
+  it natively and there is no per-frame cost to this; its smoke starts at the canopy instead
+  of the ground where the trunk hid it; and its light reaches a little further. Height comes
+  from the renderers' own bounds, so it follows the actual silhouette rather than a guess
+  per prefab, and it is measured once at ignition, never per frame.
+
+- **Sparks off the crown.** Tall burners throw stretched, falling sparks from their upper
+  half. This is the cheapest of the new effects and carries most of the read: flames say
+  there is fire here, sparks say the fire is ABOVE YOU. They stop the moment that tree drops
+  to smouldering - a smouldering tree throwing sparks reads as still-raging.
+
+- **Cost and height are now two separate dials, and both are bounded.** `MaxFlameHeight`
+  (default 30 m) bounds how tall a fire is DRAWN; particle counts, sizes and lifetimes stop
+  growing at 14 m regardless, so covering a 30 m fir stretches the same particles further
+  rather than buying more of them. `TallFireMaxConcurrent` (default 12) bounds how many tall
+  columns exist at once - past it, further ignitions get the ordinary small flame and still
+  burn, spread and damage exactly as before. Object fire has never had the aggregate visual
+  cap that ground fire gives itself, and a tall burner costs about four times a short one,
+  so the ceiling matters. It is enforced at spawn, not by a per-frame sweep over the nearest
+  N, which is the shape of work behind every frametime spike this mod has had.
+
+- **Fixed: every particle effect in the mod was firing SIDEWAYS.** Unity emits a cone along
+  its local +Z, and a system built in code gets no rotation - the Editor hides this by
+  pre-rotating the GameObject it creates for you. FireFront builds all of its effects in code
+  and never set a rotation, so flames, smoke and ground fire had been emitting horizontally
+  along world +Z since they were written. Vanilla Valheim settles the convention: in
+  `fire_pit.prefab` the directional emitters (flames, low_flames, flames (1), smoke (1),
+  smok_small, and sparcs (1), which carries it on its ShapeModule rather than its Transform)
+  all aim up at -90 on X, leaving only `flare` - a billboard glow with no direction to point -
+  legitimately at zero. All three builders now aim up, which is also why smoke never read as
+  a rising column before.
+
+- **New config, all under Visuals:** `TreeFlameScaling` (on), `CrownSparksEnabled` (on),
+  `MaxFlameHeight` (30), `TallFireMaxConcurrent` (12). All four are live-settable through
+  `fireset treeflames|crownsparks|maxflameheight|tallfiremax` and reported by `firestatus`.
+  `LowSpecPreset` forces crown sparks off, caps height at 12 m and tall columns at 4 - the
+  column itself survives the preset, because it is a correctness fix as much as a visual one.
+
+- **Diagnostic: the particle-shader fallback chain now logs which candidate it resolved**
+  (`[SHADER-DIAG]`). Settling it properly was worth the trouble, because a first pass got it
+  backwards. Reading the ScriptMapper in `globalgamemanagers` (225 entries, laid out
+  PPtr-then-name; parsing it name-first shifts every mapping by one and inverts the answer)
+  against the object table of `unity_builtin_extra`: `Particles/Standard Unlit`,
+  `Particles/Standard Surface` and both Legacy Particles shaders are all stripped from the
+  build, and the chain actually lands on candidate 5, `Sprites/Default`. Standard Unlit misses
+  for a mundane reason - the game ships it renamed to `Particles/Standard Unlit2`, with a
+  trailing 2, so `Shader.Find` on the plain name finds nothing. Sprites/Default is alpha
+  blended, so smoke composites correctly and the flames are not truly additive despite
+  reading that way; it also draws an untextured particle as a hard-edged quad, which is
+  exactly why the generated soft-particle texture exists.
+
 ## 0.20.0
 
 - **Valheim 1.0.7 support. This release REQUIRES it, and does not run on 0.2x.** Eleven
