@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.20.2
+
+- **Fire is drawn additively, so it reads as fire instead of as dots.** Photographed in
+  play at 0.20.1: a mass of flame particles looked like a hundred separate orange discs
+  hanging in the air, not a body of fire. The cause is that the only particle shader that
+  resolves in Valheim's build is `Sprites/Default`, which is ALPHA BLENDED - overlapping
+  particles occlude one another rather than accumulating light, so density never becomes
+  brightness. Flames, crown sparks and ground fire now render through the game's own
+  `Custom/Particle (Unlit)` with `_SrcBlend 3` / `_DstBlend 1` / `_ZWrite 0`, the exact
+  values vanilla uses on `ashrain_cinder.mat`. Smoke deliberately stays alpha blended,
+  because additive smoke glows instead of darkening.
+
+  If that shader ever fails to resolve, flames fall back to the old alpha material and say
+  so once in the log - a miss costs the old look rather than invisible fire.
+
 ## 0.20.1
 
 - **Fire climbs what it is burning.** A wild Valheim fir stands 15.8 to 31.7 m - FirTree is

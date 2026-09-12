@@ -714,12 +714,15 @@ namespace FireFront.Utils
         /// "Particles/Standard Unlit2", with a trailing 2, so Shader.Find on the
         /// un-suffixed name finds nothing.
         ///
-        /// Two consequences worth keeping in mind. Sprites/Default is ALPHA
-        /// BLENDED, so smoke is already compositing correctly and the flames are
-        /// not truly additive despite reading that way. And it draws an untextured
-        /// particle as a hard-edged quad, which is exactly why
-        /// GetOrCreateSoftParticleTexture exists. The log line below prints which
-        /// candidate actually won, so this never has to be argued from memory again.
+        /// Two consequences, one of which had to be fixed. Sprites/Default is
+        /// ALPHA BLENDED: right for smoke, WRONG for flame, because alpha-blended
+        /// particles occlude one another instead of accumulating and a mass of
+        /// them reads as separate orange discs rather than fire. That is what
+        /// 0.20.1 looked like in play, so flames, sparks and ground fire now use
+        /// GetOrCreateAdditiveParticleMaterial instead and only smoke still comes
+        /// through here. It also draws an untextured particle as a hard-edged
+        /// quad, which is why GetOrCreateSoftParticleTexture exists. The log line
+        /// below prints which candidate won, so this is never argued from memory.
         /// </remarks>
         private static Shader FindUsableParticleShader()
         {
@@ -1818,8 +1821,80 @@ namespace FireFront.Utils
         /// assignment that does NOT clone; `renderer.material` would silently
         /// instantiate a per-renderer copy and undo the whole point.
         /// </summary>
+        private static Material _cachedAdditiveMaterial;
+        private static bool _additiveUnavailable;
+
+        /// <summary>
+        /// The ONE shared ADDITIVE material, for anything that should read as
+        /// light rather than as a painted object: flames, embers, sparks.
+        /// </summary>
+        /// <remarks>
+        /// This exists because the fallback chain lands on Sprites/Default,
+        /// which is ALPHA BLENDED. Alpha-blended particles occlude each other
+        /// instead of accumulating, so a hundred overlapping flame particles
+        /// read as a hundred separate orange discs rather than as a body of
+        /// fire. Photographed in 0.20.1 and unmistakable.
+        ///
+        /// Vanilla's answer is its own shader. Assets/Effects/materials/
+        /// ashrain_cinder.mat uses Custom/Particle (Unlit) with _SrcBlend 3
+        /// (SrcColor), _DstBlend 1 (One) and _ZWrite 0 — additive-family, and
+        /// the same values are used here rather than invented. Unlike the
+        /// stripped builtins, this shader is the game's own and is present.
+        ///
+        /// Falls back to the alpha material if Shader.Find misses, so a miss
+        /// costs the old look rather than invisible fire, and says so once.
+        /// </remarks>
+        private static Material GetOrCreateAdditiveParticleMaterial(string callerName)
+        {
+            if (_cachedAdditiveMaterial != null) return _cachedAdditiveMaterial;
+            if (_additiveUnavailable) return null;
+
+            Shader shader = Shader.Find("Custom/Particle (Unlit)");
+            if (shader == null)
+            {
+                _additiveUnavailable = true;
+                FireLogger.Warn($"[SHADER-DIAG] {callerName}: \"Custom/Particle (Unlit)\" not found; " +
+                                "flames fall back to the alpha-blended material and will read as " +
+                                "separate dots rather than as fire.");
+                return null;
+            }
+
+            var mat = new Material(shader) { mainTexture = GetOrCreateSoftParticleTexture() };
+            mat.SetFloat("_SrcBlend", 3f); // SrcColor, exactly as ashrain_cinder.mat
+            mat.SetFloat("_DstBlend", 1f); // One
+            mat.SetFloat("_ZWrite", 0f);
+            mat.renderQueue = 3000;        // Transparent
+            _cachedAdditiveMaterial = mat;
+
+            FireLogger.Info($"[SHADER-DIAG] additive flame material built from \"Custom/Particle (Unlit)\" " +
+                            "(_SrcBlend=3, _DstBlend=1, _ZWrite=0).");
+            return _cachedAdditiveMaterial;
+        }
+
         private static void ApplyParticleShader(ParticleSystemRenderer renderer, string callerName)
         {
+            ApplyParticleShader(renderer, callerName, additive: false);
+        }
+
+        /// <summary>
+        /// Assigns a shared material. Pass additive:true for anything that emits
+        /// light (flame, ember, spark) and false for anything that blocks it
+        /// (smoke) — additive smoke glows instead of darkening, which is worse
+        /// than the problem it would be solving.
+        /// </summary>
+        private static void ApplyParticleShader(ParticleSystemRenderer renderer, string callerName, bool additive)
+        {
+            if (additive)
+            {
+                Material add = GetOrCreateAdditiveParticleMaterial(callerName);
+                if (add != null)
+                {
+                    renderer.sharedMaterial = add;
+                    return;
+                }
+                // fall through to the alpha material
+            }
+
             if (_cachedParticleMaterial == null)
             {
                 Shader shader = FindUsableParticleShader();
@@ -2116,7 +2191,7 @@ namespace FireFront.Utils
                 });
             colorOverLifetime.color = grad;
 
-            ApplyParticleShader(go.GetComponent<ParticleSystemRenderer>(), nameof(BuildFlameParticles));
+            ApplyParticleShader(go.GetComponent<ParticleSystemRenderer>(), nameof(BuildFlameParticles), additive: true);
         }
 
         /// <summary>
@@ -2363,7 +2438,7 @@ namespace FireFront.Utils
             renderer.renderMode = ParticleSystemRenderMode.Stretch;
             renderer.lengthScale = 3f;
             renderer.velocityScale = 0.05f;
-            ApplyParticleShader(renderer, nameof(BuildCrownSparks));
+            ApplyParticleShader(renderer, nameof(BuildCrownSparks), additive: true);
         }
 
         /// <summary>
@@ -2415,7 +2490,7 @@ namespace FireFront.Utils
                 });
             colorOverLifetime.color = grad;
 
-            ApplyParticleShader(go.GetComponent<ParticleSystemRenderer>(), nameof(CreateProceduralGroundFireVfx));
+            ApplyParticleShader(go.GetComponent<ParticleSystemRenderer>(), nameof(CreateProceduralGroundFireVfx), additive: true);
 
             return go;
         }
