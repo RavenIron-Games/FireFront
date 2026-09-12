@@ -1,4 +1,4 @@
-# FireFront — session handoff (updated 2026-09-03)
+# FireFront — session handoff (updated 2026-09-12)
 
 Resume point for the next working session. Read this before touching anything;
 the memory notes in the assistant's store point here.
@@ -9,21 +9,49 @@ the memory notes in the assistant's store point here.
   every version tagged through `v0.19.14`. GitHub releases published for
   v0.19.8, v0.19.9, v0.19.11 and v0.19.14 (each with the bare DLL and the
   mod-manager zip attached, SHA256s in the notes).
-- **Deployed builds: 0.19.14 everywhere** — the test server, the Steam
-  install, and all four Gale profiles. Verified by reading the assembly
-  version, not by hashing (a rebuild changes the hash for identical source)
-  and not by grepping the DLL for version-shaped strings (FireFront's own log
-  text contains literals like `0.17.2`, so a grep returns a list, not an
-  answer). Use `[System.Diagnostics.FileVersionInfo]::GetVersionInfo(path)`
-  or read the boot log line.
-- **The owner plays the `Default` Gale profile**, not `raveniron`. See the
-  operational note below — a whole session's client deploys once went to the
-  wrong profile.
+- **Deployed builds: 0.20.1** on the test server and in Gale's `testing`
+  profile (staged there as `FireFront.dll.off` — see the profile note below).
+  The four `RavenIron*` Gale profiles also carry 0.20.1, but nobody plays them.
+  Verify a deployment by **SHA256 against the DLL you just built**, or by the
+  boot log line. Do NOT trust
+  `[System.Diagnostics.FileVersionInfo]::GetVersionInfo(path)` on its own:
+  PowerShell caches it per path within a session, so straight after
+  overwriting a file it reports the PREVIOUS version. That misled this deploy
+  twice on 2026-09-12. (Hashing is still the wrong tool for comparing two
+  separate BUILDS — a rebuild of identical source hashes differently — but it
+  is exactly right for "is the file I copied the file that is there now".)
+  Never grep the DLL for version-shaped strings; FireFront's own log text
+  contains literals like `0.17.2`, so a grep returns a list, not an answer.
+- **ALWAYS use Gale's `testing` profile** (owner's instruction, 2026-09-12).
+  It is the one carrying the whole RavenIron suite — Cairn, FireFront,
+  RagnaroksWrath, RavenEye, Undertow, ValkyriesCargo — plus
+  ConfigurationManager, Server_devcommands and Njord. Previous claims in this
+  document that the owner plays `Default`, and before that `raveniron`, were
+  BOTH wrong and each cost a session's client deploys. `Default` is a separate
+  modpack with no FireFront in it at all.
+  Two traps in that profile: mods are often parked as `<Name>.dll.off`, which
+  is Gale's disabled marker (all six RavenIron mods were off on 2026-09-12),
+  so enable through Gale's own toggle rather than renaming the file; and Gale
+  LINKS profile files to its cache, so copying onto a profile DLL rewrites the
+  cached copy of whatever version it came from. Delete the destination first,
+  then copy.
 - **Config defaults only reach installs that never ran an older build.**
   BepInEx persists values to disk, so changing a default in code does nothing
   where the key is already written. This bit twice in one day: 0.19.13's new
   `SmoulderAfterFraction` of 0.65 was silently overridden by the 0.45 that
   0.19.12 had written. Set it explicitly on existing installs.
+- **The test server was rebuilt on Valheim 1.0.12 (2026-09-12).** It had been
+  stranded on 0.221.12 since the 1.0 update, which is why 0.20.0 would not run
+  there: `SimulationDistance` is a 1.0.x type the port adopted, and it failed
+  with a TypeLoadException on the old build. There is no SteamCMD on this
+  machine by the owner's instruction — the fix was that Steam already keeps a
+  **Valheim dedicated server** install at 1.0.12 under `steamapps\common`, so
+  the server was rebuilt from those files in place at
+  `C:\Users\donfr\FireFrontTestServer`, with the BepInEx loader taken from
+  `ValheimServers\Storm10` (the one server already proven on 1.0.12) and the
+  tuned `com.raveniron.firefront.cfg` carried across. The previous install is
+  kept at `FireFrontTestServer.old-0.221.12`. The world was untouched: the
+  start script passes no `-savedir`, so saves live in LocalLow.
 - **Testers**: at least one is on **0.19.3** (their log proved it), others may
   still be on the **0.18.0** Discord zip. Everything they are missing is in
   the v0.19.14 release.
