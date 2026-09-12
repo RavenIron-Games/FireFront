@@ -1,4 +1,4 @@
-# FireFront — session handoff (updated 2026-09-12)
+# FireFront — session handoff (updated 2026-09-12, evening)
 
 Resume point for the next working session. Read this before touching anything;
 the memory notes in the assistant's store point here.
@@ -58,6 +58,56 @@ the memory notes in the assistant's store point here.
   **Owner's call 2026-08-28: no Discord post needed** — the regenerated split
   in `dist\DISCORD_POST_READY.txt` exists but is not to be shipped unless the
   owner asks.
+## Do this first: look at the fire
+
+**0.20.1 and 0.20.2 are committed, pushed and deployed, and NEITHER has been
+judged by eye.** Both are visual changes, so the log proves only that they
+loaded. Start the test server, join, torch a STANDING fir, and answer two
+questions.
+
+1. **Does flame span the trunk?** (0.20.1) Everything photographed so far was
+   the ground layer, which is not the code path that changed. A standing tree
+   is. Wild firs are 15.8-31.7 m; `MaxFlameHeight` defaults to 30.
+2. **Does it read as fire or as dots?** (0.20.2) At 0.20.1 a mass of flame
+   particles looked like separate orange discs, because `Sprites/Default` is
+   alpha blended and density never became brightness. Flames, sparks and
+   ground fire now try the game's own `Custom/Particle (Unlit)` at
+   `_SrcBlend 3 / _DstBlend 1 / _ZWrite 0`, vanilla's own values from
+   `ashrain_cinder.mat`.
+
+**The open risk on (2): `Shader.Find("Custom/Particle (Unlit)")` may not
+resolve on the client.** It already fails on the dedicated server, which is
+expected and harmless there (`-nographics` has no shaders resident at all),
+and the fallback correctly warns once and reverts to the old look. But nobody
+has yet seen a client log say which way it went. Look for one of these:
+
+```
+[SHADER-DIAG] additive flame material built from "Custom/Particle (Unlit)" ...   <- worked
+[SHADER-DIAG] BuildFlameParticles: "Custom/Particle (Unlit)" not found ...       <- fell back
+```
+
+If it fell back, do NOT reach for another `Shader.Find` name. Pull the shader
+off a material that is already loaded — `fire_pit`'s flame material through
+ZNetScene — which is guaranteed resident because the prefab is registered.
+That approach is strictly more reliable and was the planned next step.
+
+## Two traps this session walked into
+
+- **`tools/stop-test-server.ps1` cries wolf.** It greps the log for
+  `World saved ( …ms )`, which **Valheim 1.0.12 no longer emits in that form**,
+  so it prints "NO shutdown save found … world state is lost" after a perfectly
+  clean shutdown. Verified three times by checking the world file instead: the
+  save landed within seconds of the stop every time. Note 1.0.12 also writes
+  the world as a **directory** (`worlds_local\Dedicated\`) rather than a single
+  `.db`; the loose `Dedicated.db` files there are stale backups. Fixing the
+  detection is an open task — a save warning that is always wrong trains you to
+  ignore the one that isn't.
+- **Storm10 has no FireFront.** Its `RavenIronStudios-FireFront\` folder is
+  EMPTY, with a `RavenIronStudios-FireFront.off\` sibling — someone removed it
+  deliberately. A session was lost to testing fire on a server that could not
+  broadcast any. It runs the `NjordTest` world, not `Storm10`. Do not add
+  FireFront back to it without asking; it is the owner's Storm infrastructure.
+
 ## In flight — finish these first
 
 1. ~~**Relay verification, 3 of 5 commands outstanding.**~~ **DONE 2026-08-28
