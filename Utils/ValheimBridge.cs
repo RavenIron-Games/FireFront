@@ -2307,7 +2307,10 @@ namespace FireFront.Utils
         /// the height itself is clamped by MaxFlameHeight, so one freak bounds
         /// measurement cannot turn a single tree into a particle storm.
         /// </remarks>
-        public static GameObject CreateProceduralFireVfx(Vector3 position, float burnerHeight)
+        public static GameObject CreateProceduralFireVfx(Vector3 position, float burnerHeight) =>
+            CreateProceduralFireVfx(position, burnerHeight, burnerHeight * 0.3f); // no measured crown: assume a fir-ish silhouette
+
+        public static GameObject CreateProceduralFireVfx(Vector3 position, float burnerHeight, float crownRadius)
         {
             var go = new GameObject("FireFrontVfx_Procedural");
             go.transform.position = position;
@@ -2316,6 +2319,7 @@ namespace FireFront.Utils
             if (height > 0f && !TryReserveTallVfx(go)) height = 0f;
 
             BuildFlameParticles(go, height);
+            if (height > 0f) BuildCrownFlames(go, height, crownRadius);
             if (FireFront.Config.FireConfig.FireSmokeEnabled.Value)
             {
                 BuildSmokeParticles(go, height);
@@ -2443,6 +2447,33 @@ namespace FireFront.Utils
 
             if (!found) return 0f;
             return Mathf.Clamp(top - baseY, 0f, 40f);
+        }
+
+        /// <summary>
+        /// How far the burner's canopy reaches sideways from its trunk, in metres:
+        /// the largest horizontal distance from the object's position to any
+        /// renderer's bounds, LOD and billboard renderers included, same walk as
+        /// the height. A wild beech measures 4-6m here, a fir 2-3m. 0 if nothing
+        /// renders; callers treat that as 'no crown', and the flame builder falls
+        /// back to a slim shell scaled off the height.
+        /// </summary>
+        public static float MeasureBurnerCrownRadius(Component target)
+        {
+            if (target == null) return 0f;
+            GameObject go = target.gameObject;
+            if (go == null) return 0f;
+            Vector3 p = go.transform.position;
+            float reach = 0f;
+            Renderer[] renderers = go.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer r = renderers[i];
+                if (r == null || r is ParticleSystemRenderer) continue;
+                Bounds b = r.bounds;
+                reach = Mathf.Max(reach, Mathf.Abs(b.max.x - p.x), Mathf.Abs(b.min.x - p.x),
+                                         Mathf.Abs(b.max.z - p.z), Mathf.Abs(b.min.z - p.z));
+            }
+            return Mathf.Clamp(reach, 0f, 12f);
         }
 
         /// <summary>
@@ -2799,6 +2830,89 @@ namespace FireFront.Utils
             renderer.lengthScale = 3f;
             renderer.velocityScale = 0.05f;
             ApplyParticleShader(renderer, nameof(BuildCrownSparks), additive: true);
+        }
+
+        // Flames a player can SEE on a leafy tree. The trunk column is a cone
+        // under a metre wide running up the middle of the tree, and a beech's
+        // crown is solid foliage from about three metres up, so the leaves draw
+        // over every flame inside it - the first burning beech on 0.21.1 showed
+        // 'sparks only, no flame' (2026-09-16), because only the sparks, on a 35
+        // degree cone, escape the canopy. This is a hemispherical SHELL of flame
+        // on the outside of the measured crown: centred a little above mid-height,
+        // as wide as the canopy reaches, emitting from the outer third of the
+        // radius so the flames sit on the leaves rather than in them, big enough
+        // to read at distance, licking upward. A fir keeps its column and gains a
+        // narrower shell around its middle. Cost scales with crown area, halved
+        // under the low-spec preset, and the tall-fire cap already bounds how many
+        // burners get here at all.
+        private static void BuildCrownFlames(GameObject parent, float height, float crownRadius)
+        {
+            float radius = crownRadius > 0.5f ? crownRadius : Mathf.Max(1f, height * 0.25f);
+            radius = Mathf.Clamp(radius, 1f, 10f);
+            bool lowSpec = FireFront.Config.FireConfig.LowSpecPreset != null && FireFront.Config.FireConfig.LowSpecPreset.Value;
+            float budget = lowSpec ? 0.5f : 1f;
+
+            var crownGo = new GameObject("CrownFlames");
+            crownGo.transform.SetParent(parent.transform, false);
+            crownGo.transform.localPosition = Vector3.up * (height * 0.55f);
+
+            ParticleSystem ps = crownGo.AddComponent<ParticleSystem>();
+            ParticleSystem.MainModule main = ps.main;
+            float size = Mathf.Clamp(radius * 0.22f, 0.5f, 1.4f);
+            main.startLifetime = new ParticleSystem.MinMaxCurve(1.0f, 1.6f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(0.4f, 0.9f); // radial, off the surface
+            main.startSize = new ParticleSystem.MinMaxCurve(size * 0.7f, size * 1.3f);
+            main.startRotation = new ParticleSystem.MinMaxCurve(0f, 360f * Mathf.Deg2Rad);
+            main.startColor = new Color(1f, 0.55f, 0.15f);
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+            float rate = Mathf.Clamp(20f + radius * radius * 3f, 20f, 110f) * budget;
+            main.maxParticles = Mathf.Clamp(Mathf.RoundToInt(rate * 1.8f), 40, 220);
+
+            ParticleSystem.EmissionModule emission = ps.emission;
+            emission.rateOverTime = rate;
+
+            ParticleSystem.ShapeModule shape = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.Hemisphere;
+            shape.radius = radius * 0.95f;
+            shape.radiusThickness = 0.3f; // outer 30% only: on the canopy, not inside it
+            AimShapeUp(shape);            // dome up; the flat face is the underside of the crown
+
+            ParticleSystem.VelocityOverLifetimeModule velocity = ps.velocityOverLifetime;
+            velocity.enabled = true;
+            velocity.space = ParticleSystemSimulationSpace.World;
+            velocity.y = new ParticleSystem.MinMaxCurve(1.2f, 2.4f); // the lick upward that makes it fire, not a glow
+
+            ParticleSystem.SizeOverLifetimeModule sizeOverLifetime = ps.sizeOverLifetime;
+            sizeOverLifetime.enabled = true;
+            var sizeCurve = new AnimationCurve(
+                new Keyframe(0f, 0.6f), new Keyframe(0.35f, 1.15f), new Keyframe(1f, 0.2f));
+            sizeOverLifetime.size = new ParticleSystem.MinMaxCurve(1f, sizeCurve);
+
+            ParticleSystem.NoiseModule noise = ps.noise;
+            noise.enabled = true;
+            noise.strength = 0.45f;
+            noise.frequency = 0.5f;
+            noise.scrollSpeed = 0.6f;
+
+            ParticleSystem.ColorOverLifetimeModule colorOverLifetime = ps.colorOverLifetime;
+            colorOverLifetime.enabled = true;
+            var grad = new Gradient();
+            grad.SetKeys(
+                new[]
+                {
+                    new GradientColorKey(new Color(1f, 0.9f, 0.3f), 0f),
+                    new GradientColorKey(new Color(1f, 0.3f, 0.05f), 0.6f),
+                    new GradientColorKey(new Color(0.2f, 0.1f, 0.1f), 1f)
+                },
+                new[]
+                {
+                    new GradientAlphaKey(1f, 0f),
+                    new GradientAlphaKey(0.6f, 0.7f),
+                    new GradientAlphaKey(0f, 1f)
+                });
+            colorOverLifetime.color = grad;
+
+            ApplyParticleShader(crownGo.GetComponent<ParticleSystemRenderer>(), nameof(BuildCrownFlames), additive: true);
         }
 
         /// <summary>

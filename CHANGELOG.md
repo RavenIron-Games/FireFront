@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.21.2
+
+- **Flames on the outside of the crown, where a leafy tree can show them.** The first
+  burning beech looked at on 0.21.1 showed sparks only and no flame. The column from
+  0.20.1 is a cone under a metre wide up the middle of the tree, and a beech's crown is
+  solid foliage from about three metres up, so the leaves drew over every flame inside
+  it; only the sparks, thrown on a 35 degree cone, escaped. A fir's bare trunk shows
+  the column, which is why it was judged fine there and never on a broadleaf.
+
+  Tall burners now also get `CrownFlames`: a hemispherical shell of flame sized to the
+  tree's measured canopy (`MeasureBurnerCrownRadius`, the same renderer-bounds walk as
+  the height, 4-6m on a wild beech), centred a little above mid-height, emitting from
+  the outer third of the radius so the fire sits on the leaves rather than in them, in
+  particles big enough to read at distance and licking upward. The trunk column stays.
+  Cost scales with crown area, halves under the low-spec preset, and the existing
+  tall-fire cap bounds how many burners get a shell at all. Judged by eye the same day
+  on a beech and a fir in the Mountains: the beech shows flame over its crown, the fir
+  keeps its column and reads fine - which also closes out the column from 0.20.1 and
+  the additive fire from 0.20.5, both unjudged until now.
+
 ## 0.21.1
 
 - **`fireweather force <EnvName>` / `fireweather reset`: a server-side weather override

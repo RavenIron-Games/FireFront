@@ -1655,7 +1655,7 @@ namespace FireFront.Fire
             if (FireConfig.UseProceduralVfx.Value)
             {
                 instance = ValheimBridge.CreateProceduralFireVfx(
-                    position, ValheimBridge.MeasureBurnerHeight(target));
+                    position, ValheimBridge.MeasureBurnerHeight(target), ValheimBridge.MeasureBurnerCrownRadius(target));
             }
             else if (!string.IsNullOrEmpty(FireConfig.VfxPrefabName.Value))
             {
@@ -1902,7 +1902,7 @@ namespace FireFront.Fire
             if (FireConfig.UseProceduralVfx.Value)
             {
                 instance = ValheimBridge.CreateProceduralFireVfx(
-                    ValheimBridge.PositionOf(target), ValheimBridge.MeasureBurnerHeight(target));
+                    ValheimBridge.PositionOf(target), ValheimBridge.MeasureBurnerHeight(target), ValheimBridge.MeasureBurnerCrownRadius(target));
             }
             else
             {

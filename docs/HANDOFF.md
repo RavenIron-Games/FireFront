@@ -88,6 +88,15 @@ blocks spread from and shortens any fire it falls on (objects too, new keys
 
 ## Do this first: look at the fire
 
+**2026-09-16, 0.21.2:** the first beech judged by eye showed sparks only, no flame -
+the trunk column is inside the foliage and the leaves draw over it. 0.21.2 adds
+`CrownFlames`, a hemispherical shell of flame on the outside of the measured canopy,
+on top of the column. **Judged the same day, both species, Mountains at night:**
+beech shows flame over its crown, fir keeps its column and looks fine. That verdict
+also covers the 0.20.1 column and the 0.20.5 additive fire, which the rest of this
+section still describes as unjudged - read it as history.
+
+
 **0.20.1 and 0.20.2 are committed, pushed and deployed, and NEITHER has been
 judged by eye.** Both are visual changes, so the log proves only that they
 loaded. Start the test server, join, torch a STANDING fir, and answer two
