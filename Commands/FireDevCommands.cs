@@ -47,7 +47,7 @@ namespace FireFront.Commands
                 args => FireDebug(args));
 
             new Terminal.ConsoleCommand("fireset",
-                "FireFront: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|enabled> <value>",
+                "FireFront: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|enabled> <value>",
                 args => FireSet(args));
 
             new Terminal.ConsoleCommand("firelistprefabs",
@@ -77,6 +77,11 @@ namespace FireFront.Commands
             new Terminal.ConsoleCommand("firetreeregrowlist",
                 "FireFront: list pending tree-regrowth entries (prefab, position, time left, attempts) — use to check for duplicates",
                 args => FireTreeRegrowList(args));
+
+            new Terminal.ConsoleCommand("fireweather",
+                "FireFront: fireweather - the weather FireFront resolves at your position, beside what vanilla shows you (client), then the server's answer. " +
+                "fireweather force <EnvName> | reset - override the SERVER's weather for testing; vanilla's own 'env' only reaches the client it is typed on",
+                args => FireWeather(args));
 
             FireLogger.Info("Dev commands registered.");
         }
@@ -245,7 +250,7 @@ namespace FireFront.Commands
         {
             if (args.Length < 3)
             {
-                Say(args, "Usage: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|enabled> <value>");
+                Say(args, "Usage: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|enabled> <value>");
                 return;
             }
 
@@ -398,6 +403,14 @@ namespace FireFront.Commands
                     break;
                 case "rainmultiplier":
                     if (float.TryParse(raw, out float rm)) { FireConfig.RainGroundBurnDurationMultiplier.Value = rm; Ok(args, key, FireConfig.RainGroundBurnDurationMultiplier.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "rainobjects":
+                    if (bool.TryParse(raw, out bool ro)) { FireConfig.RainSuppressesObjectFire.Value = ro; Ok(args, key, ro); }
+                    else Bad(args, raw);
+                    break;
+                case "rainobjectmultiplier":
+                    if (float.TryParse(raw, out float rom)) { FireConfig.RainObjectBurnDurationMultiplier.Value = rom; Ok(args, key, FireConfig.RainObjectBurnDurationMultiplier.Value); }
                     else Bad(args, raw);
                     break;
                 case "scorchmarks":
@@ -609,6 +622,42 @@ namespace FireFront.Commands
             foreach (string line in lines) Say(args, "  " + line);
         }
 
+        /// <summary>
+        /// Weather as FireFront resolves it at the requester's position. Typed on
+        /// a client it prints the client's own replay AND vanilla's live state side
+        /// by side - they must agree; that is the whole check - then relays so the
+        /// server prints what IT resolves for the same spot, which is what the
+        /// simulation actually uses.
+        /// </summary>
+        private static void FireWeather(Terminal.ConsoleEventArgs args)
+        {
+            string verb = args.Args.Length > 1 ? args.Args[1].ToLowerInvariant() : "";
+            if (verb == "force" || verb == "reset")
+            {
+                // Server-side only: the whole point is to reach the machine the
+                // simulation runs on. Vanilla's 'env' already covers the client.
+                if (RelayIfClient(args)) return;
+                string name = verb == "reset" ? "" : (args.Args.Length > 2 ? args.Args[2] : "");
+                if (verb == "force" && string.IsNullOrEmpty(name)) { Say(args, "Usage: fireweather force <EnvName> | fireweather reset"); return; }
+                Say(args, "FireFront [server] " + ValheimBridge.SetDebugEnvironment(name));
+                return;
+            }
+
+            Vector3? posOrNull = ValheimBridge.LocalPlayerPosition();
+            if (!posOrNull.HasValue) { Say(args, "FireFront: no player position available."); return; }
+            Vector3 pos = posOrNull.Value;
+
+            EnvSetup env = ValheimBridge.ResolveEnvironmentAt(pos, out string source);
+            string where = ValheimBridge.IsServer() ? "server" : "client";
+            Say(args, $"FireFront [{where}] weather at ({pos.x:F0}, {pos.z:F0}): " +
+                      (env == null ? "unresolved" : $"'{env.m_name}' wet={env.m_isWet}") +
+                      $" via {source}; IsRainingAt={ValheimBridge.IsRainingAt(pos)}");
+            if (!ValheimBridge.IsServer())
+                Say(args, $"FireFront [client] vanilla shows you: {ValheimBridge.VanillaWeatherForStatus()} - the two lines above should agree.");
+
+            RelayIfClient(args);
+        }
+
         // ---------------------------------------------------------------
 
         private static void Say(Terminal.ConsoleEventArgs args, string msg)
@@ -657,6 +706,7 @@ namespace FireFront.Commands
                 { "firegroundignite", FireGroundIgnite },
                 { "firetreeregrow", FireTreeRegrow },
                 { "firetreeregrowlist", FireTreeRegrowList },
+                { "fireweather", FireWeather },
             };
 
         // When non-null, Say() writes here instead of the local console —
@@ -782,6 +832,8 @@ namespace FireFront.Commands
                 { "douseimmunity", FireConfig.DouseImmunitySeconds },
                 { "rainsuppress", FireConfig.RainSuppressesGroundFire },
                 { "rainmultiplier", FireConfig.RainGroundBurnDurationMultiplier },
+                { "rainobjects", FireConfig.RainSuppressesObjectFire },
+                { "rainobjectmultiplier", FireConfig.RainObjectBurnDurationMultiplier },
                 { "treeflames", FireConfig.TreeFlameScaling },
                 { "crownsparks", FireConfig.CrownSparksEnabled },
                 { "maxflameheight", FireConfig.MaxFlameHeight },

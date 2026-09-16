@@ -1,5 +1,150 @@
 # Changelog
 
+## 0.21.1
+
+- **`fireweather force <EnvName>` / `fireweather reset`: a server-side weather override
+  for testing.** The first live `fireweather` on 0.21.0 showed the machinery working and
+  exposed the gap: vanilla's `env Rain` writes a debug override on the client it is typed
+  on and nowhere else, so a player standing in forced rain saw their client and vanilla
+  agree on 'Rain' while the server, correctly, answered 'Clear' for that spot. This sets
+  the same field on the server (relayed, admin-gated like every relayed command), where
+  the resolver already honours it ahead of the roll. Names are vanilla's, case-sensitive.
+  Not saved; a restart clears it.
+
+## 0.21.0
+
+- **Rain now reaches a dedicated server, and it douses fire.** Two things, because the
+  first one turned out to be broken: `RainSuppressesGroundFire` read `EnvMan.s_isWet`,
+  and `EnvMan.UpdateEnvironment` returns before choosing an environment when there is
+  no main camera. A dedicated server has no camera, so its environment never changes
+  from the startup value and that flag is false forever - the test server logged
+  `raining False` in every heartbeat of every run since August, including with the
+  player standing in rain. The key only ever did anything in single-player or on a
+  player-hosted world. (Wind updates on a separate path, which is why the wind
+  reflection verified live and this never could.)
+
+  The server now replays vanilla's own selection for the FIRE's position: weather is
+  deterministic per environment period and biome sector, drawn from a Random seeded
+  with the period number, so it computes the same answer every client does and
+  caches it per 64m zone per period. The overrides vanilla applies ahead of the roll
+  (forceenv, the `env` command, a random event whose area covers the fire, an
+  alt-biome forced environment, a persistent event whose radius covers the fire) are
+  honoured in order; the two event kinds are scoped to the fire's position, because
+  vanilla scopes them to the local player's and headless that is the origin. Clients
+  blend into a new environment over 2s,
+  so the server can lead a player's view by about that much. Not replicated: EnvZone
+  (a per-player trigger volume) and the Ashlands/Deepnorth edge fixup that needs a
+  loaded heightmap.
+
+  And rain now acts on object fire, which by design it never touched: while rain
+  falls on a burning tree or building it passes fire to nothing - no neighbours, no
+  ZDO candidates, no ground seeds - and its clock runs faster, at
+  `RainObjectBurnDurationMultiplier` (0.3: about 3x, so a tree that catches in rain
+  is out in ~72s at the 240s default). Ground fire gets the same clock treatment via
+  the existing `RainGroundBurnDurationMultiplier`, which used to shorten only cells
+  lit during rain and now also reaches the cells rain arrives on later. Direct
+  ignitions still work in rain - a torch or a lightning strike lights the tree, the
+  rain then puts it out - because rain stops spread, it does not forbid fire. Both
+  new keys (`RainSuppressesObjectFire`, `RainObjectBurnDurationMultiplier`) are under
+  `[Weather]`, live as `fireset rainobjects` / `rainobjectmultiplier`, and off under
+  burntheworld like every other restraint.
+
+  `fireweather` prints the environment FireFront resolves at your position; on a
+  client it also prints what vanilla is showing you, and the two must agree, then it
+  relays so the server prints its answer for the same spot. That is the verification.
+  The status line's `raining` is now `wet/total` burners.
+
+## 0.20.7
+
+- **The spread diagnostic only logs when debug logging is on.** `[SPREAD-DIAGNOSTIC]` was
+  added in 0.17.4 to prove that tree spread works on a dedicated server, where
+  `WearNTear.AllPieces` is always empty. It did that, and then kept reporting the same
+  counts every 5 seconds for as long as anything burned: 3,283 lines in one day on the
+  test server, more than twice the heartbeat, none of them saying anything new. It is now
+  gated behind the existing `DebugLogging` key (`fireset debug true`, which reaches the
+  server like every other fireset key), so the tool is still there for the next "why
+  won't it spread" report and silent otherwise. No new config key: the default-off flag
+  that already exists is exactly the switch this line should have had.
+
+## 0.20.6
+
+- **Object fire VFX is budgeted per frame, like ground fire already was.** Measured on a
+  live client with 34 objects alight: CPU spikes of 3-4x the median arriving roughly every
+  1.4s, against a 0.75s spread interval. The cause is that `HandleFireEventBroadcast` built
+  each burner's whole rig - two or three ParticleSystems plus a realtime Light - inline and
+  synchronously, so an entire batch of ignitions from one spread pass was constructed in a
+  single frame. Ground cells have gone through a queue with a per-frame budget since
+  0.18.6; object fire never did, and it is the more expensive of the two per instance.
+
+  Ignitions now queue and drain at 2 per frame (lower than ground's 3, because a ground
+  cell builds one cheap system and no light). An ignition that is extinguished or unloaded
+  while queued is dropped rather than built and orphaned.
+
+  This cost was latent before 0.20.1 and that release is what exposed it: a tall burner
+  builds a taller particle column, an extra crown-spark system and a longer-range light,
+  which is several times the construction work of the small flame every burner used to get.
+
+## 0.20.5
+
+- **The blocky fire is fixed, and the blend was never the cause.** `Custom/Particle (Unlit)`
+  exposes `[Enum(Red,0,Green,1,Blue,2,Alpha,3)] _AlphaChannel` and **defaults to 0, Red** -
+  it takes alpha from whichever channel you nominate. FireFront's generated particle
+  texture is white RGB with its falloff in the ALPHA channel, so red read 1.0 across the
+  whole quad, every particle drew as a solid square, and no value of `_SrcBlend` could have
+  helped. Two were tried (3 SrcColor, then 5 SrcAlpha) and both produced blocks.
+
+  Fixed at both ends deliberately: the material now sets `_AlphaChannel = 3` (Alpha), and
+  the additive material gets its own texture with the falloff baked into RGB as well, so
+  the edges go to black whichever channel the shader actually samples - and under additive
+  blending black adds nothing. `_Cull` is set to Off so billboards are never wound away.
+
+  Worth recording for next time: the `.shader` file in the AssetRipper export is a
+  `//DummyShaderTextExporter` stub, because shader bytecode cannot be decompiled. Its
+  PROPERTY LIST is real and is what solved this; its body is not and must not be read as
+  the shader's behaviour.
+
+## 0.20.4
+
+- **Fire rendered as hard-edged squares at 0.20.3. Fixed.** The additive material copied
+  vanilla's `_SrcBlend 3`, which is SrcColor - a blend that ignores the alpha channel
+  completely. FireFront's particle texture is white RGB that fades out THROUGH ALPHA, so
+  every quad contributed at full strength right to its corners and the fire came out as a
+  cloud of red squares. Vanilla can use SrcColor because its own textures bake the falloff
+  into RGB; ours does not. Now `_SrcBlend 5` (SrcAlpha) x `_DstBlend 1` (One), the classic
+  additive pairing for an alpha-faded texture. The lesson: copy vanilla's values only when
+  you also have vanilla's texture.
+
+- Confirmed in play: `Shader.Find("Custom/Particle (Unlit)")` MISSES ON THE CLIENT TOO, not
+  just on the headless server, so 0.20.2 would have silently fallen back to the old look
+  and taught us nothing. The 0.20.3 borrow-from-a-vanilla-material route is what actually
+  gets the shader, and the log says so: `additive shader acquired via borrowed from a
+  vanilla fire material: "Custom/Particle (Unlit)"`.
+
+## 0.20.3
+
+- **The additive flame material no longer depends on `Shader.Find`.** 0.20.2 asked for
+  `Custom/Particle (Unlit)` by name, and `Shader.Find` only sees shaders currently
+  resident - so it can miss one the game definitely ships, and it misses every time on a
+  headless server, which loads none at all. It now falls back to reading the shader
+  straight off a vanilla fire material (`fire_pit`, then `bonfire`, then
+  `piece_groundtorch`), preferring one that exposes `_SrcBlend`/`_DstBlend` so the
+  additive blend can still be forced rather than inherited. A prefab registered in
+  ZNetScene carries its materials, and a material always carries a live shader, so that
+  route is not subject to load-order timing. Names are avoided on purpose: the only thing
+  tying vanilla flame materials to shader names is AssetRipper's builtin fileID table,
+  which is its own mapping and not the game's, and trusting it inverted the shader survey
+  twice. The log now records which route won and what the shader actually turned out to be.
+
+- **`tools/stop-test-server.ps1` stopped crying wolf.** It confirmed saves by grepping the
+  log for `World saved ( ...ms )`, which Valheim 1.0.12 no longer emits - a clean shutdown
+  now logs `Saving` and then Unload lines. The result was "world state is lost" after every
+  clean stop: four in a row on 2026-09-12, all false, each disproved by looking at the world
+  on disk. It now checks the world's own write time against the moment the stop began and
+  treats the log line as a secondary signal, so the warning means something again. Takes
+  `-World` and `-SaveDir` for servers that keep saves somewhere other than LocalLow. Note
+  1.0.12 writes a world as a DIRECTORY, so a loose `<World>.db` beside it is a stale pre-1.0
+  backup whose timestamp means nothing.
+
 ## 0.20.2
 
 - **Fire is drawn additively, so it reads as fire instead of as dots.** Photographed in

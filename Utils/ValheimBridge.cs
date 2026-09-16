@@ -1425,13 +1425,244 @@ namespace FireFront.Utils
 
         /// <summary>True if the real terrain height at this (x,z) is at or below the world's water level.</summary>
         public static bool IsUnderwater(Vector3 xzPosition) => GetGroundHeight(xzPosition) <= GetWaterLevel();
-        private static readonly FieldInfo EnvManIsWetField = typeof(EnvMan).GetField("s_isWet", AnyStatic);
+        // -----------------------------------------------------------------
+        // Weather AT A POSITION. EnvMan.s_isWet is what vanilla itself reads,
+        // but EnvMan.UpdateEnvironment returns before choosing an environment
+        // when there is no main camera, so on a dedicated server the current
+        // environment never changes from its startup value and s_isWet is
+        // false forever (verified 2026-09-16: zero 'raining True' heartbeats
+        // across every test-server run since August, including while the
+        // player stood in rain). Wind updates on a separate path with no camera
+        // check, which is why the wind reflection below works headless and a
+        // flag read never could. So instead of reading the flag, replay
+        // vanilla's own selection for the position that matters: weather is
+        // deterministic per environment PERIOD (world seconds divided by
+        // m_environmentDuration) and biome sector, drawn from a Random seeded
+        // with the period number - the same numbers every client computes - so
+        // what the server decides here is what a player standing at the fire
+        // sees, give or take EnvMan's 2s transition blend. The overrides vanilla
+        // applies ahead of the roll (forceenv, the env console command, a
+        // random event whose area covers the spot, an alt-biome forced
+        // environment, a persistent event whose radius covers the spot) are
+        // honoured in the same order - and where vanilla scopes one to the
+        // LOCAL player's position (both event kinds), the fire's position is
+        // used instead, since headless there is no local player and vanilla's
+        // own methods would answer for the origin. Not replicated: EnvZone, the per-player
+        // trigger volume a client's own player walks into, and the
+        // Ashlands/Deepnorth edge fixup in GetBiome(), which reads a heightmap
+        // the server does not load.
+        // -----------------------------------------------------------------
+        private static readonly FieldInfo EnvManEnvDurationField = typeof(EnvMan).GetField("m_environmentDuration", AnyInstance);
+        private static readonly FieldInfo EnvManDebugEnvField = typeof(EnvMan).GetField("m_debugEnv", AnyInstance);
+        private static readonly FieldInfo EnvManForceEnvField = typeof(EnvMan).GetField("m_forceEnv", AnyInstance);
+        private static readonly MethodInfo EnvManGetEnvMethod =
+            typeof(EnvMan).GetMethod("GetEnv", AnyInstance, null, new[] { typeof(string) }, null);
+        private static readonly MethodInfo EnvManGetAvailableEnvironmentsMethod =
+            typeof(EnvMan).GetMethod("GetAvailableEnvironments", AnyInstance, null, new[] { typeof(BiomeSector) }, null);
+        private static readonly MethodInfo EnvManSelectWeightedEnvironmentMethod =
+            typeof(EnvMan).GetMethod("SelectWeightedEnvironment", AnyInstance, null, new[] { typeof(List<EnvEntry>) }, null);
+        private static readonly MethodInfo EnvManGetCurrentEnvironmentMethod =
+            typeof(EnvMan).GetMethod("GetCurrentEnvironment", AnyInstance, null, System.Type.EmptyTypes, null);
+        private static bool _weatherFailureLogged;
 
-        /// <summary>True while it's currently raining, per vanilla's own weather state.</summary>
-        public static bool IsRaining()
+        // Wet-or-not per 64m zone per environment period. A period is minutes
+        // long and a zone is a fixed square, so every rain check the simulation
+        // makes between two rolls is one dictionary lookup. Cleared on a new
+        // period, and whenever one of the global overrides changes.
+        private static readonly Dictionary<long, bool> _wetByZoneAndPeriod = new Dictionary<long, bool>();
+        private static long _wetCachePeriod = long.MinValue;
+        private static string _seenForceEnv, _seenDebugEnv;
+        private static RandomEvent _seenRandomEvent;
+        private static int _seenPersistentEventCount = -1;
+
+        /// <summary>True if rain is falling at this world position, as vanilla would show it to a player standing there.</summary>
+        public static bool IsRainingAt(Vector3 position)
         {
-            object value = EnvManIsWetField?.GetValue(null);
-            return value is bool b && b;
+            object envMan = EnvManInstanceField?.GetValue(null);
+            if (envMan == null) return false;
+            long period = CurrentEnvironmentPeriod(envMan);
+            if (period < 0) return false;
+            if (period != _wetCachePeriod || OverridesChanged(envMan))
+            {
+                _wetByZoneAndPeriod.Clear();
+                _wetCachePeriod = period;
+            }
+
+            int zx = (Mathf.FloorToInt(position.x / 64f) + 512) & 0x3FF;
+            int zz = (Mathf.FloorToInt(position.z / 64f) + 512) & 0x3FF;
+            long key = (period << 20) | ((long)zx << 10) | (long)zz;
+            if (_wetByZoneAndPeriod.TryGetValue(key, out bool cached)) return cached;
+
+            EnvSetup env = ResolveEnvironmentAt(position, out _);
+            bool wet = env != null && env.m_isWet;
+            _wetByZoneAndPeriod[key] = wet;
+            return wet;
+        }
+
+        /// <summary>
+        /// The environment vanilla would be showing a player standing at this
+        /// position right now, or null if EnvMan or the world is not up.
+        /// <paramref name="source"/> names the rule that chose it, for fireweather.
+        /// </summary>
+        public static EnvSetup ResolveEnvironmentAt(Vector3 position, out string source)
+        {
+            source = "unavailable";
+            object envMan = EnvManInstanceField?.GetValue(null);
+            if (envMan == null || ZNet.instance == null || WorldGenerator.instance == null) return null;
+            if (EnvManGetAvailableEnvironmentsMethod == null || EnvManSelectWeightedEnvironmentMethod == null || EnvManEnvDurationField == null)
+            {
+                if (!_weatherFailureLogged)
+                {
+                    _weatherFailureLogged = true;
+                    FireLogger.Warn("[WEATHER] EnvMan reflection lookup failed (GetAvailableEnvironments / SelectWeightedEnvironment / " +
+                                    "m_environmentDuration) - rain will never be detected. Game update?");
+                }
+                return null;
+            }
+
+            // 1. forceenv - GetCurrentEnvironment honours it above everything else.
+            string force = EnvManForceEnvField?.GetValue(envMan) as string;
+            if (!string.IsNullOrEmpty(force))
+            {
+                EnvSetup forced = EnvironmentByName(envMan, force);
+                if (forced != null) { source = "forceenv"; return forced; }
+            }
+
+            // 2. The chain EnvMan.GetEnvironmentOverride walks, in its order, with
+            //    the fire's position standing in for the local player's.
+            BiomeSector sector = WorldGenerator.instance.GetBiomeSector(position);
+            string name = EnvManDebugEnvField?.GetValue(envMan) as string;
+            source = "env command";
+            if (string.IsNullOrEmpty(name)) { name = RandomEventOverrideAt(position, sector); source = "random event"; }
+            if (string.IsNullOrEmpty(name) && sector != null && sector.AltBiomes != null)
+            {
+                foreach (AltBiome alt in sector.AltBiomes)
+                {
+                    if (string.IsNullOrEmpty(alt.m_forceEnvironment)) continue;
+                    name = alt.m_forceEnvironment; source = "alt-biome forced environment"; break;
+                }
+            }
+            if (string.IsNullOrEmpty(name)) { name = PersistentEventOverrideAt(position); source = "persistent event"; }
+            if (!string.IsNullOrEmpty(name)) return EnvironmentByName(envMan, name);
+
+            // 3. The deterministic roll every client makes for this period and sector.
+            long period = CurrentEnvironmentPeriod(envMan);
+            if (period < 0 || sector == null) return null;
+            bool ashlands = WorldGenerator.IsAshlands(position.x, position.z);
+            bool deepnorth = WorldGenerator.IsDeepnorth(position.x, position.y); // sic - vanilla passes y here too, and agreeing with the client matters more than the geometry
+            Random.State saved = Random.state;
+            Random.InitState((int)period);
+            try
+            {
+                List<EnvEntry> envs = EnvManGetAvailableEnvironmentsMethod.Invoke(envMan, new object[] { sector }) as List<EnvEntry>;
+                if (envs == null || envs.Count == 0) return null;
+                EnvSetup env = EnvManSelectWeightedEnvironmentMethod.Invoke(envMan, new object[] { envs }) as EnvSetup;
+                foreach (EnvEntry entry in envs)
+                {
+                    if (entry.m_ashlandsOverride && ashlands) env = entry.m_env;
+                    if (entry.m_deepnorthOverride && deepnorth) env = entry.m_env;
+                }
+                source = "period " + period + " in " + sector.Biome;
+                return env;
+            }
+            finally
+            {
+                Random.state = saved; // vanilla restores it too; the roll must not disturb anyone else's randomness
+            }
+        }
+
+        /// <summary>Vanilla's own current environment and wet flag - on a client, what the player is looking at - for comparing against the replay.</summary>
+        public static string VanillaWeatherForStatus()
+        {
+            object envMan = EnvManInstanceField?.GetValue(null);
+            EnvSetup current = envMan != null ? EnvManGetCurrentEnvironmentMethod?.Invoke(envMan, null) as EnvSetup : null;
+            return current == null ? "no environment yet" : $"'{current.m_name}' wet={current.m_isWet} (EnvMan.IsWet={EnvMan.IsWet()})";
+        }
+
+        /// <summary>
+        /// Sets EnvMan.m_debugEnv on THIS process - the field vanilla's own 'env'
+        /// console command writes - so a test can make it rain on the server.
+        /// 'env' itself only ever reaches the client it is typed on, which is why
+        /// a player standing in forced rain sees the server answer 'Clear'. Empty
+        /// clears. Not saved; a restart forgets it. Returns a message for the console.
+        /// </summary>
+        public static string SetDebugEnvironment(string name)
+        {
+            object envMan = EnvManInstanceField?.GetValue(null);
+            if (envMan == null || EnvManDebugEnvField == null) return "EnvMan is not available here.";
+            name = name ?? "";
+            EnvSetup env = string.IsNullOrEmpty(name) ? null : EnvironmentByName(envMan, name);
+            if (!string.IsNullOrEmpty(name) && env == null)
+                return $"no environment named '{name}' (names are case-sensitive: Clear, Rain, LightRain, ThunderStorm, Misty, Snow, ...).";
+            EnvManDebugEnvField.SetValue(envMan, name);
+            _wetByZoneAndPeriod.Clear();
+            return env == null
+                ? "debug environment cleared - weather follows the world again."
+                : $"debug environment forced to '{env.m_name}' (wet={env.m_isWet}) for every fire on this server until 'fireweather reset'.";
+        }
+
+        private static long CurrentEnvironmentPeriod(object envMan)
+        {
+            if (ZNet.instance == null) return -1;
+            object d = EnvManEnvDurationField?.GetValue(envMan);
+            long duration = d is long l ? l : 0L;
+            if (duration <= 0) return -1;
+            return (long)ZNet.instance.GetTimeSeconds() / duration;
+        }
+
+        private static EnvSetup EnvironmentByName(object envMan, string name) =>
+            EnvManGetEnvMethod?.Invoke(envMan, new object[] { name }) as EnvSetup;
+
+        // RandEventSystem.GetEnvOverride answers for the LOCAL player: the event
+        // is only 'active' on a client whose player stands inside its range, and
+        // InEventBiome reads EnvMan's camera-derived biome. Headless neither
+        // exists, so the server's copy of that method says nothing during a raid
+        // that is forcing a thunderstorm over someone's base. Same test, same
+        // fields, the fire's position instead: inside m_eventRange of the
+        // world's current random event, and in one of its biomes.
+        private static string RandomEventOverrideAt(Vector3 position, BiomeSector sector)
+        {
+            RandomEvent current = RandEventSystem.instance != null ? RandEventSystem.instance.GetCurrentRandomEvent() : null;
+            if (current == null || string.IsNullOrEmpty(current.m_forceEnvironment)) return null;
+            if (position.y > 3000f) return null; // vanilla's own 'not on the ground' guard
+            float dx = position.x - current.m_pos.x, dz = position.z - current.m_pos.z;
+            if (dx * dx + dz * dz >= current.m_eventRange * current.m_eventRange) return null;
+            if (sector != null && (sector.Biome & current.m_biome) == 0) return null;
+            return current.m_forceEnvironment;
+        }
+
+        // PersistentEventSystem.GetEnvironmentOverride measures from the local
+        // player - Vector3.zero headless, which is a real place in the world and
+        // the wrong one. Same walk over the same public list, from the fire.
+        private static string PersistentEventOverrideAt(Vector3 position)
+        {
+            PersistentEventSystem system = PersistentEventSystem.instance;
+            if (system == null || system.m_activePersistentEvents == null) return null;
+            foreach (PersistentEventSystem.ActivePersistentEvent item in system.m_activePersistentEvents.list)
+            {
+                if ((item.position - position).sqrMagnitude >= item.radius * item.radius) continue;
+                PersistentEventSystem.PersistentEvent sourceEvent = item.Source;
+                return sourceEvent != null ? sourceEvent.GetEnvironmentOverride(position) : null;
+            }
+            return null;
+        }
+
+        // Compares against the last-seen values without building a string, so
+        // the per-check cost stays at four reads and four compares. A random
+        // event is a new object each time one starts (SetRandomEvent clones),
+        // and the persistent list only grows or shrinks, so identity and count
+        // are enough to know the position-scoped answers may have changed.
+        private static bool OverridesChanged(object envMan)
+        {
+            string force = EnvManForceEnvField?.GetValue(envMan) as string;
+            string debug = EnvManDebugEnvField?.GetValue(envMan) as string;
+            RandomEvent randomEvent = RandEventSystem.instance != null ? RandEventSystem.instance.GetCurrentRandomEvent() : null;
+            PersistentEventSystem persistent = PersistentEventSystem.instance;
+            int persistentCount = persistent != null && persistent.m_activePersistentEvents != null ? persistent.m_activePersistentEvents.list.Count : 0;
+            bool changed = !string.Equals(force, _seenForceEnv) || !string.Equals(debug, _seenDebugEnv)
+                        || !ReferenceEquals(randomEvent, _seenRandomEvent) || persistentCount != _seenPersistentEventCount;
+            _seenForceEnv = force; _seenDebugEnv = debug; _seenRandomEvent = randomEvent; _seenPersistentEventCount = persistentCount;
+            return changed;
         }
 
         private static readonly FieldInfo EnvManInstanceField = typeof(EnvMan).GetField("s_instance", AnyStatic);
@@ -1821,6 +2052,45 @@ namespace FireFront.Utils
         /// assignment that does NOT clone; `renderer.material` would silently
         /// instantiate a per-renderer copy and undo the whole point.
         /// </summary>
+        private static Texture2D _cachedAdditiveTexture;
+
+        /// <summary>
+        /// The soft radial particle texture with its falloff baked into RGB as
+        /// well as alpha, for the additive material.
+        /// </summary>
+        /// <remarks>
+        /// GetOrCreateSoftParticleTexture writes white RGB and fades through
+        /// alpha, which is right for an alpha-blended shader. It is wrong here:
+        /// Custom/Particle (Unlit) selects its alpha channel through
+        /// _AlphaChannel and defaults to RED, so a white-RGB texture is fully
+        /// opaque everywhere and draws squares. Premultiplying means the edges
+        /// are black whichever channel the shader ends up reading, and black
+        /// contributes nothing to an additive blend.
+        /// </remarks>
+        private static Texture2D GetOrCreateAdditiveParticleTexture()
+        {
+            if (_cachedAdditiveTexture != null) return _cachedAdditiveTexture;
+
+            const int size = 32;
+            var tex = new Texture2D(size, size, TextureFormat.ARGB32, false);
+            var center = new Vector2(size / 2f, size / 2f);
+            float maxDist = size / 2f;
+
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float dist = Vector2.Distance(new Vector2(x + 0.5f, y + 0.5f), center);
+                    float a = Mathf.Clamp01(1f - dist / maxDist);
+                    a *= a;
+                    tex.SetPixel(x, y, new Color(a, a, a, a));
+                }
+            }
+            tex.Apply();
+            _cachedAdditiveTexture = tex;
+            return tex;
+        }
+
         private static Material _cachedAdditiveMaterial;
         private static bool _additiveUnavailable;
 
@@ -1849,26 +2119,116 @@ namespace FireFront.Utils
             if (_cachedAdditiveMaterial != null) return _cachedAdditiveMaterial;
             if (_additiveUnavailable) return null;
 
+            string how = "Shader.Find";
             Shader shader = Shader.Find("Custom/Particle (Unlit)");
             if (shader == null)
             {
+                shader = BorrowShaderFromVanillaFire();
+                how = "borrowed from a vanilla fire material";
+            }
+
+            if (shader == null)
+            {
                 _additiveUnavailable = true;
-                FireLogger.Warn($"[SHADER-DIAG] {callerName}: \"Custom/Particle (Unlit)\" not found; " +
+                FireLogger.Warn($"[SHADER-DIAG] {callerName}: no additive particle shader available " +
+                                "(Shader.Find missed and no vanilla fire material could be read); " +
                                 "flames fall back to the alpha-blended material and will read as " +
                                 "separate dots rather than as fire.");
                 return null;
             }
 
-            var mat = new Material(shader) { mainTexture = GetOrCreateSoftParticleTexture() };
-            mat.SetFloat("_SrcBlend", 3f); // SrcColor, exactly as ashrain_cinder.mat
+            var mat = new Material(shader) { mainTexture = GetOrCreateAdditiveParticleTexture() };
+
+            // WHICH CHANNEL IS ALPHA. Custom/Particle (Unlit) exposes
+            //   [Enum(Red,0,Green,1,Blue,2,Alpha,3)] _AlphaChannel = 0
+            // so out of the box it takes alpha from the texture's RED channel.
+            // The old soft texture is white RGB with its falloff in the alpha
+            // channel, which means red reads 1.0 across the whole quad and every
+            // particle draws as a solid square. That, not the blend, is what made
+            // 0.20.2 and 0.20.4 render blocks; two different _SrcBlend values were
+            // tried against it and neither could have worked.
+            //
+            // Belt and braces, because this shader's real body cannot be read
+            // (AssetRipper emits a DummyShaderTextExporter stub and only the
+            // property list is genuine): point it at the alpha channel AND bake
+            // the falloff into RGB as well, so the edges go to black even if the
+            // channel selector behaves differently than the enum implies. Under
+            // additive blending black adds nothing, so either path gives soft edges.
+            if (mat.HasProperty("_AlphaChannel")) mat.SetFloat("_AlphaChannel", 3f); // Alpha
+            if (mat.HasProperty("_Cull")) mat.SetFloat("_Cull", 0f);                 // Off - billboards face any way
+            FireLogger.Info($"[SHADER-DIAG] additive shader acquired via {how}: \"{shader.name}\".");
+
+            // SrcAlpha, NOT the SrcColor (3) that ashrain_cinder.mat uses.
+            //
+            // Copying vanilla's number was wrong, and wrong in a way that is
+            // obvious on screen: SrcColor ignores the alpha channel entirely, and
+            // our particle texture is white RGB that fades out THROUGH ALPHA. So
+            // every quad contributed at full strength right to its corners and
+            // the fire rendered as hard-edged squares. Vanilla can use SrcColor
+            // because its own textures bake the falloff into RGB; ours does not.
+            // SrcAlpha x One is the classic additive pairing for an alpha-faded
+            // texture, and it is the texture we have that decides this, not the
+            // material we borrowed the shader from.
+            mat.SetFloat("_SrcBlend", 5f); // SrcAlpha
             mat.SetFloat("_DstBlend", 1f); // One
             mat.SetFloat("_ZWrite", 0f);
             mat.renderQueue = 3000;        // Transparent
             _cachedAdditiveMaterial = mat;
 
-            FireLogger.Info($"[SHADER-DIAG] additive flame material built from \"Custom/Particle (Unlit)\" " +
-                            "(_SrcBlend=3, _DstBlend=1, _ZWrite=0).");
+            FireLogger.Info("[SHADER-DIAG] additive flame material built (_SrcBlend=5 SrcAlpha, _DstBlend=1 One, _ZWrite=0).");
             return _cachedAdditiveMaterial;
+        }
+
+        /// <summary>
+        /// Takes a shader off a vanilla fire material that is already loaded,
+        /// rather than asking for one by name.
+        /// </summary>
+        /// <remarks>
+        /// Shader.Find only sees shaders currently resident, which depends on
+        /// what the scene has pulled in — so it can miss a shader the game
+        /// definitely ships, and it is guaranteed to miss on a headless server,
+        /// which loads none at all. A prefab registered in ZNetScene carries its
+        /// materials with it, and a material always carries a live shader
+        /// reference, so reading one is not subject to that timing.
+        ///
+        /// Names are avoided deliberately. The only evidence tying vanilla's
+        /// flame materials to particular shader NAMES is AssetRipper's builtin
+        /// fileID table, which is its own mapping rather than the game's, and
+        /// trusting it is what inverted the shader survey twice already. Whatever
+        /// object comes back here is by definition present and usable; the log
+        /// records what it turned out to be.
+        /// </remarks>
+        private static Shader BorrowShaderFromVanillaFire()
+        {
+            string[] donors = { "fire_pit", "bonfire", "piece_groundtorch" };
+
+            for (int d = 0; d < donors.Length; d++)
+            {
+                GameObject prefab = FindPrefabByName(donors[d]);
+                if (prefab == null) continue;
+
+                ParticleSystemRenderer[] renderers = prefab.GetComponentsInChildren<ParticleSystemRenderer>(true);
+                for (int i = 0; i < renderers.Length; i++)
+                {
+                    ParticleSystemRenderer r = renderers[i];
+                    if (r == null) continue;
+
+                    Material m = r.sharedMaterial;
+                    if (m == null || m.shader == null) continue;
+
+                    // Prefer a shader that exposes the blend properties we set,
+                    // since that is what lets us force additive rather than
+                    // inheriting whatever the donor happened to be authored as.
+                    if (m.HasProperty("_SrcBlend") && m.HasProperty("_DstBlend"))
+                    {
+                        FireLogger.Debug($"[SHADER-DIAG] borrowed \"{m.shader.name}\" from " +
+                                         $"{donors[d]}/{r.gameObject.name} (material \"{m.name}\").");
+                        return m.shader;
+                    }
+                }
+            }
+
+            return null;
         }
 
         private static void ApplyParticleShader(ParticleSystemRenderer renderer, string callerName)

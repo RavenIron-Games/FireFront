@@ -44,6 +44,8 @@ namespace FireFront.Config
         public static ConfigEntry<float> DouseImmunitySeconds;
         public static ConfigEntry<bool> RainSuppressesGroundFire;
         public static ConfigEntry<float> RainGroundBurnDurationMultiplier;
+        public static ConfigEntry<bool> RainSuppressesObjectFire;
+        public static ConfigEntry<float> RainObjectBurnDurationMultiplier;
         public static ConfigEntry<bool> ScorchMarksEnabled;
         public static ConfigEntry<float> ScorchMarkLifetimeSeconds;
         public static ConfigEntry<bool> UseVanillaDirtPaint;
@@ -174,6 +176,10 @@ namespace FireFront.Config
 
         public static bool EffectiveRainSuppressesGroundFire =>
             !Apocalypse && RainSuppressesGroundFire.Value;
+
+        /// <summary>Rain douses object fire too; burntheworld ignores weather entirely.</summary>
+        public static bool EffectiveRainSuppressesObjectFire =>
+            !Apocalypse && RainSuppressesObjectFire.Value;
 
         /// <summary>Burned ground can relight immediately instead of staying spent.</summary>
         public static bool EffectiveGroundFuelExhaustionEnabled =>
@@ -504,17 +510,37 @@ namespace FireFront.Config
 
             RainSuppressesGroundFire = config.Bind(
                 "Weather", "RainSuppressesGroundFire", true,
-                "While it's raining (EnvMan.s_isWet), ground fire can't spread cell-to-cell at all, " +
-                "and any newly-ignited ground cell burns out much faster (see " +
-                "RainGroundBurnDurationMultiplier). Object fire (already-burning structures/trees) " +
-                "is unaffected — a raging building fire keeps going despite rain, but grass fire " +
-                "gets doused. Water-on-contact extinguishing is a planned follow-up.");
+                "While rain falls on a ground cell it can't spread cell-to-cell, can't light an " +
+                "object above it, and its clock runs faster (RainGroundBurnDurationMultiplier) so " +
+                "it dies out under the rain. Rain is judged AT THE FIRE, the way vanilla would show " +
+                "it to a player standing there - not from the server's own sky, which on a " +
+                "dedicated server never changes. Before 0.21.0 this key read that sky and so did " +
+                "nothing at all on a dedicated server.");
 
             RainGroundBurnDurationMultiplier = config.Bind(
                 "Weather", "RainGroundBurnDurationMultiplier", 0.3f,
                 new ConfigDescription(
-                    "Multiplier applied to GroundBurnDurationSeconds for newly-ignited cells while it's raining. " +
-                    "0.3 = burns out about 70% faster than normal.",
+                    "How fast a ground cell burns while rain falls on it, as a fraction of its normal " +
+                    "burn time: 0.3 = its remaining time passes about 3x faster, so a cell lit in the " +
+                    "rain lasts 30% as long and a cell the rain reaches late loses 70% of what it had left.",
+                    new AcceptableValueRange<float>(0.05f, 1f)));
+
+            RainSuppressesObjectFire = config.Bind(
+                "Weather", "RainSuppressesObjectFire", true,
+                "While rain falls on a burning tree or building it can't pass fire to anything - no " +
+                "neighbouring objects, no ground seeds - and its clock runs faster " +
+                "(RainObjectBurnDurationMultiplier) so it goes out over a minute or two instead of " +
+                "burning its full time. It still burns, glows and hurts until then, and a direct " +
+                "ignition (torch, campfire, lightning) still lights it: rain stops spread and " +
+                "shortens fire, it does not forbid fire. New in 0.21.0; object fire ignored weather " +
+                "entirely before that.");
+
+            RainObjectBurnDurationMultiplier = config.Bind(
+                "Weather", "RainObjectBurnDurationMultiplier", 0.3f,
+                new ConfigDescription(
+                    "How fast an object burns while rain falls on it, as a fraction of its normal burn " +
+                    "time: 0.3 = remaining time passes about 3x faster, so at the 240s default a tree " +
+                    "that catches in the rain is out in about 72s.",
                     new AcceptableValueRange<float>(0.05f, 1f)));
 
             ScorchMarksEnabled = config.Bind(

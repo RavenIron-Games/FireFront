@@ -1,17 +1,19 @@
-# FireFront — session handoff (updated 2026-09-12, evening)
+# FireFront — session handoff (updated 2026-09-16, afternoon)
 
 Resume point for the next working session. Read this before touching anything;
 the memory notes in the assistant's store point here.
 
 ## Where everything stands
 
-- **Repo**: `main` at **0.19.14**, pushed to github.com/RavenIron-Games/FireFront,
-  every version tagged through `v0.19.14`. GitHub releases published for
+- **Repo**: `main` at **0.21.1** (committed 2026-09-16 as one commit spanning
+  0.20.3 through 0.21.1; NOT yet pushed at the time of writing - check
+  `git status -sb`), remote github.com/RavenIron-Games/FireFront. GitHub releases published for
   v0.19.8, v0.19.9, v0.19.11 and v0.19.14 (each with the bare DLL and the
   mod-manager zip attached, SHA256s in the notes).
-- **Deployed builds: 0.20.1** on the test server and in Gale's `testing`
-  profile (staged there as `FireFront.dll.off` — see the profile note below).
-  The four `RavenIron*` Gale profiles also carry 0.20.1, but nobody plays them.
+- **Deployed builds: 0.21.1** on the test server and in Gale's `testing`
+  profile (enabled). The four `RavenIron*` Gale profiles were put back to the
+  versions Gale's database records for them (0.19.14 x3, Ravenrest 0.19.3) on
+  2026-09-16, after carrying a stray 0.20.1 dev build for four days.
   Verify a deployment by **SHA256 against the DLL you just built**, or by the
   boot log line. Do NOT trust
   `[System.Diagnostics.FileVersionInfo]::GetVersionInfo(path)` on its own:
@@ -58,6 +60,32 @@ the memory notes in the assistant's store point here.
   **Owner's call 2026-08-28: no Discord post needed** — the regenerated split
   in `dist\DISCORD_POST_READY.txt` exists but is not to be shipped unless the
   owner asks.
+## Rain: verify this before anything else (0.21.0, built 2026-09-16, not yet run)
+
+Rain never registered on a dedicated server - `EnvMan` only picks an environment
+when a main camera exists, so headless `s_isWet` is false forever, and the test
+server has never logged `raining True`. 0.21.0 replays vanilla's per-period,
+per-biome-sector selection for the fire's own position instead, and rain now
+blocks spread from and shortens any fire it falls on (objects too, new keys
+`RainSuppressesObjectFire` / `RainObjectBurnDurationMultiplier`). To verify:
+
+1. On a client, in NATURAL rain, type `fireweather`. The first line is FireFront's
+   replay at your position, the second is what vanilla is showing you. They must
+   agree. A third `[server]` line follows: the server's answer for the same spot,
+   which is what the simulation uses. If the client agrees with vanilla but the
+   server disagrees with the client, the world clock or sector lookup differs
+   headless. Done once on 2026-09-16 (0.21.0): the client lines agreed; the server
+   line could not be compared because the rain was vanilla's `env Rain`, which is
+   CLIENT-LOCAL - the server correctly said 'Clear'. Natural-rain agreement is
+   still unverified.
+2. To test the fire behaviour without waiting for weather: `fireweather force Rain`
+   (0.21.1) overrides the SERVER's weather; `fireweather reset` clears it. Then
+   light one tree (`startfire`). Expect: no spread at all, and the tree out in
+   roughly 72s at defaults instead of 240s. The heartbeat's `raining` field is now
+   `wet/total` burners and should read `1/1`.
+3. Light a tree in clear weather and wait for rain to arrive: the burn should
+   shorten from that moment, not restart.
+
 ## Do this first: look at the fire
 
 **0.20.1 and 0.20.2 are committed, pushed and deployed, and NEITHER has been

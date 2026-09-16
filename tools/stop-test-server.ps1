@@ -18,6 +18,8 @@
 param(
     [string]$ServerDir      = "C:\Users\donfr\FireFrontTestServer",
     [string]$LogPath        = "",
+    [string]$World          = "Dedicated",
+    [string]$SaveDir        = "",
     [int]   $TimeoutSeconds = 180,
     [switch]$AllowForceKill
 )
@@ -40,6 +42,31 @@ if (-not (Test-Path $helper)) {
 $logLinesBefore = 0
 if (Test-Path $LogPath) {
     $logLinesBefore = (Get-Content $LogPath -ErrorAction SilentlyContinue | Measure-Object -Line).Lines
+}
+
+# And when the stop began, so only a WRITE from here on counts. The log line is
+# no longer sufficient on its own - see the note above the save check below.
+$stopBegan = Get-Date
+
+# Resolve where this server's world actually lives. A server launched with
+# -savedir keeps it under that directory; otherwise Valheim uses LocalLow.
+if ([string]::IsNullOrEmpty($SaveDir)) {
+    $candidateRoots = @(
+        (Join-Path $ServerDir "saves\worlds_local"),
+        (Join-Path $env:USERPROFILE "AppData\LocalLow\IronGate\Valheim\worlds_local")
+    )
+} else {
+    $candidateRoots = @((Join-Path $SaveDir "worlds_local"))
+}
+
+$worldPaths = @()
+foreach ($root in $candidateRoots) {
+    if (-not (Test-Path $root)) { continue }
+    # 1.0.12 writes the world as a DIRECTORY; older builds wrote <World>.db.
+    foreach ($leaf in @($World, "$World.db")) {
+        $candidate = Join-Path $root $leaf
+        if (Test-Path $candidate) { $worldPaths += $candidate }
+    }
 }
 
 foreach ($p in @($proc)) {
@@ -75,15 +102,48 @@ foreach ($p in @($proc)) {
 
 Start-Sleep -Seconds 3
 
+# TWO ways to confirm a save, because neither alone is reliable any more.
+#
+# The log line came first and is now the weaker of the two: Valheim 1.0.12
+# stopped emitting "World saved ( ...ms )" and a clean shutdown instead shows
+# "Saving" followed by Unload lines. Relying on it alone made this script report
+# lost world state after every single clean stop on 2026-09-12 - four in a row,
+# all false, each disproved by looking at the world on disk. A save warning that
+# is always wrong is worse than none, because it trains you to ignore the real one.
+#
+# So the file is the authority: if the world was written at or after the moment
+# the stop began, it saved, whatever the log does or does not say. 1.0.12 writes
+# the world as a DIRECTORY, which is also why any loose <World>.db sitting beside
+# it is a stale pre-1.0 backup whose timestamp means nothing.
 $saved = $false
-if (Test-Path $LogPath) {
+$how = ""
+
+foreach ($wp in $worldPaths) {
+    $written = (Get-Item $wp -ErrorAction SilentlyContinue).LastWriteTime
+    if ($written -and $written -ge $stopBegan.AddSeconds(-2)) {
+        $saved = $true
+        $how = "world written $($written.ToString('HH:mm:ss')) at $wp"
+        break
+    }
+}
+
+if (-not $saved -and (Test-Path $LogPath)) {
     $new = Get-Content $LogPath -ErrorAction SilentlyContinue | Select-Object -Skip $logLinesBefore
     $saveLine = $new | Where-Object { $_ -match "World saved" } | Select-Object -Last 1
-    if ($saveLine) { $saved = $true; Write-Host "SAVE CONFIRMED: $saveLine" -ForegroundColor Green }
+    if ($saveLine) { $saved = $true; $how = "log line: $saveLine" }
 }
-if (-not $saved) {
-    Write-Host "NO shutdown save found in the log after the stop began." -ForegroundColor Red
-    Write-Host "If players were connected, world state since the last autosave is lost." -ForegroundColor Red
-    exit 1
+
+if ($saved) {
+    Write-Host "SAVE CONFIRMED - $how" -ForegroundColor Green
+    exit 0
 }
-exit 0
+
+Write-Host "NO save detected after the stop began." -ForegroundColor Red
+if ($worldPaths.Count -eq 0) {
+    Write-Host "  (could not find world '$World' under any known save root, so only the log was checked -" -ForegroundColor Yellow
+    Write-Host "   pass -World or -SaveDir to point this at the right one)" -ForegroundColor Yellow
+} else {
+    Write-Host "  checked: $($worldPaths -join ', ')" -ForegroundColor Yellow
+}
+Write-Host "If players were connected, world state since the last autosave may be lost." -ForegroundColor Red
+exit 1

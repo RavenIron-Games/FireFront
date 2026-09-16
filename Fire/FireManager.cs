@@ -616,6 +616,7 @@ namespace FireFront.Fire
             }
 
             DrainRemoteVfxSpawnQueue(); // client-side VFX budget — must run before the server gate below
+            DrainRemoteObjectVfxQueue(); // same, for object fire — see EnqueueRemoteObjectVfx
             ProcessRemoteSmouldering(); // client-side: the server is headless, THIS is what a player sees
 
             // Everything below this point is the actual fire simulation, and it
@@ -645,6 +646,7 @@ namespace FireFront.Fire
 
             MaybePersistFires();
             PruneStale();
+            AgeFiresInRain();
             ExpireTimers();
             PromoteFromQueue();
             ExpireGroundTimers();
@@ -963,6 +965,8 @@ namespace FireFront.Fire
             _remoteGroundVfx.Clear();
             _remoteVfxSpawnQueue.Clear();
             _remoteVfxQueuedKeys.Clear();
+            _remoteObjectVfxQueue.Clear();
+            _remoteObjectVfxQueued.Clear();
             _groundExpiredSinceFlush.AddRange(_groundBurning.Keys); // so the next flush tells clients to clear these too
             _pendingIgniteResolutions.Clear();
             _burning.Clear();
@@ -1227,7 +1231,7 @@ namespace FireFront.Fire
             int fireCount = Mathf.Max(1, _events.Count);
             return $"FireFront: burning {_burning.Count}/{FireConfig.EffectiveMaxConcurrentBurning * fireCount}, " +
                    $"queued {_queue.Count}/{_queue.Capacity}, " +
-                   $"ground {_groundBurning.Count}/{FireConfig.EffectiveGroundMaxConcurrent * fireCount} (enabled {FireConfig.GroundSpreadEnabled.Value}, vfxcap {FireConfig.EffectiveGroundVfxMaxConcurrent}, dmgcap {FireConfig.EffectiveGroundDamageMaxConcurrent}, raining {ValheimBridge.IsRaining()}), " +
+                   $"ground {_groundBurning.Count}/{FireConfig.EffectiveGroundMaxConcurrent * fireCount} (enabled {FireConfig.GroundSpreadEnabled.Value}, vfxcap {FireConfig.EffectiveGroundVfxMaxConcurrent}, dmgcap {FireConfig.EffectiveGroundDamageMaxConcurrent}, raining {RainingBurnersForStatus()}), " +
                    $"burn {FireConfig.BurnDurationSeconds.Value}s (maturity {(FireConfig.EffectiveSpreadMaturityFraction * 100f):F0}%), " +
                    $"radius {FireConfig.EffectiveSpreadRadius}m, " +
                    $"groundradius {FireConfig.EffectiveGroundSpreadRadius}m, " +
@@ -1250,6 +1254,8 @@ namespace FireFront.Fire
                    $"influence {FireConfig.WindInfluence.Value:F2}, live intensity {WindIntensityForStatus()}), " +
                    $"dousingradius {FireConfig.DousingBombRadius.Value}m, " +
                    $"douseimmunity {FireConfig.EffectiveDouseImmunitySeconds}s (wet {_dousedUntil.Count}), " +
+                   $"rain (ground {FireConfig.EffectiveRainSuppressesGroundFire} x{FireConfig.RainGroundBurnDurationMultiplier.Value:F2}, " +
+                   $"objects {FireConfig.EffectiveRainSuppressesObjectFire} x{FireConfig.RainObjectBurnDurationMultiplier.Value:F2}), " +
                    $"persist {FireConfig.PersistFiresEnabled.Value}, " +
                    $"groundleash {FireConfig.EffectiveGroundMaxSpreadDistanceEnabled} ({FireConfig.GroundMaxSpreadDistance.Value}m), " +
                    $"ramp {(GetRampFraction() * 100f):F0}% (enabled {FireConfig.EffectiveFireRampEnabled}, start {(FireConfig.FireRampStartFraction.Value * 100f):F0}%, duration {FireConfig.FireRampDurationSeconds.Value}s), " +
@@ -1288,7 +1294,7 @@ namespace FireFront.Fire
         /// </summary>
         private void IgniteAdjacentGroundCells(GroundCellKey originKey, float y)
         {
-            if (FireConfig.EffectiveRainSuppressesGroundFire && ValheimBridge.IsRaining()) return;
+            if (FireConfig.EffectiveRainSuppressesGroundFire && ValheimBridge.IsRainingAt(CellCenter(originKey, y))) return;
 
             // Wind is global, not per-zone, so both reads happen once here per
             // spread call rather than once per neighbor.
@@ -1523,11 +1529,11 @@ namespace FireFront.Fire
                 }
             }
 
+            // Rain no longer shortens a new cell up front: AgeFiresInRain runs a
+            // cell's clock faster for as long as rain falls on it, which lands in
+            // the same place for a cell lit in rain and also covers the cells the
+            // rain arrives on later.
             float duration = FireConfig.GroundBurnDurationSeconds.Value;
-            if (FireConfig.EffectiveRainSuppressesGroundFire && ValheimBridge.IsRaining())
-            {
-                duration *= FireConfig.RainGroundBurnDurationMultiplier.Value;
-            }
 
             _groundBurning[key] = new GroundCellState { ExpireAt = Time.time + duration, Y = realY, EventId = cellEventId };
             FireLogger.Debug($"Ground ignited ({_groundBurning.Count}/{effectiveGroundMax}) at cell ({key.X},{key.Z})");
@@ -1828,8 +1834,61 @@ namespace FireFront.Fire
             Component target = ValheimBridge.ComponentFromZdoid(id);
             if (target == null) return; // not loaded on this peer (out of range) — nothing to show
 
-            if (started) SpawnRemoteVfxOnly(target);
+            if (started) EnqueueRemoteObjectVfx(target);
             else RemoveRemoteVfxFor(target);
+        }
+
+        private readonly List<Component> _remoteObjectVfxQueue = new List<Component>();
+        private readonly HashSet<Component> _remoteObjectVfxQueued = new HashSet<Component>();
+
+        /// <summary>
+        /// Deliberately smaller than RemoteVfxSpawnsPerFrame: an object fire
+        /// builds two or three ParticleSystems plus a realtime Light, where a
+        /// ground cell builds one cheap system and no light.
+        /// </summary>
+        private const int RemoteObjectVfxSpawnsPerFrame = 2;
+
+        /// <summary>
+        /// Queues an object fire's VFX rather than building it inside the RPC.
+        /// </summary>
+        /// <remarks>
+        /// Ground fire has been budgeted since 0.18.6; object fire never was, and
+        /// it is the more expensive of the two per instance. The server's spread
+        /// cycle ignites in batches, so every burner lit in one pass had its
+        /// whole rig constructed in a single frame on the client. Measured
+        /// 2026-09-12 with 34 objects alight: CPU spikes of 3-4x the median,
+        /// arriving about every 1.4s against a 0.75s spread interval.
+        ///
+        /// 0.20.1 made each of those constructions several times heavier for a
+        /// tall burner (a taller particle column, a crown-spark system, a longer
+        /// light range), which is what turned a latent cost into a visible one.
+        /// The fix is the pattern this file already uses for ground cells rather
+        /// than a new one.
+        /// </remarks>
+        private void EnqueueRemoteObjectVfx(Component target)
+        {
+            if (target == null) return;
+            if (_remoteVfx.ContainsKey(target)) return;
+            if (!_remoteObjectVfxQueued.Add(target)) return;
+            _remoteObjectVfxQueue.Add(target);
+        }
+
+        private void DrainRemoteObjectVfxQueue()
+        {
+            int spawned = 0;
+            while (_remoteObjectVfxQueue.Count > 0 && spawned < RemoteObjectVfxSpawnsPerFrame)
+            {
+                Component target = _remoteObjectVfxQueue[_remoteObjectVfxQueue.Count - 1];
+                _remoteObjectVfxQueue.RemoveAt(_remoteObjectVfxQueue.Count - 1);
+                _remoteObjectVfxQueued.Remove(target);
+
+                // It can have been destroyed, unloaded or extinguished while it
+                // sat in the queue; Unity reports a destroyed Component as null.
+                if (target == null) continue;
+
+                SpawnRemoteVfxOnly(target);
+                spawned++;
+            }
         }
 
         private void SpawnRemoteVfxOnly(Component target)
@@ -1860,6 +1919,10 @@ namespace FireFront.Fire
 
         private void RemoveRemoteVfxFor(Component target)
         {
+            // Drop it from the queue too, or an extinguished burner still gets a
+            // fire built for it a frame or two later and is never cleaned up.
+            if (_remoteObjectVfxQueued.Remove(target)) _remoteObjectVfxQueue.Remove(target);
+
             if (_remoteVfx.TryGetValue(target, out GameObject instance))
             {
                 _remoteVfx.Remove(target);
@@ -1904,6 +1967,66 @@ namespace FireFront.Fire
         }
 
         private const int KillResolutionMaxAttempts = 20; // ~15s at the 0.75s default cycle before giving up
+
+        // Rain aging: while rain falls on a fire its clock runs at 1/multiplier
+        // speed - at the 0.3 default, three and a third times faster - so it dies
+        // over a minute or two instead of vanishing, and a fire the rain reaches
+        // late loses only a share of what it had left. Object and ground fire
+        // each on their own multiplier. Persistence stores time-left, so an aged
+        // fire restores exactly as aged. IgnitedAt is left alone: the maturity
+        // gate asks how long a burner has been alight, which rain does not change.
+        private float _lastRainAgeTime = -1f;
+
+        private void AgeFiresInRain()
+        {
+            float now = Time.time;
+            float dt = _lastRainAgeTime < 0f ? 0f : now - _lastRainAgeTime;
+            _lastRainAgeTime = now;
+            if (dt <= 0f) return;
+
+            if (FireConfig.EffectiveRainSuppressesObjectFire && _burning.Count > 0)
+            {
+                float extra = dt * (1f / Mathf.Max(0.05f, FireConfig.RainObjectBurnDurationMultiplier.Value) - 1f);
+                if (extra > 0f)
+                {
+                    _scratch.Clear();
+                    foreach (KeyValuePair<ZDOID, BurningState> kv in _burning)
+                        if (ValheimBridge.IsRainingAt(kv.Value.Position)) _scratch.Add(kv.Key);
+                    foreach (ZDOID id in _scratch)
+                    {
+                        BurningState st = _burning[id];
+                        st.ExpireAt -= extra;
+                        _burning[id] = st;
+                    }
+                }
+            }
+
+            if (FireConfig.EffectiveRainSuppressesGroundFire && _groundBurning.Count > 0)
+            {
+                float extra = dt * (1f / Mathf.Max(0.05f, FireConfig.RainGroundBurnDurationMultiplier.Value) - 1f);
+                if (extra > 0f)
+                {
+                    _groundScratch.Clear();
+                    foreach (KeyValuePair<GroundCellKey, GroundCellState> kv in _groundBurning)
+                        if (ValheimBridge.IsRainingAt(CellCenter(kv.Key, kv.Value.Y))) _groundScratch.Add(kv.Key);
+                    foreach (GroundCellKey key in _groundScratch)
+                    {
+                        GroundCellState st = _groundBurning[key];
+                        st.ExpireAt -= extra;
+                        _groundBurning[key] = st;
+                    }
+                }
+            }
+        }
+
+        /// <summary>"3/16": burners currently under rain, for the status line.</summary>
+        private string RainingBurnersForStatus()
+        {
+            int wet = 0;
+            foreach (KeyValuePair<ZDOID, BurningState> kv in _burning)
+                if (ValheimBridge.IsRainingAt(kv.Value.Position)) wet++;
+            return wet + "/" + _burning.Count;
+        }
 
         private void ExpireTimers()
         {
@@ -2379,6 +2502,10 @@ namespace FireFront.Fire
         /// </summary>
         private void LogSpreadCandidateDiagnostic(float objRadiusSqr)
         {
+            // Debug-only since 0.20.7: on a live dedicated server this wrote the same
+            // counts every 5s for as long as anything burned (3,283 lines in one day,
+            // twice the heartbeat). Toggle with 'fireset debug true' when spread stalls.
+            if (!FireLogger.DebugEnabled) return;
             if (_burning.Count == 0) return;
             if (Time.time < _nextSpreadDiagnosticLog) return;
             _nextSpreadDiagnosticLog = Time.time + SpreadDiagnosticInterval;
@@ -2470,6 +2597,11 @@ namespace FireFront.Fire
                 if (!_burning.TryGetValue(burnerId, out BurningState burnerState)) continue;
                 if (Time.time - burnerState.IgnitedAt < maturitySeconds) continue;
                 Vector3 origin = burnerState.Position;
+                // Rain on the burner stops it passing fire on at all - objects, ZDO
+                // candidates and ground seeds alike. It keeps burning (faster; see
+                // AgeFiresInRain) and a direct ignition still lights it: rain stops
+                // SPREAD, it does not stop a torch or a lightning strike.
+                if (FireConfig.EffectiveRainSuppressesObjectFire && ValheimBridge.IsRainingAt(origin)) continue;
 
                 // Grid query instead of the whole candidate list — see the
                 // spatial index for the measurement that motivated it. The
@@ -2508,6 +2640,9 @@ namespace FireFront.Fire
                     Vector3 origin = CellCenter(key, y);
 
                     IgniteAdjacentGroundCells(key, y);
+
+                    // Same rule for a ground cell lighting the objects above it.
+                    if (FireConfig.EffectiveRainSuppressesObjectFire && ValheimBridge.IsRainingAt(origin)) continue;
 
                     QueryGrid(_candidateGrid, origin, groundRadius);
                     float groundRadiusSqr = groundRadius * groundRadius;
