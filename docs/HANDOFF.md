@@ -71,6 +71,14 @@ the Bind default AND add a row to `Rebases[n+1]` with the old default's on-disk 
 `.\tools\run-tests.ps1`.** Do not rename keys to dodge a stored value again. Verified on
 the test server 2026-09-18 with a hand-aged file (0.45 + the orphan key): see CHANGELOG.
 
+⚠️ **0.21.4 OWES ONE IN-GAME RUN.** 0.21.3's verification above does not carry over: the engine
+changed underneath it. This is boot-time config code, and house rule "a clean build proves nothing
+about member access" applies. The check is the 0.21.3 protocol again — a hand-aged file (0.45 plus
+the orphan `Debug.VerboseLogging`), boot, then `firestatus` — plus one thing that is new: the
+summary line must now name the retirement AND, if anything was refused, say `REFUSED`. A clean
+migration must not say it. Nothing here can be settled headless in a harness, because the whole
+failure class is "the mod said it did something it did not do".
+
 **0.21.4 corrected eight things in that machinery, and every one of them was invisible from
 outside the game.** The harness that shipped with it compiled the PURE ledger only, so no
 engine-side rule was measured at all — in the mod of the three with a live rung of each
