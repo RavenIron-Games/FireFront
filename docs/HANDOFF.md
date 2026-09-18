@@ -137,6 +137,12 @@ the Bind default AND add a row to `Rebases[n+1]` with the old default's on-disk 
 `.\tools\run-tests.ps1`.** Do not rename keys to dodge a stored value again. Verified on
 the test server 2026-09-18 with a hand-aged file (0.45 + the orphan key): see CHANGELOG.
 
+**DONE 2026-09-18 12:18-12:20, server side:** hand-aged file, boot line named both steps, no
+refusal warning (every `_refused++` logs one on the next line, so a silent log IS the proof),
+file stamped 1 with 0.65 and the orphan gone, `.v0.bak` byte-equal to the aged file, second boot
+silent with no second backup. The in-game half could not be done from a client because the
+status reply omitted the server's line - fixed in 0.21.5, see below. Original text kept:
+
 ⚠️ **0.21.4 OWES ONE IN-GAME RUN.** 0.21.3's verification above does not carry over: the engine
 changed underneath it. This is boot-time config code, and house rule "a clean build proves nothing
 about member access" applies. The check is the 0.21.3 protocol again — a hand-aged file (0.45 plus
@@ -177,6 +183,63 @@ naming a key this build does not bind must NOT withhold it: that cannot succeed 
 either, and withholding would re-run the migration on every boot forever. `firestatus` reads
 `LastSummary`, which is written from the plan's INTENT before anything runs, so refusals have
 to be folded back into it or the one line an admin reads is confidently wrong.
+
+## 0.21.6 (2026-09-18): a ZDOID is NOT a persistence key
+
+**`ZDO.Load` runs `m_uid.SetID(++ZDOID.m_loadID)`** — read out of the 1.0.15 server with
+`ilspycmd`. Every object loaded from disk gets a fresh sequential id, and `SetID` also sets the
+user half to ZDOID's `UnknownFormerUser` (1), which is why everything persisted prints as
+`1:NNNNN`. **An id carried across a restart names a different object, and an existence check
+passes on it.** Fire persistence keyed burning objects that way from 0.18.0 to 0.21.5, so every
+restart either dropped the fire or lit trees that were not burning.
+
+`obj` lines carry the prefab name in field 8 and the object's **live** position, and are resolved
+by `FireManager.ResolveBurnerAt`: exactly one object of that prefab within **0.75 m**, each claimed
+once, one sector scan per 32 m cluster. Two candidates means the line is DROPPED, on purpose — a
+refusal costs one fire, a guess starts one on a bystander and hands it the dead object's burn age.
+Fields 1-2 still hold the ZDOID for diagnostics and file compatibility; **do not read them.**
+
+**Write the LIVE position, never `BurningState.Position`.** That field is captured once at ignition
+under the comment "trees and pieces don't move", and `TreeLog` breaks it: the 1.0.15 decompile gives
+it a Rigidbody, force and torque at spawn, and `AddForceAtPosition` on every hit, and FireFront
+claims ownership so the server simulates it. Logs are most of what a forest fire leaves burning —
+48 of the 50 entries in the store that proved this.
+
+Pre-0.21.6 lines are dropped with a warning. Ground, spent and regrow lines were always
+position-keyed and were never wrong. **Anything else that wants to remember a specific object across
+a restart has the same problem — store position and prefab.**
+
+Verified 2026-09-18: 50 persisted (48 of them logs) -> 47 restored, 3 skipped, no mis-resolutions.
+The same store on 0.21.5 restored 0 of 23 and lit bystanders instead.
+
+## 0.21.5 (2026-09-18): three defects found in play, all verified on the test server
+
+1. **Regrowth never worked headless, and the spawn API is a broadcast RPC.** Read the CHANGELOG
+   entry before touching `ValheimBridge.TrySpawnTree` again: it instantiates directly on the
+   server ON PURPOSE. `ZNetScene.IsAreaReady` demands `ZoneSystem.m_zones`, which ghost zones
+   never enter; `ZNetScene.SpawnObject(Vector3,Quaternion,GameObject)` is `void` and routes
+   "SpawnObject" to `ZRoutedRpc.Everybody` (real 1.0.15 server, `ilspycmd`). Verify: heartbeat
+   `regrowntrees` climbs, `[REGROW] N tree(s) regrew this cycle` in the server log, trees
+   visible in the world. `firetreeregrow` no longer costs a blocked entry one of its twenty
+   attempts, but it is NOT free: an entry whose spot is now built over is dropped for good, and
+   the reply names grown/dropped/pending separately so a deletion cannot read as a success.
+   **Regrowth refuses to plant within 4 m of live fire**, deferring 30 s at a time - without
+   that, trees regrow into a burn that is still alight and are eaten within seconds (five of the
+   first eight, live, 2026-09-18).
+2. **The status reply carries the server's config line.** `firestatus` on a client prints two
+   `[server]` lines: `FireFront config: ...` then `FireFront: burning ...`. That is how the
+   REFUSED check is made from now on.
+3. **ConfigurationManager edits reach the server** (`FireDevCommands.HookLiveConfigSync`, hooked
+   from `Plugin.Awake`). Anything in `Settable()` is forwarded as the equivalent `fireset`, admin
+   gated, deduplicated against the typed command, and dropped when ZNet is replaced. A setting
+   NOT in `Settable()` stays local on purpose. **If you add a server-side setting, add it to
+   `Settable()` or it is a no-op from a client in both the console and the manager.**
+4. **`RestoredRampAge` is assigned at restore** from the oldest burner of each event created by
+   the restore, from the store's own meta line (the true blaze age) and at the moment each event
+   is BORN - not afterwards from the oldest live burner, whose age is capped at
+   BurnDurationSeconds and which arrives too late to stop the restore truncating itself against a
+   cold ramp. One `[PERSIST] restored fires resume at a ramp age of Xs` line. Restart the server
+   under a burning fire to see it.
 
 ## Rain: verify this before anything else (0.21.0, built 2026-09-16, not yet run)
 
@@ -297,7 +360,9 @@ That approach is strictly more reliable and was the planned next step.
    itself hold duplicates, and a deduped restore entry now counts as skipped,
    not restored). Builds clean; in-game verification pending — rerun
    `firetreeregrowlist` after the next burn and look for the
-   `Regrowth dedupe:` debug line or simply no double entries.
+   `Regrowth dedupe:` debug line or simply no double entries. **Verified 2026-09-18:** 21
+   entries, all distinct - and that same list exposed that regrowth itself had never spawned
+   a tree headless (0.21.5).
 3. **Ship to testers** — ON HOLD, owner said no Discord post needed
    (2026-08-28). The zip stays ready in dist\ if that changes.
 

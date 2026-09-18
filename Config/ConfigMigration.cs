@@ -43,6 +43,18 @@ namespace FireFront.Config
         public static string LastSummary { get; private set; } = "";
 
         /// <summary>
+        /// The one line an admin reads, wherever it is printed: what this boot's migration did, or
+        /// that nothing needed doing. `firestatus` prints this machine's; the server's comes back to
+        /// a client as a `[server]` line (0.21.5).
+        /// </summary>
+        public static string StatusLine()
+        {
+            return "FireFront config: " + (string.IsNullOrEmpty(LastSummary)
+                ? "no migration ran this boot (file already at layout version " + ConfigLedger.CurrentVersion + ", or a first install)"
+                : LastSummary);
+        }
+
+        /// <summary>
         /// How many steps <see cref="Apply"/> REFUSED this boot. A refusal is almost always a bug
         /// in our own ledger rather than in the owner's file — a row naming a key this build does
         /// not bind, or retiring one it still does — plus the one that is nobody's bug, a drop that
@@ -118,15 +130,19 @@ namespace FireFront.Config
         /// </summary>
         public static void Finish(ConfigFile cfg, ConfigEntry<int> versionEntry)
         {
+            // Declared out here so the finally can still correct LastSummary after a throw. The
+            // transient file lock this whole file is built around is exactly what throws, and
+            // losing the REFUSED suffix to it would leave `firestatus` reporting Begin's optimistic
+            // intent as fact - the one thing the server-side reply exists to prevent.
+            bool migrationAttempted = false, safeToFinish = false, appliedCleanly = true;
             try
             {
-                bool migrationAttempted = _path != null;
-                bool safeToFinish = _state != MigrationState.Failed && (!migrationAttempted || _backedUp);
+                migrationAttempted = _path != null;
+                safeToFinish = _state != MigrationState.Failed && (!migrationAttempted || _backedUp);
 
                 // A step that failed for a reason that could succeed next time must WITHHOLD the
                 // stamp, or the retry it deserves never happens: a stamped file takes the
                 // AlreadyCurrent path on every future boot.
-                bool appliedCleanly = true;
                 if (_plan != null && safeToFinish && cfg != null) appliedCleanly = Apply(cfg, _plan);
 
                 if (_state == MigrationState.Failed)
@@ -151,10 +167,6 @@ namespace FireFront.Config
                 // LastSummary was written in Begin, from the plan's INTENT, before anything ran.
                 // The console command reads it back verbatim, so a refused step has to reach it or
                 // the one line the owner actually looks at is confidently wrong.
-                if (_refused > 0)
-                    LastSummary += " — but " + _refused.ToString(CultureInfo.InvariantCulture) +
-                                   " step(s) were REFUSED; see the warnings in the log";
-
                 if (cfg != null) cfg.Save();
             }
             catch (Exception ex)
@@ -163,6 +175,17 @@ namespace FireFront.Config
             }
             finally
             {
+                // LastSummary was written in Begin, from the plan's INTENT, before a single step
+                // ran, and the console reads it back verbatim. Corrected HERE so a throw above
+                // cannot leave it optimistic.
+                if (_refused > 0)
+                    LastSummary += " — but " + _refused.ToString(CultureInfo.InvariantCulture) +
+                                   " step(s) were REFUSED; see the warnings in the log";
+                if (_state == MigrationState.Failed)
+                    LastSummary = "migration FAILED this boot; every value is as it was and it retries next boot (see the error in the log)";
+                else if (migrationAttempted && !(safeToFinish && appliedCleanly))
+                    LastSummary += " — NOT STAMPED; the next boot retries this migration";
+
                 _refused = 0;
                 _snapshot = null;
                 _plan = null;

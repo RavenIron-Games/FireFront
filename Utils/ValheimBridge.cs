@@ -210,6 +210,7 @@ namespace FireFront.Utils
         {
             public ZDOID Id;
             public Vector3 Position;
+            public int PrefabHash;   // 0.21.6: lets a caller match a stored prefab name without a second lookup
         }
 
         // 1.0.7 retyped this whole call: the sector is a Vector2s now, and the two ring
@@ -364,7 +365,7 @@ namespace FireFront.Utils
 
                 Vector3 pos = zdo.GetPosition();
                 if ((pos - center).sqrMagnitude > radiusSqr) continue;
-                into.Add(new ZdoBurnable { Id = zdo.m_uid, Position = pos });
+                into.Add(new ZdoBurnable { Id = zdo.m_uid, Position = pos, PrefabHash = zdo.GetPrefab() });
             }
 
             return true;
@@ -1063,62 +1064,160 @@ namespace FireFront.Utils
         }
 
         /// <summary>
-        /// Spawns a tree prefab back into the world via ZNetScene.SpawnObject —
-        /// unlike "cultivate" (a Piece requiring Player.PlacePiece's real placement
-        /// validation), tree prefabs are plain TreeBase+ZNetView objects with no
-        /// Piece component; this is the same spawn path vanilla's own world
-        /// generation uses for them, so the direct SpawnObject call that failed
-        /// for cultivate is the *correct* approach here, not a workaround.
+        /// Server side: put a tree back at a burned-down spot. Instantiates the prefab HERE,
+        /// which is what vanilla's own RPC_SpawnObject does on each machine that receives it:
+        /// ZNetView.Awake creates one persistent ZDO owned by this server, every client in
+        /// range receives it, and if the instance itself is later dropped by
+        /// ZNetScene.RemoveObjects (headless, instances only live near world origin) the ZDO
+        /// survives because trees are persistent. Decompiled from the 1.0.15 server, 2026-09-18.
+        ///
+        /// What this replaced, and why it had never grown a single tree on a dedicated server:
+        /// the previous body waited behind ZNetScene.IsAreaReady, which first demands the zone
+        /// be in ZoneSystem.m_zones; headless, every zone a player stands in is a GHOST zone
+        /// (ZDO-only, root destroyed the same frame) and never enters that table, so the gate
+        /// was false everywhere but the origin and every entry burned its retries and was
+        /// dropped. Behind the gate it reflected into ZNetScene.SpawnObject, which in 1.0.x is
+        /// a VOID that broadcasts a "SpawnObject" routed RPC to Everybody - each peer would have
+        /// instantiated its own copy - and whose null return was then read as failure.
         /// </summary>
         public static bool TrySpawnTree(string prefabName, Vector3 worldPos)
         {
+            if (!IsServer())
+            {
+                FireLogger.Debug("TrySpawnTree: not the server - regrowth is server authority only.");
+                return false;
+            }
             GameObject prefab = FindPrefabByName(prefabName);
             if (prefab == null)
             {
                 FireLogger.Debug($"TrySpawnTree: prefab '{prefabName}' not found via FindPrefabByName.");
                 return false;
             }
-            if (ZNetSceneSpawnObjectMethod == null)
+            if (ZDOMan.instance == null || ZNetSceneInstanceField?.GetValue(null) == null)
             {
-                FireLogger.Debug("TrySpawnTree: ZNetScene.SpawnObject(Vector3,Quaternion,GameObject) " +
-                                  "reflection lookup returned null — likely a parameter-type or overload mismatch.");
+                FireLogger.Debug("TrySpawnTree: ZDOMan/ZNetScene not up yet.");
                 return false;
             }
 
-            object scene = ZNetSceneInstanceField?.GetValue(null);
-            if (scene == null)
-            {
-                FireLogger.Debug("TrySpawnTree: ZNetScene.instance is null.");
-                return false;
-            }
-
-            if (ZNetSceneIsAreaReadyMethod != null)
-            {
-                bool areaReady = (bool)ZNetSceneIsAreaReadyMethod.Invoke(scene, new object[] { worldPos });
-                if (!areaReady)
-                {
-                    FireLogger.Debug($"TrySpawnTree: IsAreaReady({worldPos}) is false — deferring, will retry next check.");
-                    return false;
-                }
-            }
-
-            object result;
+            // A fixed yaw per spot, so a regrown tree is not the one orientation every time
+            // and a restart does not re-roll it.
+            float yaw = Mathf.Repeat(worldPos.x * 37.1f + worldPos.z * 91.7f, 360f);
+            GameObject go;
             try
             {
-                result = ZNetSceneSpawnObjectMethod.Invoke(scene, new object[] { worldPos, Quaternion.identity, prefab });
+                go = UnityEngine.Object.Instantiate(prefab, worldPos, Quaternion.Euler(0f, yaw, 0f));
             }
             catch (System.Exception ex)
             {
-                FireLogger.Debug($"TrySpawnTree: SpawnObject threw: {ex.InnerException?.Message ?? ex.Message}");
+                FireLogger.Debug($"TrySpawnTree: Instantiate threw: {ex.Message}");
                 return false;
             }
+            if (go == null) return false;
 
-            if (!(result is GameObject))
+            ZNetView nv = go.GetComponent<ZNetView>();
+            if (nv == null || !nv.IsValid())
             {
-                FireLogger.Debug($"TrySpawnTree: SpawnObject returned {(result == null ? "null" : result.GetType().Name)}, not a GameObject.");
+                // No ZDO means nothing was registered with the world; do not leave a ghost object.
+                FireLogger.Debug($"TrySpawnTree: '{prefabName}' came up without a valid ZNetView/ZDO - destroyed.");
+                UnityEngine.Object.Destroy(go);
                 return false;
             }
+            return true;
+        }
 
+        /// <summary>
+        /// The prefab hash Valheim itself would store for an object named <paramref name="name"/>.
+        /// `ZNetView.Awake` hashes `Utils.GetPrefabName`, which is `name.Remove(name.IndexOfAny(new[]
+        /// { '(', ' ' }))` - it truncates at the FIRST '(' or space, not just a trailing "(Clone)".
+        /// The two rules agree for every vanilla prefab and diverge for a modded name containing a
+        /// space, which would silently never match. Read out of assembly_utils, 2026-09-18.
+        /// </summary>
+        public static int PrefabHashOf(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return 0;
+            int cut = name.IndexOfAny(PrefabNameTerminators);
+            return (cut >= 0 ? name.Remove(cut) : name).GetStableHashCode();
+        }
+        private static readonly char[] PrefabNameTerminators = { '(', ' ' };
+
+        /// <summary>
+        /// Every ZDO in the 3x3 zone block around <paramref name="center"/>, as id + position +
+        /// prefab hash. Unfiltered on purpose: the restore matches an exact prefab and does its own
+        /// distance test, and one block serves a whole cluster of store lines.
+        /// </summary>
+        public static bool CollectAllZdosNear(Vector3 center, List<ZdoBurnable> into)
+        {
+            into.Clear();
+            ZDOMan man = ZDOMan.instance;
+            if (man == null || ZdoManFindSectorObjectsMethod == null) return false;
+            _zdoScanScratch.Clear();
+            try
+            {
+                ZdoManFindSectorObjectsMethod.Invoke(man,
+                    new object[] { ZoneSystem.GetZone(center), new SimulationDistance(1, 0, true), _zdoScanScratch, null });
+            }
+            catch (System.Exception ex)
+            {
+                FireLogger.Debug($"CollectAllZdosNear: FindSectorObjects threw: {ex.InnerException?.Message ?? ex.Message}");
+                return false;
+            }
+            for (int i = 0; i < _zdoScanScratch.Count; i++)
+            {
+                ZDO zdo = _zdoScanScratch[i];
+                if (zdo == null) continue;
+                into.Add(new ZdoBurnable { Id = zdo.m_uid, Position = zdo.GetPosition(), PrefabHash = zdo.GetPrefab() });
+            }
+            return true;
+        }
+
+        /// <summary>Where a ZDO is RIGHT NOW, which for a felled log is not where it was lit.</summary>
+        public static bool TryGetZdoPosition(ZDOID id, out Vector3 position)
+        {
+            position = Vector3.zero;
+            ZDO zdo = ZDOMan.instance?.GetZDO(id);
+            if (zdo == null) return false;
+            position = zdo.GetPosition();
+            return true;
+        }
+
+        /// <summary>
+        /// Fills <paramref name="into"/> with the world position of every player-built
+        /// (creator-stamped) ZDO in the 3x3 zone block around <paramref name="center"/>, and
+        /// returns true. Returns FALSE when the sector scan is unavailable, which the caller must
+        /// treat as "cannot tell", never as "nothing is built here" - failing open would let a
+        /// tree grow up through somebody's floor.
+        ///
+        /// It hands back the whole block rather than answering one yes/no question because the
+        /// block is 192 m wide either way: regrowth entries come due in clusters inside one burn,
+        /// so the caller scans once and tests every entry against the result.
+        /// </summary>
+        public static bool CollectPlayerBuiltPositionsNear(Vector3 center, List<Vector3> into)
+        {
+            into.Clear();
+            ZDOMan man = ZDOMan.instance;
+            if (man == null || ZdoManFindSectorObjectsMethod == null)
+            {
+                FireLogger.Debug("CollectPlayerBuiltPositionsNear: ZDOMan null or the FindSectorObjects " +
+                                 "lookup failed - the build-over check cannot answer, so the caller must skip.");
+                return false;
+            }
+            _zdoScanScratch.Clear();
+            try
+            {
+                ZdoManFindSectorObjectsMethod.Invoke(man,
+                    new object[] { ZoneSystem.GetZone(center), new SimulationDistance(1, 0, true), _zdoScanScratch, null });
+            }
+            catch (System.Exception ex)
+            {
+                FireLogger.Debug($"CollectPlayerBuiltPositionsNear: FindSectorObjects threw: {ex.InnerException?.Message ?? ex.Message}");
+                return false;
+            }
+            for (int i = 0; i < _zdoScanScratch.Count; i++)
+            {
+                ZDO zdo = _zdoScanScratch[i];
+                if (zdo == null || zdo.GetLong(CreatorZdoHash, 0L) == 0L) continue;
+                into.Add(zdo.GetPosition());
+            }
             return true;
         }
 

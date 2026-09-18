@@ -1,5 +1,116 @@
 # Changelog
 
+## 0.21.6
+
+- **Fire persistence was restoring the wrong objects, and lighting fires that were never
+  burning.** A burning object was saved under its ZDOID, and a ZDOID does not survive a world
+  reload: `ZDO.Load` opens with `m_uid.SetID(++ZDOID.m_loadID)`, so every object read from disk
+  is handed a fresh sequential id and the one it was saved under is discarded. The user half
+  becomes ZDOID's "unknown former user" sentinel, which is why every persisted entry prints as
+  `1:NNNNN`. So the id in the store named a different object each boot. The existence check
+  passed, because the id did exist, and that is how this survived from 0.18.0 to 0.21.5 with
+  nothing in the log. Caught on the test server on 2026-09-18: one restart resolved 23 burning
+  trees onto stumps, wood drops and rocks and restored none of them; the next resolved 12 onto
+  live trees that had not been burning and set them alight, and the fire ran to 45 objects
+  within a minute of a boot that was supposed to resume 23.
+
+  A burning object is now stored with its prefab name and its LIVE position, and found again by
+  both through the same sector scan the spread system uses. Live position matters more than it
+  sounds: the position on a burner was captured once at ignition on the basis that "trees and
+  pieces do not move", and a felled log has a Rigidbody, is thrown force and torque as it
+  spawns, and is shoved again by every hit, while the server owns and simulates it. Logs are
+  most of what a forest fire leaves burning, 18 of 21 entries in the store that caught this.
+
+  The match must be unambiguous: exactly one object of that prefab within 0.75 m, with each
+  object claimed once. Two candidates means there is no way to tell which was burning, so the
+  line is dropped. That is deliberate. A refusal costs one fire, while a guess starts one, and a
+  bystander picked by nearest-match would inherit the dead object's burn age at full spread
+  maturity. Nothing moves while the server is down, so the tolerance only has to absorb the
+  round trip through the text store. One sector scan serves a whole cluster of lines, since they
+  are all one fire.
+
+  The ZDOID is still written, as a diagnostic and so an older build can still read the file, and
+  is no longer followed. **Object lines written before 0.21.6 are dropped with a warning rather
+  than guessed at**, once, on the first boot; ground fire, scorched ground and tree regrowth
+  were never affected because they were always keyed by position.
+- **A restored fire with no surviving objects no longer ramps from cold.** Ground cells come back
+  without an event and are adopted into one a moment later, after the point where the restore had
+  already released the blaze age it was supposed to hand over.
+- **A repeated `fireset` reaches the server again.** A cache meant to stop a double send recorded
+  what the client had sent rather than what the server held, so once the two diverged the client
+  could never re-assert that setting, while the console still printed success. The double send is
+  prevented at its source instead.
+- **A setting changed before joining a world is delivered on connect** rather than dropped, which
+  is the config manager's main-menu workflow and the reason the feature exists.
+- **`firetreeregrow` with regrowth switched off says so**, instead of silently discarding the
+  queue's retry schedule and reporting the result as though fire were in the way.
+- **`firestatus` keeps its REFUSED suffix** even if writing the config file throws, which is the
+  one failure the migration is built around.
+
+## 0.21.5
+
+- **Tree regrowth had never grown a tree on a dedicated server, and could not.** Every entry
+  in `firetreeregrowlist` waited behind `ZNetScene.IsAreaReady`, which (decompiled from the
+  1.0.15 server) first requires the zone to be in the zone system's loaded table. Headless,
+  every zone a player stands in is a ghost zone and never enters that table, so the gate was
+  false everywhere but world origin, and each entry burned its twenty 30-second retries and
+  was dropped in silence. The test server's log holds 2,085 heartbeats over three weeks with
+  `regrowntrees 0`; a forced attempt on 2026-09-18 answered "16 forced, 15 still pending"
+  with the counter unmoved. Behind the gate it was worse: `ZNetScene.SpawnObject` is a void
+  in 1.0.x that broadcasts a "SpawnObject" RPC to every peer, each of which instantiates its
+  own copy, and its null return was read as failure - so on a hosting client it would have
+  planted one tree per connected machine, up to twenty times. Regrowth now instantiates the
+  prefab directly on the server, which is exactly what vanilla's own RPC handler does on each
+  receiver: one persistent ZDO, every client in range receives it. The readiness gate is
+  gone, an attempt counts only when a spawn actually fails, a spot with something
+  player-built within 3 m is dropped with a log line instead of retried, and one `[REGROW]`
+  line per cycle says how many came back. Every entry dropped before this release is gone
+  for good.
+- **Settings changed in ConfigurationManager now reach the server.** Its UI edits only the
+  machine it runs on, so on a client every server-side setting in it was a no-op: the slider
+  moved, the client's own file was rewritten, and the simulation never changed. The same trap
+  `fireset` was given a relay for in 0.18.3, with no console line to hint at it. Any runtime
+  change to a setting the server owns is now forwarded exactly as the equivalent `fireset`,
+  gated on the same admin check, deduplicated so a typed command does not go twice, and
+  forgotten when the connection changes. Genuinely client-side settings stay local.
+- **Regrowth no longer plants into a live fire.** A tree that came back into ground that was
+  still burning caught immediately: on 2026-09-18 five of the first eight trees ever regrown
+  on the dedicated server reignited within seconds, because ground fire routinely outlives the
+  900 second regrowth timer, leaving a burn that looks as dead as before. Fire within 4 m now
+  defers the entry 30 seconds at a time, and a deferral is not an attempt.
+- **Turning tree regrowth off now stops trees already queued.** The switch gated only the
+  enqueue. That was invisible while nothing headless could spawn; with regrowth working, an
+  admin who turned it off mid-fire would have watched the queue keep planting for another
+  fifteen minutes, and survive a restart. Queued entries are kept, so turning it back on
+  resumes.
+- **A tree that grows is saved immediately** instead of at the next 60 second tick. The entry
+  left memory the moment it succeeded, so a hard kill inside that window read it back and
+  planted a second tree inside the first.
+- **`firetreeregrow` reports what actually happened.** It returned only "still pending", which
+  falls the same way whether an entry grew a tree or was dropped, so a deletion read as a
+  success. It now names grown, dropped and pending separately.
+- **A regrowth spot whose build check cannot run is left alone** rather than planted. The
+  check failed open, so a server where the sector scan was unavailable would have grown trees
+  up through people's floors.
+- **Attempt counts from an older store are no longer trusted.** Before this release the counter
+  incremented on every deferral, which headless meant every cycle, so a carried-over count sat
+  near its cap for a reason that no longer exists and would drop the tree on its first real
+  failure. They restore at zero.
+- **One scan serves a cluster of regrowth entries.** The build check walks a 192 m block of
+  ZDOs to answer a 3 m question, and entries come due together; it is now done once per cluster
+  instead of once per entry.
+- **`firestatus` no longer reports a crashed migration as a clean boot.** The state that knew
+  is reset before the console can read it, so the outcome is folded into the line itself.
+- **`firestatus` from a client now shows the server's config migration line.** The status
+  reply carried only the fire counts, so the one check 0.21.4's handoff asked for could not
+  be made from a client. It arrives as a second `[server]` line.
+- **A restored blaze no longer restarts its ramp cold.** `FireEvent.RestoredRampAge` had been
+  declared in 0.19.x and never assigned (the Ragnarok's Wrath session spotted the compiler
+  warning), so after every server restart each fire fell to its ramp-start intensity and
+  climbed again. The sidecar stores no per-event age, but every restored burner carries its
+  own and an event is as old as its oldest burner; that age is applied and logged per event
+  at restore.
+
 ## 0.21.4
 
 - **Eight corrections to 0.21.3's config migration, and a harness that can reach it.**

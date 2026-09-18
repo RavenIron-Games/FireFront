@@ -204,12 +204,80 @@ namespace FireFront.Fire
             public string PrefabName;
             public Vector3 Position;
             public float RegrowAt;
-            public int Attempts; // capped so a permanently-blocked spot (e.g. player built
-                                 // over it) doesn't retry forever, just gives up eventually
+            public int Attempts; // real spawn failures only (0.21.5): a spot someone built over is
+                                 // dropped outright, and nothing is "deferred" any more
         }
 
         private readonly List<PendingRegrowth> _pendingRegrowth = new List<PendingRegrowth>();
         private readonly List<int> _regrowthScratchIndices = new List<int>();
+
+        // One sector scan serves a whole cluster of due regrowth entries (0.21.5). The scan covers
+        // the 3x3 zone block around its centre, 192 m, so any point within 32 m of that centre has
+        // its own 3 m neighbourhood comfortably inside the block and can reuse the result. Beyond
+        // that the scan is redone and re-centred. Reused only within a single cycle.
+        private readonly List<Vector3> _builtNearScratch = new List<Vector3>();
+        private Vector3 _builtScanCentre;
+        private bool _builtScanValid;
+
+        // A store line names its object by position and prefab (0.21.6), so two lines could resolve
+        // onto the same object; this keeps each resolution to one. Live only during a restore.
+        private readonly HashSet<ZDOID> _restoreClaimed = new HashSet<ZDOID>();
+
+        // How far from its saved position a burning object may be found again. The save now
+        // records the LIVE position and nothing moves while the server is down, so this only has
+        // to absorb the float round-trip through the text store. Deliberately tiny: a generous
+        // radius relights the neighbour of something that is genuinely gone, and that neighbour
+        // would inherit the dead object's burn age at full spread maturity.
+        private const float ObjRestoreRadius = 0.75f;
+
+        // One sector scan serves a cluster of store lines - they are all one fire. Same 32 m reuse
+        // proof as the regrowth build check: the scan covers the 3x3 zone block, 192 m, so a point
+        // within 32 m of its centre has its own metre-scale neighbourhood well inside it.
+        private readonly List<ValheimBridge.ZdoBurnable> _restoreScanScratch = new List<ValheimBridge.ZdoBurnable>();
+        private Vector3 _restoreScanCentre;
+        private bool _restoreScanValid;
+
+        /// <summary>
+        /// Names the object a store line meant, by position and prefab. Returns false unless
+        /// EXACTLY ONE candidate matches: with two, there is no way to tell which was burning, and
+        /// guessing would set fire to a bystander and hand it the dead object's burn age. A refusal
+        /// costs one fire; a wrong guess starts one.
+        /// </summary>
+        private bool ResolveBurnerAt(Vector3 at, string prefabName, out ZDOID found)
+        {
+            found = default(ZDOID);
+            if (string.IsNullOrEmpty(prefabName)) return false;
+
+            if (!_restoreScanValid || (at - _restoreScanCentre).sqrMagnitude > 32f * 32f)
+            {
+                if (!ValheimBridge.CollectAllZdosNear(at, _restoreScanScratch)) { _restoreScanValid = false; return false; }
+                _restoreScanValid = true;
+                _restoreScanCentre = at;
+            }
+
+            int wantHash = ValheimBridge.PrefabHashOf(prefabName);
+            float radiusSqr = ObjRestoreRadius * ObjRestoreRadius;
+            int hits = 0;
+            for (int i = 0; i < _restoreScanScratch.Count; i++)
+            {
+                ValheimBridge.ZdoBurnable c = _restoreScanScratch[i];
+                if (c.PrefabHash != wantHash) continue;
+                if (_restoreClaimed.Contains(c.Id)) continue;
+                if ((c.Position - at).sqrMagnitude > radiusSqr) continue;
+                found = c.Id;
+                if (++hits > 1) break;
+            }
+            if (hits == 1) return true;
+            if (hits > 1)
+                FireLogger.Debug($"[PERSIST] {hits}+ '{prefabName}' within {ObjRestoreRadius:F2}m of {at} — refusing to guess which was burning.");
+            found = default(ZDOID);
+            return false;
+        }
+
+        // The blaze age carried by the store's meta line, live only while RestorePersistedFires
+        // runs. Events created by the re-ignitions it performs adopt it, so a restored fire
+        // resumes at the intensity it had rather than ramping from cold (0.21.5).
+        private float _restoringRampAge;
 
         // One spot must never hold two regrowth entries — a restored sidecar
         // "regrow" line plus the same tree burning down again after the restore
@@ -438,6 +506,10 @@ namespace FireFront.Fire
                 Origin = pos,
                 StartTime = Time.time,
                 IgniterPlayerId = igniterPlayerId,
+                // Set ONLY during a restore, and set here rather than afterwards because the very
+                // first re-ignition consults this event's ramp to size its own burner cap: aging
+                // the event after the loop would arrive too late to stop the restore truncating.
+                RestoredRampAge = _restoringRampAge,
             };
             _events[created.Id] = created;
             _nextCandidateRebuild = 0f; // new blaze, new ground — resweep now
@@ -490,6 +562,10 @@ namespace FireFront.Fire
                 FireLogger.Debug($"[EVENT] adopted {_orphanBurnerScratch.Count} burner(s) and " +
                                  $"{_orphanCellScratch.Count} ground cell(s); {_events.Count} event(s) active.");
             }
+
+            // The restore's blaze age is consumed by EventForPosition, which the adoption above is
+            // the LAST caller of on a restore path. Released here, not at the end of the restore.
+            _restoringRampAge = 0f;
         }
 
         private readonly List<ZDOID> _orphanBurnerScratch = new List<ZDOID>();
@@ -614,6 +690,11 @@ namespace FireFront.Fire
             {
                 TryPlayerExtinguish();
             }
+
+            // A config change made before the world loaded (the config manager at the main menu,
+            // which is where people actually use it) has nowhere to go; this delivers it once the
+            // connection and the admin list exist. No-op when there is nothing held.
+            FireFront.Commands.FireDevCommands.FlushPendingConfigSync();
 
             DrainRemoteVfxSpawnQueue(); // client-side VFX budget — must run before the server gate below
             DrainRemoteObjectVfxQueue(); // same, for object fire — see EnqueueRemoteObjectVfx
@@ -749,6 +830,10 @@ namespace FireFront.Fire
         private void HandleStatusRequest(long sender)
         {
             if (!ValheimBridge.IsServer()) return;
+            // The server's own config migration line first (0.21.5): before this the reply carried
+            // only the fire counts, so the one check 0.21.4's handoff asked for - "firestatus must
+            // not say REFUSED" - could not be made from a client at all.
+            ValheimBridge.SendStatusResponse(sender, ConfigMigration.StatusLine());
             ValheimBridge.SendStatusResponse(sender, StatusLine());
         }
 
@@ -1027,10 +1112,23 @@ namespace FireFront.Fire
 
             foreach (KeyValuePair<ZDOID, BurningState> kv in _burning)
             {
+                // The LIVE position, not BurningState.Position. That field is captured once at
+                // ignition on the assumption that "trees and pieces don't move", and a felled
+                // TreeLog breaks it: the decompiled 1.0.15 TreeLog carries a Rigidbody, is given
+                // force and torque the moment it spawns, and takes AddForceAtPosition on every hit
+                // - and FireFront claims ownership of the instance, so this server simulates it.
+                // Harmless while the position was only diagnostic; load-bearing now that it is the
+                // restore key, and logs are the MAJORITY of what a forest fire leaves burning.
+                Vector3 at = ValheimBridge.TryGetZdoPosition(kv.Key, out Vector3 livePos)
+                    ? livePos
+                    : kv.Value.Position;
                 sb.Append("obj\t").Append(kv.Key.UserID).Append('\t').Append(kv.Key.ID).Append('\t')
-                  .Append(kv.Value.Position.x).Append('\t').Append(kv.Value.Position.y).Append('\t').Append(kv.Value.Position.z).Append('\t')
+                  .Append(at.x).Append('\t').Append(at.y).Append('\t').Append(at.z).Append('\t')
                   .Append(kv.Value.ExpireAt - now).Append('\t')
-                  .Append(now - kv.Value.IgnitedAt).Append('\n'); // burn age, so restored burners keep their spread maturity
+                  .Append(now - kv.Value.IgnitedAt).Append('\t')      // burn age, so restored burners keep their spread maturity
+                  .Append(kv.Value.PrefabName).Append('\n');           // field 8, 0.21.6: half of what the entry is keyed on now.
+                // Fields 1-2 still carry the ZDOID and are DIAGNOSTIC ONLY - a ZDOID is reassigned
+                // on every world load. Kept so a store stays readable by an older build.
             }
             foreach (KeyValuePair<GroundCellKey, GroundCellState> kv in _groundBurning)
             {
@@ -1068,6 +1166,7 @@ namespace FireFront.Fire
             string[] lines = FirePersistence.ReadLines();
             if (lines == null || lines.Length == 0) return;
 
+            int legacyObjLines = 0;
             float now = Time.time;
             int objects = 0, ground = 0, spent = 0, regrow = 0, skipped = 0;
 
@@ -1094,6 +1193,9 @@ namespace FireFront.Fire
                             // with the -1 "no fire" sentinel.
                             _fireStartTime = now;
                             _restoredRampAge = float.Parse(f[1]);
+                            // The store writes version, meta, obj, ground, spent, regrow in that
+                            // order, so this lands before the first re-ignition creates an event.
+                            _restoringRampAge = _restoredRampAge;
                             _fireOrigin = new Vector3(float.Parse(f[2]), float.Parse(f[3]), float.Parse(f[4]));
                             _fireIgniterPlayerId = long.Parse(f[5]);
                             break;
@@ -1123,8 +1225,27 @@ namespace FireFront.Fire
                         {
                             float remaining = float.Parse(f[6]);
                             if (remaining <= 0f) { skipped++; break; }
-                            var id = new ZDOID(long.Parse(f[1]), uint.Parse(f[2]));
-                            if (!ValheimBridge.ZdoExists(id)) { skipped++; break; } // chopped offline, world-edited away, etc.
+
+                            // Field 8 is the prefab name (0.21.6). Without it this line came from a
+                            // build that keyed burners by ZDOID, which does not survive a reload, so
+                            // there is no way to tell which object it meant - and following the id
+                            // would set fire to whatever now holds it. Dropping it is the only
+                            // correct move; ground fire, spent cells and regrowth are unaffected.
+                            string prefabName = f.Length > 8 ? f[8] : null;
+                            if (string.IsNullOrEmpty(prefabName))
+                            {
+                                legacyObjLines++;
+                                skipped++;
+                                break;
+                            }
+
+                            var at = new Vector3(float.Parse(f[3]), float.Parse(f[4]), float.Parse(f[5]));
+                            if (!ResolveBurnerAt(at, prefabName, out ZDOID id))
+                            {
+                                skipped++; // gone since the save, moved, or too ambiguous to name safely
+                                break;
+                            }
+                            _restoreClaimed.Add(id);
 
                             Component target = ValheimBridge.ComponentFromZdoid(id);
                             if (target == null) { skipped++; break; }
@@ -1153,7 +1274,14 @@ namespace FireFront.Fire
                             {
                                 Position = new Vector3(float.Parse(f[1]), float.Parse(f[2]), float.Parse(f[3])),
                                 RegrowAt = now + Mathf.Max(1f, float.Parse(f[4])),
-                                Attempts = int.Parse(f[5]),
+                                // Deliberately NOT int.Parse(f[5]): before 0.21.5 this counted every
+                                // IsAreaReady deferral, which headless meant "every cycle", so a
+                                // carried-over count is near its cap for a reason that no longer
+                                // exists and would drop the tree on its first real failure. The
+                                // store's format version cannot be bumped to tell the two apart
+                                // without discarding the whole file, and the count is retry state,
+                                // not history worth keeping.
+                                Attempts = 0,
                                 PrefabName = f[6],
                             });
                             if (added) regrow++; else skipped++;
@@ -1167,6 +1295,28 @@ namespace FireFront.Fire
                     FireLogger.Debug($"[PERSIST] unreadable line skipped ('{line}'): {ex.Message}");
                 }
             }
+
+            // FireEvent.RestoredRampAge was declared in 0.19.x and never assigned - a CS0649 the
+            // Ragnarok's Wrath session flagged on 2026-09-18 - so every restart dropped a raging
+            // blaze back to its ramp-start intensity. Events adopt _restoringRampAge as they are
+            // born, above; this only reports it and closes the window.
+            if (_restoringRampAge > 0f)
+                FireLogger.Info($"[PERSIST] restored fires resume at a ramp age of {_restoringRampAge:F0}s, " +
+                                "the blaze age from the store's meta line.");
+            // NOT cleared here. Ground cells restore with EventId 0 and only get an event from
+            // AdoptOrphanedFires later in this same Update; clearing now left a ground-only restore
+            // - the legacy-store case, and any fire whose objects have all burned out - ramping from
+            // cold while the log said otherwise. AdoptOrphanedFires clears it once it has run.
+            _restoreClaimed.Clear();
+            _restoreScanScratch.Clear();
+            _restoreScanValid = false;
+
+            if (legacyObjLines > 0)
+                FireLogger.Warn($"[PERSIST] dropped {legacyObjLines} burning object(s) written by a build before 0.21.6. " +
+                                "Those lines identify their object by a ZDOID, which Valheim reassigns on every world " +
+                                "load, so there is no way to tell which object each one meant - and following the id " +
+                                "would have set fire to whatever holds it now. Ground fire, scorched ground and tree " +
+                                "regrowth were restored normally, and the next save writes the new format.");
 
             if (objects + ground + spent + regrow > 0)
                 FireLogger.Info($"[PERSIST] restored {objects} burning object(s), {ground} ground cell(s), " +
@@ -2225,17 +2375,179 @@ namespace FireFront.Fire
         }
 
         /// <summary>
-        /// Sweeps pending tree regrowth entries and attempts to spawn any that are
-        /// due. A spot blocked by IsAreaReady (e.g. something built there since)
-        /// retries on a short backoff up to MaxRegrowthAttempts, then gives up —
-        /// small-scope by design: no stump placeholder, no cross-restart
-        /// persistence, same species only.
+        /// Debug/test hook: forces every pending regrowth entry to attempt right now instead of
+        /// waiting out its timer, and returns (attempted, regrown, stillPending). The three
+        /// numbers are separate on purpose: an entry can leave the queue by growing a tree OR by
+        /// being dropped, and a caller that only saw the pending count fall could not tell those
+        /// apart - it read a deletion as a success.
         /// </summary>
+        public (int attempted, int regrown, int stillPending) ForceTreeRegrowthNow()
+        {
+            // Check BEFORE rewriting any timer. ProcessTreeRegrowth returns immediately when
+            // regrowth is off, so zeroing every RegrowAt first would throw away the whole queue's
+            // backoff schedule to accomplish nothing.
+            if (!FireConfig.EffectiveTreeRegrowthEnabled) return (0, 0, _pendingRegrowth.Count);
+
+            int attempted = _pendingRegrowth.Count;
+            for (int i = 0; i < _pendingRegrowth.Count; i++)
+            {
+                PendingRegrowth entry = _pendingRegrowth[i];
+                entry.RegrowAt = Time.time;
+                _pendingRegrowth[i] = entry;
+            }
+            int regrown = ProcessTreeRegrowth();
+            return (attempted, regrown, _pendingRegrowth.Count);
+        }
+
         /// <summary>
-        /// Debug/test hook: forces every pending regrowth entry to attempt right
-        /// now instead of waiting out its timer, then returns (attempted, stillPending)
-        /// so a console command can report what happened without a 15-minute wait.
+        /// True if fire is burning within <paramref name="radius"/> of a point: any ground cell, or
+        /// any object. Regrowth asks before planting, because a tree that comes back into ground
+        /// that is still alight simply burns down again - observed live on 2026-09-18, when five of
+        /// eight regrown trees reignited within seconds of spawning, since ground fire routinely
+        /// outlives the 900 s regrowth timer.
         /// </summary>
+        private bool IsFireNear(Vector3 pos, float radius)
+        {
+            float size = Mathf.Max(0.5f, FireConfig.GroundCellSize.Value);
+            GroundCellKey origin = KeyOf(pos);
+            int range = Mathf.Clamp(Mathf.CeilToInt(radius / size), 1, 8);
+            for (int dx = -range; dx <= range; dx++)
+                for (int dz = -range; dz <= range; dz++)
+                    if (_groundBurning.ContainsKey(new GroundCellKey(origin.X + dx, origin.Z + dz))) return true;
+
+            float radiusSqr = radius * radius;
+            foreach (BurningState st in _burning.Values)
+                if ((st.Position - pos).sqrMagnitude <= radiusSqr) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// One scan of player-built ZDOs serves a whole cluster of due entries. Returns false when
+        /// the scan could not be made at all, which the caller treats as "ask again later" rather
+        /// than as permission to build.
+        /// </summary>
+        private bool PlayerBuiltNear(Vector3 pos, float radius, out bool known)
+        {
+            if (!_builtScanValid || (pos - _builtScanCentre).sqrMagnitude > 32f * 32f)
+            {
+                known = ValheimBridge.CollectPlayerBuiltPositionsNear(pos, _builtNearScratch);
+                _builtScanValid = known;
+                _builtScanCentre = pos;
+                if (!known) return false;
+            }
+            known = true;
+            float radiusSqr = radius * radius;
+            for (int i = 0; i < _builtNearScratch.Count; i++)
+                if ((_builtNearScratch[i] - pos).sqrMagnitude <= radiusSqr) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Sweeps pending tree regrowth entries and plants the ones that are due. Returns how many
+        /// actually grew. Small-scope by design: no stump placeholder, same species only.
+        ///
+        /// Three ways an entry does NOT grow this pass, and they are deliberately different:
+        /// fire still burning at the spot defers it without cost; something player-built within
+        /// BuildClearance drops it for good; a spawn that genuinely fails retries on a backoff and
+        /// gives up after MaxAttempts. Only the last of those spends an attempt - before 0.21.5
+        /// every deferral did, which on a dedicated server (where the old readiness gate could
+        /// never pass) silently deleted the entire queue about ten minutes after a fire.
+        /// </summary>
+        private int ProcessTreeRegrowth()
+        {
+            if (_pendingRegrowth.Count == 0) return 0;
+
+            // The kill switch has to be honoured HERE and not only where entries are enqueued.
+            // Until 0.21.5 nothing headless ever spawned, so an admin turning regrowth off
+            // mid-fire got what they asked for by accident; now the queue would keep planting for
+            // another fifteen minutes and survive a restart. Entries are kept, not discarded, so
+            // turning it back on resumes where it left off.
+            if (!FireConfig.EffectiveTreeRegrowthEnabled) return 0;
+
+            const float retryBackoffSeconds = 30f;
+            const int maxAttempts = 20;      // real spawn failures only
+            const float buildClearance = 3f; // a floor or wall this close to the stump wins
+            const float fireClearance = 4f;  // ground fire this close would light the new tree at once
+            float now = Time.time;
+            int regrew = 0, builtOver = 0, gaveUp = 0, waitingOnFire = 0;
+            _regrowthScratchIndices.Clear();
+            _builtScanValid = false;
+
+            for (int i = 0; i < _pendingRegrowth.Count; i++)
+            {
+                PendingRegrowth entry = _pendingRegrowth[i];
+                if (now < entry.RegrowAt) continue;
+
+                if (IsFireNear(entry.Position, fireClearance))
+                {
+                    entry.RegrowAt = now + retryBackoffSeconds;
+                    _pendingRegrowth[i] = entry;
+                    waitingOnFire++;
+                    continue;
+                }
+
+                bool known;
+                bool built = PlayerBuiltNear(entry.Position, buildClearance, out known);
+                if (!known)
+                {
+                    // Could not tell. Never plant on a maybe.
+                    entry.RegrowAt = now + retryBackoffSeconds;
+                    _pendingRegrowth[i] = entry;
+                    continue;
+                }
+                if (built)
+                {
+                    FireLogger.Debug($"[REGROW] {entry.PrefabName} at {entry.Position} stays gone: something player-built stands within {buildClearance:F0}m of the stump.");
+                    _regrowthScratchIndices.Add(i);
+                    builtOver++;
+                    continue;
+                }
+
+                if (ValheimBridge.TrySpawnTree(entry.PrefabName, entry.Position))
+                {
+                    FireLogger.Debug($"[REGROW] {entry.PrefabName} regrew at {entry.Position}.");
+                    _treesRegrownCount++;
+                    regrew++;
+                    _regrowthScratchIndices.Add(i);
+                    continue;
+                }
+
+                entry.Attempts++;
+                if (entry.Attempts >= maxAttempts)
+                {
+                    FireLogger.Debug($"[REGROW] gave up on {entry.PrefabName} at {entry.Position} after {entry.Attempts} failed spawns.");
+                    _regrowthScratchIndices.Add(i);
+                    gaveUp++;
+                }
+                else
+                {
+                    entry.RegrowAt = now + retryBackoffSeconds;
+                    _pendingRegrowth[i] = entry;
+                }
+            }
+
+            // Remove completed/abandoned entries back-to-front so indices stay valid.
+            for (int i = _regrowthScratchIndices.Count - 1; i >= 0; i--)
+                _pendingRegrowth.RemoveAt(_regrowthScratchIndices[i]);
+
+            // ONE line per cycle, never one per tree: a forest coming back after a big fire would
+            // otherwise be a hundred lines at once. Silence while entries merely wait out the fire.
+            if (regrew > 0 || builtOver > 0 || gaveUp > 0)
+                FireLogger.Info($"[REGROW] {regrew} regrew, {builtOver} stayed gone (built over), {gaveUp} gave up, " +
+                                $"{waitingOnFire} waiting for the fire to pass; {_pendingRegrowth.Count} still pending, " +
+                                $"{_treesRegrownCount} total since boot.");
+
+            // Write the store NOW rather than at the next 60 s tick. A tree that grew is a change
+            // to the world, but the entry that produced it only left memory: a hard kill inside
+            // that window would read the entry back and plant a second tree inside the first.
+            if (regrew > 0)
+            {
+                PersistFiresNow();
+                _nextPersistSave = Time.time + PersistSaveInterval;
+            }
+            return regrew;
+        }
+
         /// <summary>Debug hook: snapshot of pending regrowth entries for console inspection.</summary>
         public List<string> DumpPendingRegrowth()
         {
@@ -2247,64 +2559,6 @@ namespace FireFront.Fire
                           $"{(secondsLeft > 0 ? $"{secondsLeft:F0}s left" : "due")}, attempts {entry.Attempts}");
             }
             return lines;
-        }
-
-        public (int attempted, int stillPending) ForceTreeRegrowthNow()
-        {
-            int attempted = _pendingRegrowth.Count;
-            for (int i = 0; i < _pendingRegrowth.Count; i++)
-            {
-                PendingRegrowth entry = _pendingRegrowth[i];
-                entry.RegrowAt = Time.time;
-                _pendingRegrowth[i] = entry;
-            }
-            ProcessTreeRegrowth();
-            return (attempted, _pendingRegrowth.Count);
-        }
-
-        private void ProcessTreeRegrowth()
-        {
-            if (_pendingRegrowth.Count == 0) return;
-
-            const float retryBackoffSeconds = 30f;
-            const int maxAttempts = 20; // ~10 minutes of retrying a blocked spot before giving up
-
-            float now = Time.time;
-            _regrowthScratchIndices.Clear();
-
-            for (int i = 0; i < _pendingRegrowth.Count; i++)
-            {
-                PendingRegrowth entry = _pendingRegrowth[i];
-                if (now < entry.RegrowAt) continue;
-
-                bool spawned = ValheimBridge.TrySpawnTree(entry.PrefabName, entry.Position);
-                if (spawned)
-                {
-                    FireLogger.Debug($"Tree regrew: {entry.PrefabName} at {entry.Position}");
-                    _treesRegrownCount++;
-                    _regrowthScratchIndices.Add(i);
-                    continue;
-                }
-
-                entry.Attempts++;
-                if (entry.Attempts >= maxAttempts)
-                {
-                    FireLogger.Debug($"Tree regrowth gave up after {entry.Attempts} attempts " +
-                                      $"(spot likely blocked): {entry.PrefabName} at {entry.Position}");
-                    _regrowthScratchIndices.Add(i);
-                }
-                else
-                {
-                    entry.RegrowAt = now + retryBackoffSeconds;
-                    _pendingRegrowth[i] = entry;
-                }
-            }
-
-            // Remove completed/abandoned entries back-to-front so indices stay valid.
-            for (int i = _regrowthScratchIndices.Count - 1; i >= 0; i--)
-            {
-                _pendingRegrowth.RemoveAt(_regrowthScratchIndices[i]);
-            }
         }
 
         /// <summary>

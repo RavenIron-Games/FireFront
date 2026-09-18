@@ -12,7 +12,7 @@ namespace FireFront
     {
         public const string GUID = "com.raveniron.firefront";
         public const string NAME = "FireFront";
-        public const string VERSION = "0.21.4";
+        public const string VERSION = "0.21.6";
 
         public static Plugin Instance { get; private set; }
 
@@ -32,6 +32,10 @@ namespace FireFront
 
             FireLogger.Init(Logger);
             FireConfig.Bind(base.Config);
+
+            // After Bind, so the config migration's own writes are not mistaken for an admin
+            // moving a slider, and so Settable() resolves against entries that already exist.
+            FireFront.Commands.FireDevCommands.HookLiveConfigSync(base.Config);
 
             // FireManager lives on the plugin GameObject and persists across scenes.
             gameObject.AddComponent<FireManager>();

@@ -638,8 +638,11 @@ namespace FireFront.Config
                 "Trees", "TreeRegrowthSeconds", 900f,
                 new ConfigDescription(
                     "Seconds after a tree burns down before it attempts to respawn, if " +
-                    "TreeRegrowthEnabled is true. A blocked spot (something built there since) " +
-                    "retries every 30s for up to ~10 minutes before giving up on that tree.",
+                    "TreeRegrowthEnabled is true. The spot is then checked: fire still burning " +
+                    "there defers the tree 30s at a time until the fire passes, anything " +
+                    "player-built within 3m means the tree stays gone for good, and a spawn that " +
+                    "genuinely fails retries every 30s up to 20 times. Turning TreeRegrowthEnabled " +
+                    "off stops trees already queued as well as new ones.",
                     new AcceptableValueRange<float>(30f, 7200f)));
 
             GroundFirebreaksEnabled = config.Bind(

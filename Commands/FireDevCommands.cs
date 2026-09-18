@@ -225,9 +225,7 @@ namespace FireFront.Commands
         private static void FireStatus(Terminal.ConsoleEventArgs args)
         {
             // This machine's own config migration, whichever side it is: the line the boot logged.
-            Say(args, "FireFront config: " + (string.IsNullOrEmpty(ConfigMigration.LastSummary)
-                ? "no migration ran this boot (file already at layout version " + ConfigLedger.CurrentVersion + ", or a first install)"
-                : ConfigMigration.LastSummary));
+            Say(args, ConfigMigration.StatusLine());
 
             if (ValheimBridge.IsServer())
             {
@@ -241,7 +239,9 @@ namespace FireFront.Commands
             // fire is raging around me but firestatus says 0" screenshot). Ask
             // the server for the authoritative line instead; it prints as
             // "[server] FireFront: ..." when the reply lands a moment later.
-            Say(args, "FireFront: fetching server status... (no reply = server runs pre-0.18.8)");
+            Say(args, "FireFront: fetching server status... a 0.21.5+ server answers with two [server] lines, its " +
+                       "config migration then its fire status; an older one sends only the fire status, and nothing at " +
+                       "all means the server runs pre-0.18.8.");
             ValheimBridge.SendStatusRequestToServer();
         }
 
@@ -261,6 +261,14 @@ namespace FireFront.Commands
 
             string key = args[1].ToLowerInvariant();
             string raw = args[2];
+
+            // Writing an entry below fires SettingChanged, and this method forwards explicitly at
+            // the end, so without this a typed fireset would go to the server twice - and with two
+            // different strings, since the hook sends the canonical serialized value while the
+            // command sends the raw token. The command's send is the one that should win.
+            // Cleared after the switch, which has no early return; if an exception ever escaped it
+            // the flag would heal on the next fireset, costing nothing but a quiet hook meanwhile.
+            _inFireSet = true;
 
             switch (key)
             {
@@ -520,6 +528,7 @@ namespace FireFront.Commands
             // here so the same command also lands on the server, where the
             // simulation actually reads it. Cost two real debugging rounds
             // ('rampstart 1', 'burnbuildings false') before this existed.
+            _inFireSet = false;
             ForwardToServerIfClient(key, raw);
         }
 
@@ -611,9 +620,18 @@ namespace FireFront.Commands
         {
             if (RelayIfClient(args)) return;
 
-            (int attempted, int stillPending) = FireManager.Instance.ForceTreeRegrowthNow();
-            Say(args, $"firetreeregrow: forced {attempted} pending entries, {stillPending} still pending after attempt " +
-                       "(blocked spots retry on backoff rather than failing permanently).");
+            if (!FireConfig.EffectiveTreeRegrowthEnabled)
+            {
+                Say(args, "firetreeregrow: tree regrowth is switched off, so nothing was attempted. " +
+                          "The queue is untouched and resumes if you turn TreeRegrowthEnabled back on.");
+                return;
+            }
+
+            (int attempted, int regrown, int stillPending) = FireManager.Instance.ForceTreeRegrowthNow();
+            int dropped = attempted - regrown - stillPending;
+            Say(args, $"firetreeregrow: forced {attempted} pending entries — {regrown} tree(s) grew, {dropped} dropped " +
+                       $"(built over, or out of spawn attempts), {stillPending} still pending. Entries sitting in live " +
+                       "fire are deferred, not spent, so forcing costs them nothing.");
         }
 
         private static void FireTreeRegrowList(Terminal.ConsoleEventArgs args)
@@ -872,7 +890,103 @@ namespace FireFront.Commands
         {
             if (ValheimBridge.IsServer()) return;
             if (!Settable().ContainsKey(key)) return;
+
+            // NEVER skipped as a duplicate. An earlier draft cached the last value sent per key and
+            // dropped a repeat, which looked harmless and was not: the cache recorded what THIS
+            // client had sent, not what the server held, so once the two diverged - a second admin,
+            // a server restart under a still-connected client, a send that silently failed - the
+            // client could never re-assert that key again, while the console still printed Ok.
+            // The double-send it was meant to stop is prevented at the source instead, by
+            // _inFireSet below.
             ValheimBridge.SendConfigSetToServer(key, raw);
+        }
+
+        // ---------------------------------------------------------------
+        // Live config sync. ConfigurationManager (and anything else that writes a ConfigEntry at
+        // runtime) edits only the machine it runs on. On a client that means every simulation
+        // setting in its UI was a no-op: the slider moved, the client's own file was rewritten,
+        // and the server - the only machine whose value the fire actually reads - never heard.
+        // Exactly the trap the _settable comment above describes for fireset, with no console
+        // line to hint at it. A change to a server-side setting is now forwarded as if the admin
+        // had typed the equivalent fireset.
+        // ---------------------------------------------------------------
+        // Held while FireSet runs. Writing an entry there fires SettingChanged, and FireSet
+        // forwards explicitly afterwards, so without this every typed fireset would go twice - and
+        // with two different strings, since the hook sends the canonical serialized value and the
+        // command sends the raw token the user typed. The command's own send is the one that wins.
+        private static bool _inFireSet;
+
+        // Changes made with no server to send them to - the config manager at the main menu, which
+        // is where people actually use it - held until the world is joined and admin is known.
+        // Last write per key wins, which is what an admin fiddling with a slider means.
+        private static readonly System.Collections.Generic.Dictionary<string, string> _pendingSync =
+            new System.Collections.Generic.Dictionary<string, string>();
+        private static System.Collections.Generic.Dictionary<BepInEx.Configuration.ConfigEntryBase, string> _keyByEntry;
+
+        /// <summary>
+        /// Subscribe to the plugin's own config file so runtime edits reach the server. Called
+        /// once from Plugin.Awake, after Bind, so the migration's own writes cannot trip it.
+        /// </summary>
+        public static void HookLiveConfigSync(BepInEx.Configuration.ConfigFile config)
+        {
+            if (config == null) return;
+            config.SettingChanged += (_, e) => OnSettingChanged(e?.ChangedSetting);
+        }
+
+        /// <summary>
+        /// Delivers anything held by <see cref="OnSettingChanged"/> once a world is joined and this
+        /// client is known to be an admin. Cheap enough to call every frame: it is a count check.
+        /// A non-admin's held changes are dropped, not sent, the first time we can tell.
+        /// </summary>
+        public static void FlushPendingConfigSync()
+        {
+            if (_pendingSync.Count == 0) return;
+            if (ValheimBridge.IsServer()) { _pendingSync.Clear(); return; }
+            if (ZNet.instance == null) return;
+            if (!ValheimBridge.IsLocalPlayerAdmin())
+            {
+                // Admin status is known now and the answer is no. Keeping them would re-ask forever.
+                FireLogger.Debug($"[CONFIG-SYNC] discarded {_pendingSync.Count} held change(s): not an admin here.");
+                _pendingSync.Clear();
+                return;
+            }
+            foreach (System.Collections.Generic.KeyValuePair<string, string> kv in _pendingSync)
+            {
+                ForwardToServerIfClient(kv.Key, kv.Value);
+                FireLogger.Info($"[CONFIG-SYNC] {kv.Key} = {kv.Value} — sent to the server (changed before joining).");
+            }
+            _pendingSync.Clear();
+        }
+
+        private static void OnSettingChanged(BepInEx.Configuration.ConfigEntryBase entry)
+        {
+            // The server is the authority: it already has the value, and bouncing it back would
+            // return it to the machine that just set it.
+            if (entry == null || ValheimBridge.IsServer() || _inFireSet) return;
+
+            if (_keyByEntry == null)
+            {
+                _keyByEntry = new System.Collections.Generic.Dictionary<BepInEx.Configuration.ConfigEntryBase, string>();
+                foreach (System.Collections.Generic.KeyValuePair<string, BepInEx.Configuration.ConfigEntryBase> kv in Settable())
+                    _keyByEntry[kv.Value] = kv.Key;
+            }
+            // Not in the table means the setting is genuinely client-side (extinguish key, dousing
+            // radius, VFX budgets). Those stay local, which is correct, not a gap.
+            if (!_keyByEntry.TryGetValue(entry, out string key)) return;
+
+            string raw = entry.GetSerializedValue();
+
+            // No connection yet, or the admin list has not arrived: hold it rather than drop it.
+            // The main-menu case IS the workflow this feature exists for, and an early draft
+            // discarded exactly that.
+            if (ZNet.instance == null || !ValheimBridge.IsLocalPlayerAdmin())
+            {
+                _pendingSync[key] = raw;
+                return;
+            }
+
+            ForwardToServerIfClient(key, raw);
+            FireLogger.Info($"[CONFIG-SYNC] {key} = {raw} — sent to the server (changed outside the console).");
         }
 
         /// <summary>
