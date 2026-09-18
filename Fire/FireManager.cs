@@ -257,19 +257,27 @@ namespace FireFront.Fire
 
             int wantHash = ValheimBridge.PrefabHashOf(prefabName);
             float radiusSqr = ObjRestoreRadius * ObjRestoreRadius;
-            int hits = 0;
+            int hits = 0, unclaimed = 0;
             for (int i = 0; i < _restoreScanScratch.Count; i++)
             {
                 ValheimBridge.ZdoBurnable c = _restoreScanScratch[i];
                 if (c.PrefabHash != wantHash) continue;
-                if (_restoreClaimed.Contains(c.Id)) continue;
                 if ((c.Position - at).sqrMagnitude > radiusSqr) continue;
-                found = c.Id;
-                if (++hits > 1) break;
+
+                // Claimed candidates STILL count towards ambiguity. Skipping them outright would
+                // let an earlier line's success make a later line look unambiguous when it is not:
+                // two halves of one trunk, the first resolved and claimed, and the second - whose
+                // own object a player felled offline - then sees a single free neighbour and lights
+                // it. Counting both keeps "exactly one object could be meant" actually true.
+                hits++;
+                if (!_restoreClaimed.Contains(c.Id)) { found = c.Id; unclaimed++; }
+                if (hits > 1) break;
             }
-            if (hits == 1) return true;
+            if (hits == 1 && unclaimed == 1) return true;
             if (hits > 1)
                 FireLogger.Debug($"[PERSIST] {hits}+ '{prefabName}' within {ObjRestoreRadius:F2}m of {at} — refusing to guess which was burning.");
+            else if (hits == 0)
+                FireLogger.Debug($"[PERSIST] no '{prefabName}' within {ObjRestoreRadius:F2}m of {at} — gone since the save, or moved further than the world file remembers.");
             found = default(ZDOID);
             return false;
         }
@@ -563,9 +571,6 @@ namespace FireFront.Fire
                                  $"{_orphanCellScratch.Count} ground cell(s); {_events.Count} event(s) active.");
             }
 
-            // The restore's blaze age is consumed by EventForPosition, which the adoption above is
-            // the LAST caller of on a restore path. Released here, not at the end of the restore.
-            _restoringRampAge = 0f;
         }
 
         private readonly List<ZDOID> _orphanBurnerScratch = new List<ZDOID>();
@@ -1303,10 +1308,14 @@ namespace FireFront.Fire
             if (_restoringRampAge > 0f)
                 FireLogger.Info($"[PERSIST] restored fires resume at a ramp age of {_restoringRampAge:F0}s, " +
                                 "the blaze age from the store's meta line.");
-            // NOT cleared here. Ground cells restore with EventId 0 and only get an event from
-            // AdoptOrphanedFires later in this same Update; clearing now left a ground-only restore
-            // - the legacy-store case, and any fire whose objects have all burned out - ramping from
-            // cold while the log said otherwise. AdoptOrphanedFires clears it once it has run.
+            // Adopt HERE rather than leaving it to the Update that called us. Ground cells restore
+            // with EventId 0 and only get an event from adoption, so the blaze age has to still be
+            // armed when that runs - but leaving it armed across the rest of Update meant an early
+            // return (fire disabled, say) could strand it, and the next unrelated ignition would be
+            // born at full ramp. Doing both in one place removes the window entirely.
+            AdoptOrphanedFires();
+            _restoringRampAge = 0f;
+
             _restoreClaimed.Clear();
             _restoreScanScratch.Clear();
             _restoreScanValid = false;
@@ -2468,6 +2477,7 @@ namespace FireFront.Fire
             const int maxAttempts = 20;      // real spawn failures only
             const float buildClearance = 3f; // a floor or wall this close to the stump wins
             const float fireClearance = 4f;  // ground fire this close would light the new tree at once
+            const int maxPerCycle = 5;       // trees planted in one frame; the rest wait for the next
             float now = Time.time;
             int regrew = 0, builtOver = 0, gaveUp = 0, waitingOnFire = 0;
             _regrowthScratchIndices.Clear();
@@ -2509,6 +2519,10 @@ namespace FireFront.Fire
                     _treesRegrownCount++;
                     regrew++;
                     _regrowthScratchIndices.Add(i);
+                    // A whole burned forest comes due together, and every plant is an Instantiate
+                    // plus a new ZDO every client in range then receives. Until 0.21.5 this path
+                    // could never fire headless, so it has no history at scale; spread the work.
+                    if (regrew >= maxPerCycle) break;
                     continue;
                 }
 

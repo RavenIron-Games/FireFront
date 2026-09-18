@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.21.7
+
+- **The config-manager sync did not work at all, and said nothing about it.** 0.21.6 gated it
+  on a client-side admin check. That check asks Valheim whether the local player is on the
+  server's admin list, and it answers no whenever the server has no admin list, which is every
+  private test server, so the owner was blocked on their own machine with no message anywhere:
+  the slider moved, the client's file was rewritten, the server never heard. The gate bought
+  nothing even where it worked, because `fireset` is the typed route to the same server-side
+  setter and has never been gated either, so anyone who could abuse the manager could type the
+  command instead. It is gone. The real check belongs on the server, against its own admin list,
+  and is still the deliberate scope left for a public release; it now covers both routes rather
+  than one.
+- **A setting changed at the main menu is delivered when the handshake finishes**, not thrown
+  away a frame after the world scene loads. The held changes were flushed as soon as Valheim's
+  networking object existed, which is several seconds before a connection or an admin list, so
+  the flush concluded the player was not an admin and discarded everything. Every time, for the
+  one workflow the feature exists to serve.
+- **A `fireset` whose config file is momentarily locked no longer kills the sync for the
+  session.** Suppression while a command applies a value was a single flag cleared afterwards,
+  and BepInEx writes the config file before it calls change handlers without guarding that
+  write, so an editor or antivirus holding the file threw straight past the line that cleared
+  it. It is now scoped to one key for one second and expires on its own.
+- **A restored fire can no longer light a bystander when an earlier line has claimed its
+  neighbour.** Candidates already claimed still count towards "is this ambiguous", so two halves
+  of one trunk cannot resolve into a confident wrong match once the first is taken.
+- **Regrowth plants at most five trees per cycle.** A burned forest comes due all at once, and
+  every plant is an object creation that every client in range then receives.
+- **The blaze age of a restored fire cannot leak into an unrelated later fire.** Adoption now
+  happens inside the restore rather than later in the same frame, which closes the window where
+  an early return could strand it.
+- **A setting changed in the config manager is sent once, when it settles.** ConfigurationManager
+  raises a change per keystroke and per drag frame, so typing "120" sent 1, then 12, then 120,
+  each one applied immediately to a running server - for a moment every fire on it burned out in
+  a single second, and a slider would do that tens of times a second. Changes now wait for a
+  short quiet period, coalesced per setting, with a ceiling so a slider still takes effect while
+  you watch it. A typed `fireset` is unaffected and still goes immediately.
+- A restore that cannot find an object now says whether nothing matched or too much did.
+
 ## 0.21.6
 
 - **Fire persistence was restoring the wrong objects, and lighting fires that were never

@@ -3161,6 +3161,14 @@ namespace FireFront.Utils
             typeof(ZRoutedRpc).GetMethod("GetServerPeerID", AnyInstance, null, System.Type.EmptyTypes, null);
 
         /// <summary>Reflected wrapper around ZRoutedRpc.instance.GetServerPeerID(). Returns 0L on failure.</summary>
+        /// <summary>
+        /// True once this client can actually deliver a routed RPC to the server. ZNet.instance
+        /// exists from the moment the world scene loads, seconds before the socket finishes its
+        /// handshake, so "ZNet is up" is NOT the same question and answering it instead loses
+        /// whatever is sent in between.
+        /// </summary>
+        public static bool CanReachServer() => !IsServer() && ZRoutedRpc.instance != null && GetServerPeerId() != 0L;
+
         private static long GetServerPeerId()
         {
             if (ZRoutedRpc.instance == null || ZRoutedRpcGetServerPeerIdMethod == null) return 0L;

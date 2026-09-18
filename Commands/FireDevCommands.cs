@@ -262,13 +262,10 @@ namespace FireFront.Commands
             string key = args[1].ToLowerInvariant();
             string raw = args[2];
 
-            // Writing an entry below fires SettingChanged, and this method forwards explicitly at
-            // the end, so without this a typed fireset would go to the server twice - and with two
-            // different strings, since the hook sends the canonical serialized value while the
-            // command sends the raw token. The command's send is the one that should win.
-            // Cleared after the switch, which has no early return; if an exception ever escaped it
-            // the flag would heal on the next fireset, costing nothing but a quiet hook meanwhile.
-            _inFireSet = true;
+            // Suppress the SettingChanged hook for THIS key while the switch below writes it; the
+            // explicit forward at the end of this method is the one that should reach the server.
+            _firesetKeyInFlight = key;
+            _firesetKeyInFlightAt = Time.realtimeSinceStartup;
 
             switch (key)
             {
@@ -528,7 +525,7 @@ namespace FireFront.Commands
             // here so the same command also lands on the server, where the
             // simulation actually reads it. Cost two real debugging rounds
             // ('rampstart 1', 'burnbuildings false') before this existed.
-            _inFireSet = false;
+            _firesetKeyInFlight = null;
             ForwardToServerIfClient(key, raw);
         }
 
@@ -896,8 +893,8 @@ namespace FireFront.Commands
             // client had sent, not what the server held, so once the two diverged - a second admin,
             // a server restart under a still-connected client, a send that silently failed - the
             // client could never re-assert that key again, while the console still printed Ok.
-            // The double-send it was meant to stop is prevented at the source instead, by
-            // _inFireSet below.
+            // The double-send it was meant to stop is prevented at the source instead, by the
+            // in-flight key below.
             ValheimBridge.SendConfigSetToServer(key, raw);
         }
 
@@ -910,17 +907,38 @@ namespace FireFront.Commands
         // line to hint at it. A change to a server-side setting is now forwarded as if the admin
         // had typed the equivalent fireset.
         // ---------------------------------------------------------------
-        // Held while FireSet runs. Writing an entry there fires SettingChanged, and FireSet
-        // forwards explicitly afterwards, so without this every typed fireset would go twice - and
-        // with two different strings, since the hook sends the canonical serialized value and the
-        // command sends the raw token the user typed. The command's own send is the one that wins.
-        private static bool _inFireSet;
+        // The one key a `fireset` is in the middle of applying. Writing an entry there fires
+        // SettingChanged, and FireSet forwards explicitly afterwards, so without this a typed
+        // fireset would reach the server twice, with two different strings - the hook sends the
+        // canonical serialized value, the command sends the raw token. The command's send wins.
+        //
+        // Scoped to ONE key and ONE second rather than a bool held across the whole command,
+        // because BepInEx calls ConfigFile.Save() before it calls the handlers and does NOT wrap
+        // it: a config file momentarily locked by an editor, a cloud sync or antivirus throws
+        // straight out of the setter, past any "clear the flag" line after it. A global flag would
+        // stay set and silently kill this feature for the rest of the session, and the next
+        // fireset would hit the same lock and not heal it. This expires on its own.
+        private static string _firesetKeyInFlight;
+        private static float _firesetKeyInFlightAt;
 
-        // Changes made with no server to send them to - the config manager at the main menu, which
-        // is where people actually use it - held until the world is joined and admin is known.
-        // Last write per key wins, which is what an admin fiddling with a slider means.
+        // Every runtime change waits here briefly before it is sent, keyed by setting so the last
+        // write wins. Two jobs in one queue: it holds changes made with no server to send them to
+        // (the config manager at the main menu, which is where people actually use it), and it
+        // debounces a value being typed or dragged.
+        //
+        // The debounce is not politeness. ConfigurationManager raises a change per keystroke and
+        // per drag frame: typing "120" sent 1, then 12, then 120, each a routed RPC that a live
+        // server applied to a running simulation - so for a moment every fire on it burned out in
+        // one second. A slider would do that tens of times a second.
         private static readonly System.Collections.Generic.Dictionary<string, string> _pendingSync =
             new System.Collections.Generic.Dictionary<string, string>();
+
+        // Wait for the value to settle, but never sit on a change for longer than the ceiling -
+        // a slider held down should still take effect while the admin is watching it.
+        private const float SyncQuietSeconds = 0.4f;
+        private const float SyncMaxHoldSeconds = 2f;
+        private static float _syncQuietUntil;
+        private static float _syncHoldingSince;
         private static System.Collections.Generic.Dictionary<BepInEx.Configuration.ConfigEntryBase, string> _keyByEntry;
 
         /// <summary>
@@ -934,35 +952,41 @@ namespace FireFront.Commands
         }
 
         /// <summary>
-        /// Delivers anything held by <see cref="OnSettingChanged"/> once a world is joined and this
-        /// client is known to be an admin. Cheap enough to call every frame: it is a count check.
-        /// A non-admin's held changes are dropped, not sent, the first time we can tell.
+        /// Delivers anything held by <see cref="OnSettingChanged"/> once the server is actually
+        /// reachable. Cheap enough to call every frame: it is a count check.
+        ///
+        /// It waits on CanReachServer, not on ZNet.instance. ZNet exists from the moment the world
+        /// scene loads, several seconds before the handshake finishes, so a flush gated on "ZNet is
+        /// up" ran while nothing could be delivered - and an earlier draft then concluded the
+        /// player was not an admin (that list arrives at the END of the handshake) and threw the
+        /// held changes away. Every single time, for the one workflow this feature exists to serve.
         /// </summary>
         public static void FlushPendingConfigSync()
         {
             if (_pendingSync.Count == 0) return;
             if (ValheimBridge.IsServer()) { _pendingSync.Clear(); return; }
-            if (ZNet.instance == null) return;
-            if (!ValheimBridge.IsLocalPlayerAdmin())
-            {
-                // Admin status is known now and the answer is no. Keeping them would re-ask forever.
-                FireLogger.Debug($"[CONFIG-SYNC] discarded {_pendingSync.Count} held change(s): not an admin here.");
-                _pendingSync.Clear();
-                return;
-            }
+            if (!ValheimBridge.CanReachServer()) return;
+
+            // Send once the value has stopped moving, or once the ceiling is reached, whichever
+            // comes first. A change made before joining is long past both by the time a connection
+            // exists, so it goes out on the first frame that can carry it.
+            float now = Time.realtimeSinceStartup;
+            if (now < _syncQuietUntil && now - _syncHoldingSince < SyncMaxHoldSeconds) return;
+
             foreach (System.Collections.Generic.KeyValuePair<string, string> kv in _pendingSync)
             {
                 ForwardToServerIfClient(kv.Key, kv.Value);
-                FireLogger.Info($"[CONFIG-SYNC] {kv.Key} = {kv.Value} — sent to the server (changed before joining).");
+                FireLogger.Info($"[CONFIG-SYNC] {kv.Key} = {kv.Value} — sent to the server.");
             }
             _pendingSync.Clear();
+            _syncHoldingSince = 0f;
         }
 
         private static void OnSettingChanged(BepInEx.Configuration.ConfigEntryBase entry)
         {
             // The server is the authority: it already has the value, and bouncing it back would
             // return it to the machine that just set it.
-            if (entry == null || ValheimBridge.IsServer() || _inFireSet) return;
+            if (entry == null || ValheimBridge.IsServer()) return;
 
             if (_keyByEntry == null)
             {
@@ -974,19 +998,29 @@ namespace FireFront.Commands
             // radius, VFX budgets). Those stay local, which is correct, not a gap.
             if (!_keyByEntry.TryGetValue(entry, out string key)) return;
 
+            // A `fireset` writing this very key is about to forward it itself, with the token the
+            // user typed. Don't send it twice.
+            if (key == _firesetKeyInFlight && Time.realtimeSinceStartup - _firesetKeyInFlightAt < 1f) return;
+
             string raw = entry.GetSerializedValue();
 
-            // No connection yet, or the admin list has not arrived: hold it rather than drop it.
-            // The main-menu case IS the workflow this feature exists for, and an early draft
-            // discarded exactly that.
-            if (ZNet.instance == null || !ValheimBridge.IsLocalPlayerAdmin())
-            {
-                _pendingSync[key] = raw;
-                return;
-            }
-
-            ForwardToServerIfClient(key, raw);
-            FireLogger.Info($"[CONFIG-SYNC] {key} = {raw} — sent to the server (changed outside the console).");
+            // NO client-side admin gate here, on purpose, and it is worth stating why because an
+            // earlier draft had one and it made the whole feature a silent no-op. `fireset` - the
+            // typed route to the exact same server-side setter - has never had one either. Adding
+            // it to only one of the two routes buys nothing: anyone who could abuse the manager
+            // could type the command instead. Worse, ZNet.LocalPlayerIsAdminOrHost answers false
+            // whenever the server has no adminlist at all, which is every private test server, so
+            // the gate blocked the owner on their own machine with no message anywhere.
+            //
+            // The real check belongs on the SERVER, in ApplyRemote, against its own adminlist -
+            // the unspoofable one, as the relayed commands already note. That is still the
+            // deliberate scope left for a public release, and it now covers two routes, not one.
+            // Queue, never send from here - see _pendingSync. A value being typed or dragged
+            // arrives as a burst of changes, and only the one it settles on is worth sending.
+            // FlushPendingConfigSync, called every frame from FireManager.Update, does the rest.
+            if (_pendingSync.Count == 0) _syncHoldingSince = Time.realtimeSinceStartup;
+            _pendingSync[key] = raw;
+            _syncQuietUntil = Time.realtimeSinceStartup + SyncQuietSeconds;
         }
 
         /// <summary>

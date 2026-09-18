@@ -184,6 +184,26 @@ either, and withholding would re-run the migration on every boot forever. `fires
 `LastSummary`, which is written from the plan's INTENT before anything runs, so refusals have
 to be folded back into it or the one line an admin reads is confidently wrong.
 
+## 0.21.7 (2026-09-18): the config sync, and why it had no admin gate
+
+**Do not add a client-side admin gate to the config sync.** 0.21.6 did, and the feature was a
+total no-op: `ZNet.LocalPlayerIsAdminOrHost` returns false when the server has no adminlist file,
+which is every private test server, and the failure was silent on both sides. `fireset` reaches
+the identical server-side setter and has never been gated, so gating only the manager route buys
+nothing. **The real check belongs in `FireDevCommands.ApplyRemote`, server side, against the
+server's own adminlist** — the unspoofable one the relayed commands already rely on. Still open,
+and it would now cover both routes.
+
+Also: **flush held changes on `ValheimBridge.CanReachServer()`, never on `ZNet.instance != null`.**
+ZNet exists from the moment the world scene loads, seconds before the socket handshake and the
+admin list; an earlier draft flushed there and threw everything away.
+
+**Known limitation, unfixed:** after an UNGRACEFUL kill, a burning object's stored position (from
+the 60 s sidecar) is compared against ZDO positions restored from Valheim's world autosave, which
+defaults to 1800 s. A felled log that rolled in between lands further than the 0.75 m match radius
+and is dropped. A graceful stop saves the world, so the two agree. The skip now logs which of
+"nothing matched" or "too many matched" happened.
+
 ## 0.21.6 (2026-09-18): a ZDOID is NOT a persistence key
 
 **`ZDO.Load` runs `m_uid.SetID(++ZDOID.m_loadID)`** — read out of the 1.0.15 server with
