@@ -1,3 +1,69 @@
+# FireFront — addendum from the Ragnarok's Wrath session, 2026-09-18
+
+**Scope note: this section is NARROW on purpose.** It was written by a session working in
+Ragnarok's Wrath that touched this repo for two specific things. It does NOT supersede the
+handoff below, which that repo's own session updated the same day and which remains the
+authority on 0.21.x. Everything below this section stands.
+
+## 1. The store listing stopped calling a shipped mod a tester build (commit `047b5e8`)
+
+`README.md`'s first line read `🔥 **FireFront — Tester Build v0.19.11**`. Hexium renders the
+PACKAGED README as the listing body, so that is what the public page said while serving **0.21.2**
+— a two-minor-version-old tester label on a mod with 106 downloads that three other mods depend on.
+Verified by fetching `valheim.hexium.gg/mods/RavenIronStudios/FireFront` and finding that exact
+string in the rendered page.
+
+The header now carries **no version at all**. The store displays the version it is serving on the
+same page; a number written in the README can only ever go stale, which is what happened. Also
+dropped "if you're testing Valheim mods" from the requirements line, same framing.
+
+**Left alone deliberately:** the `New in 0.17.5` / `Fixed in 0.18.6` notes. Those are accurate
+history, not claims about what the mod currently is.
+
+**Still stale, and NOT fixed because it is product copy, not a defect:** the feature list stops at
+**0.19.6** while the mod is 0.21.x, so it is missing roughly two minor versions of features. That
+is an editorial pass for whoever owns the wording.
+
+## 2. Repackaged 0.21.4 so the zip actually carries that fix
+
+The existing `dist\RavenIron-FireFront-0.21.4.zip` had been built at 10:18, BEFORE the README fix,
+and was confirmed by opening the archive to still contain the old tester-build line. **Uploading it
+would have shipped the exact text the fix was for.** Repackaged via `tools\package.ps1`:
+
+- `dist\RavenIron-FireFront-0.21.4.zip`, 261,426 B — README inside now opens `🔥 **FireFront**`
+- 75/75 `ConfigLedgerTests` pass
+- revprobe: `FireFront 0.21.4.0 — BINDS CLEAN` against Valheim **1.0.15**
+
+**It was NOT uploaded, and should not be yet** — this repo's own HEAD commit
+(`b0959a7 Record the in-game run 0.21.4 owes...`) says 0.21.4 is unverified. The zip is correct and
+waiting; the verification is what is missing. Also **not pushed**: this repo had 2 unpushed commits
+from its own session, and pushing mine would have published those too.
+
+## 3. Two things found in passing, neither acted on
+
+- **`libs\` was refreshed to the Valheim 1.0.15 publicized set** (`tools\fetch-libs.ps1` was run
+  here, as in all seven repos, after the owner regenerated
+  `valheim_Data\Managed\publicized_assemblies` by hand at 11:40). The 0.21.4 repackage above is the
+  first FireFront build against 1.0.15 references. 1.0.15 needed no code change anywhere: 93/93
+  apiprobe surfaces resolve, network version still 40, save formats unmoved.
+- **`FireManager.FireEvent.RestoredRampAge` is declared and never assigned** (`CS0649`,
+  `Fire/FireManager.cs:399`) — it always reads 0. One of 7 pre-existing build warnings, the other 6
+  being `FindObjectsOfType` deprecations. Not investigated; flagged because a never-assigned field
+  with a name like that usually means a restore path is silently doing nothing.
+
+## 4. FireFront was WRONGLY accused of a bug, and the accusation is retracted
+
+The RW session found that its own lightning gate was reading `EnvMan.IsWet()`, which is frozen on a
+headless dedicated server. It initially concluded FireFront shared the blind spot, citing the
+`raining 0/0` in FireFront's heartbeat. **That was wrong.** `RainingBurnersForStatus()` returns
+`wet + "/" + _burning.Count`, so `0/0` simply meant nothing was alight. FireFront already resolves
+the event through `RandEventSystem.GetCurrentRandomEvent()` — the server-authoritative
+`m_randomEvent`, not the local-player-gated `GetEnvOverride()` — and carries its own replica of the
+weather roll that does not depend on `Utils.GetMainCamera()`. **FireFront had this right before
+Ragnarok's Wrath did.** The retraction is recorded in RW's changelog and CLAUDE.md as well.
+
+---
+
 # FireFront — session handoff (updated 2026-09-16, afternoon)
 
 Resume point for the next working session. Read this before touching anything;
