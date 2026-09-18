@@ -1,5 +1,6 @@
 // From Valkyrie's Cargo's ConfigMigration.cs (itself from WingsoftheValkyrie's, Wu'barrk, RGlabs84) - the family's shape; ported 2026-09-18 at the owner's word.
 using System;
+using System.Globalization;
 using System.Collections.Generic;
 using System.IO;
 using BepInEx.Configuration;
@@ -40,6 +41,17 @@ namespace FireFront.Config
 
         /// <summary>The last migration's boot line, kept for `firestatus`. Empty when nothing has run.</summary>
         public static string LastSummary { get; private set; } = "";
+
+        /// <summary>
+        /// How many steps <see cref="Apply"/> REFUSED this boot. A refusal is almost always a bug
+        /// in our own ledger rather than in the owner's file — a row naming a key this build does
+        /// not bind, or retiring one it still does — plus the one that is nobody's bug, a drop that
+        /// threw. Counted because <see cref="LastSummary"/> is written in <see cref="Begin"/> from
+        /// the plan's INTENT, before a single step has run, and the console command reads it back
+        /// verbatim. Without this it says "1 retired key dropped" for a key still sitting in the
+        /// file, and the only contradiction is a warning several hundred log lines earlier.
+        /// </summary>
+        private static int _refused;
 
         public static void Begin(ConfigFile cfg)
         {
@@ -111,34 +123,38 @@ namespace FireFront.Config
                 bool migrationAttempted = _path != null;
                 bool safeToFinish = _state != MigrationState.Failed && (!migrationAttempted || _backedUp);
 
-                if (_plan != null && safeToFinish && cfg != null)
-                {
-                    foreach (string slot in _plan.ResetToDefault)
-                    {
-                        string section, key;
-                        if (!ConfigLedger.SplitSlot(slot, out section, out key)) continue;
-                        var def = new ConfigDefinition(section, key);
-                        if (!cfg.ContainsKey(def)) continue;
-                        ConfigEntryBase entry = cfg[def];
-                        entry.BoxedValue = entry.DefaultValue;
-                    }
-                    foreach (string slot in _plan.Retired)
-                    {
-                        string section, key;
-                        if (ConfigLedger.SplitSlot(slot, out section, out key)) ConsumeRetiredKey(cfg, section, key);
-                    }
-                }
+                // A step that failed for a reason that could succeed next time must WITHHOLD the
+                // stamp, or the retry it deserves never happens: a stamped file takes the
+                // AlreadyCurrent path on every future boot.
+                bool appliedCleanly = true;
+                if (_plan != null && safeToFinish && cfg != null) appliedCleanly = Apply(cfg, _plan);
 
                 if (_state == MigrationState.Failed)
                     FireLogger.Warn("Config migration did not run this boot; every value is as it was, and it will be migrated on the next successful boot.");
 
                 if (versionEntry != null)
                 {
-                    if (safeToFinish)
-                        versionEntry.Value = ConfigLedger.CurrentVersion;
+                    // THE STAMP ONLY EVER GOES UP, corrected 2026-09-18. A file carrying a HIGHER
+                    // version was written by a newer build whose rungs have already run, and this
+                    // build knows nothing about them. An unconditional assignment drags it down on
+                    // a rollback; rolling forward then replays those rungs against values the owner
+                    // has since chosen — and a rebase cannot tell a deliberate choice from the old
+                    // default it happens to equal. That is this file's worst possible failure.
+                    if (safeToFinish && appliedCleanly)
+                    {
+                        if (versionEntry.Value < ConfigLedger.CurrentVersion)
+                            versionEntry.Value = ConfigLedger.CurrentVersion;
+                    }
                     else
                         FireLogger.Warn("Config migration did not finish cleanly; ConfigVersion is left unstamped so the next boot retries instead of treating this one as done.");
                 }
+                // LastSummary was written in Begin, from the plan's INTENT, before anything ran.
+                // The console command reads it back verbatim, so a refused step has to reach it or
+                // the one line the owner actually looks at is confidently wrong.
+                if (_refused > 0)
+                    LastSummary += " — but " + _refused.ToString(CultureInfo.InvariantCulture) +
+                                   " step(s) were REFUSED; see the warnings in the log";
+
                 if (cfg != null) cfg.Save();
             }
             catch (Exception ex)
@@ -147,12 +163,103 @@ namespace FireFront.Config
             }
             finally
             {
+                _refused = 0;
                 _snapshot = null;
                 _plan = null;
                 _path = null;
                 _state = MigrationState.Fresh;
                 _backedUp = false;
             }
+        }
+
+        /// <summary>
+        /// Apply a plan to the bound entries. Split out of <see cref="Finish"/> on 2026-09-18 so the
+        /// harness can drive it with a synthetic plan: the shipped ledger has one rung of each kind,
+        /// so most of the branches below had never executed anywhere, and the first rung that hits
+        /// one of them would have been its first run on somebody's server. Internal rather than
+        /// private — the test project compiles this source into its own assembly.
+        /// </summary>
+        /// <returns>
+        /// False when a step failed for a reason that could SUCCEED NEXT TIME — today only a
+        /// retirement that threw. That answer gates the version stamp, because a stamped file never
+        /// migrates again and a transient file lock must not become permanent.
+        ///
+        /// A ledger row naming a key this build does not bind is deliberately NOT counted: that
+        /// cannot succeed next time either, so withholding the stamp would re-run the whole
+        /// migration on every boot forever rather than fixing anything. It warns instead, loudly
+        /// and by name, and the plan proceeds.
+        /// </returns>
+        internal static bool Apply(ConfigFile cfg, ConfigLedger.MigrationPlan plan)
+        {
+            if (cfg == null || plan == null) return true;
+            bool allRetriableStepsSucceeded = true;
+
+            foreach (string slot in plan.ResetToDefault)
+            {
+                ConfigEntryBase entry = Lookup(cfg, slot);
+                if (entry == null) { WarnUnknownSlot(slot); continue; }
+                entry.BoxedValue = entry.DefaultValue;
+            }
+
+            foreach (string slot in plan.Retired)
+            {
+                string section, key;
+                if (!ConfigLedger.SplitSlot(slot, out section, out key)) continue;
+
+                // A RETIREMENT MUST NEVER TOUCH A KEY THIS BUILD STILL BINDS. Relying on Bind's
+                // cast to throw is not protection: BepInEx returns the EXISTING entry for an
+                // already-bound definition, so the cast fails only when the type differs, and a
+                // still-bound STRING key would be bound and then removed in silence — deleting the
+                // owner's value with nothing thrown and nothing logged. Today's rung targets
+                // Debug.VerboseLogging, which this build genuinely no longer binds, so this is a
+                // guard against the next rung rather than a fix to a live fault.
+                if (Lookup(cfg, slot) != null)
+                {
+                    _refused++;
+                    FireLogger.Warn(
+                        "Config migration wanted to retire " + slot + ", but this build still binds that key. " +
+                        "Nothing was removed - retiring a live setting would delete your value. This is a bug " +
+                        "in ConfigLedger, not in your file.");
+                    continue;
+                }
+
+                if (!ConsumeRetiredKey(cfg, section, key)) allRetriableStepsSucceeded = false;
+            }
+
+            return allRetriableStepsSucceeded;
+        }
+
+        /// <summary>The bound entry for a "Section::Key" slot, or null when this build does not bind it.</summary>
+        private static ConfigEntryBase Lookup(ConfigFile cfg, string slot)
+        {
+            string section, key;
+            if (!ConfigLedger.SplitSlot(slot, out section, out key)) return null;
+
+            // ConfigDefinition's constructor THROWS on null, on leading or trailing whitespace, and
+            // on = \n \t \ " ' [ ] in either part, so a malformed ledger row would otherwise take
+            // the whole of Finish down rather than just its own step.
+            try
+            {
+                var def = new ConfigDefinition(section, key);
+                return cfg.ContainsKey(def) ? cfg[def] : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// The ledger names a key this build does not bind. Only reachable by editing one file and
+        /// not the other — and the skip used to be SILENT, which made it permanent: the version
+        /// stamps and the step never runs again. Both sibling mods warn; this one now does too.
+        /// </summary>
+        private static void WarnUnknownSlot(string slot)
+        {
+            _refused++;
+            FireLogger.Warn(
+                "Config migration wanted to touch " + slot + " but this build binds no such key. " +
+                "Nothing was changed for it. This is a bug in ConfigLedger, not in your file.");
         }
 
         /// <summary>
@@ -179,7 +286,7 @@ namespace FireFront.Config
         /// one was already there from an earlier attempt); false means no safe copy of the pre-migration
         /// file exists anywhere, which the caller must treat as a reason not to touch the original. Never throws.
         /// </summary>
-        private static bool Backup(string path, int fromVersion)
+        internal static bool Backup(string path, int fromVersion)
         {
             try
             {
@@ -227,17 +334,31 @@ namespace FireFront.Config
         /// it binds), and `Remove` then takes the now-bound entry back out of `Entries` too, so neither
         /// collection carries it into the next `Save`. Never names the private property itself.
         /// </summary>
-        private static void ConsumeRetiredKey(ConfigFile cfg, string section, string key)
+        /// <returns>
+        /// False when the drop THREW, which is not harmless and used to be logged as though it
+        /// were. Bind and Remove share one try block, and Bind does real file I/O (BepInEx saves
+        /// after each newly created entry), so a transient lock — antivirus, cloud sync, a config
+        /// manager, a second process in the same directory — leaves the key bound and never
+        /// removed. Reporting that upward is what stops <see cref="Finish"/> stamping the version
+        /// as though the retirement had happened; a stamped file never migrates again, so the
+        /// failure would otherwise be permanent and silent, on the only live retire rung of the
+        /// three sibling mods.
+        /// </returns>
+        private static bool ConsumeRetiredKey(ConfigFile cfg, string section, string key)
         {
             try
             {
                 var def = new ConfigDefinition(section, key);
                 cfg.Bind<string>(def, "");
                 cfg.Remove(def);
+                return true;
             }
             catch (Exception ex)
             {
-                FireLogger.Error("Could not drop the retired key " + section + "." + key + " from the config file (harmless - it is unbound and ignored from here). Reason: " + ex.Message);
+                _refused++;
+                FireLogger.Error("Could not drop the retired key " + section + "." + key +
+                    " from the config file. The layout version is left unstamped so the next boot tries again. Reason: " + ex.Message);
+                return false;
             }
         }
     }

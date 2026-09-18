@@ -106,12 +106,24 @@ namespace FireFront.Config
 
         /// <summary>
         /// BepInEx config files are plain INI: `[Section]` headers, `#` comments, blank lines, and
-        /// `Key = value` where the value may itself contain `=` or `,`. Keyed "Section::Key", ordinal
-        /// ignore-case; the last duplicate wins. Values trimmed. Never throws.
+        /// `Key = value` where the value may itself contain `=` or `,`. Keyed "Section::Key"; the
+        /// last duplicate wins; values trimmed. Never throws.
+        ///
+        /// ORDINAL AND CASE-SENSITIVE, corrected 2026-09-18. This was OrdinalIgnoreCase, which does
+        /// not match BepInEx: `ConfigDefinition.Equals` is `string.Equals(Key, other.Key) &&
+        /// string.Equals(Section, other.Section)` — the two-argument overload — over a
+        /// case-sensitive `GetHashCode` (read out of libs\BepInEx.dll with ilspycmd). So
+        /// `smoulderafterfraction` and `SmoulderAfterFraction` are two DIFFERENT keys there: one
+        /// binds, the other sits in the orphan table and is rewritten on every save.
+        ///
+        /// The snapshot is this migration's whole model of what is in the file, so it has to be
+        /// BepInEx's model rather than a friendlier one. Ignoring case makes a rebase claim it moved
+        /// a value it never reached, and makes a retirement report dropping a line that is still
+        /// there. The same mistake was found in all three ports of this code on the same day.
         /// </summary>
         public static Dictionary<string, string> ParseIni(IEnumerable<string> lines)
         {
-            var into = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var into = new Dictionary<string, string>(StringComparer.Ordinal);
             if (lines == null) return into;
 
             string section = "";
@@ -156,27 +168,66 @@ namespace FireFront.Config
         /// snapshot (fresh install) or a file already current plans nothing. Steps apply in version
         /// order. Never throws.
         /// </summary>
-        public static MigrationPlan Plan(Dictionary<string, string> snapshot, int fileVersion)
-        {
-            var plan = new MigrationPlan { FromVersion = fileVersion, ToVersion = CurrentVersion };
-            if (snapshot == null || snapshot.Count == 0) return plan;
-            if (fileVersion >= CurrentVersion) return plan;
+        public static MigrationPlan Plan(Dictionary<string, string> snapshot, int fileVersion) =>
+            Plan(snapshot, fileVersion, CurrentVersion, Rebases, Retirements);
 
-            for (int version = fileVersion + 1; version <= CurrentVersion; version++)
+        /// <summary>
+        /// The same thing against tables supplied by the caller, and the whole implementation — the
+        /// overload above is one line of delegation, so this is not a parallel code path. Added
+        /// 2026-09-18 so the harness can reach rules the one shipped rung of each kind cannot
+        /// exercise: two rungs naming one key, a rung at a version the file has already passed, an
+        /// empty table. Both sibling mods carry the same seam.
+        /// </summary>
+        public static MigrationPlan Plan(
+            Dictionary<string, string> snapshot,
+            int fileVersion,
+            int toVersion,
+            Dictionary<int, Rebase[]> rebases,
+            Dictionary<int, Retire[]> retirements)
+        {
+            var plan = new MigrationPlan { FromVersion = fileVersion, ToVersion = toVersion };
+            if (snapshot == null || snapshot.Count == 0) return plan;
+            if (fileVersion >= toVersion) return plan;
+
+            // A NEGATIVE stamp is a hand-edited or corrupt file and must not become a loop bound.
+            // ConfigVersion is bound without an AcceptableValueRange (correctly — BepInEx clamps
+            // silently, and a ceiling would one day refuse the stamp), so nothing stops an owner
+            // typing -2000000000, and an unclamped window counts all the way up from there on the
+            // boot thread. Measured at eighteen to twenty seconds in the sibling repos. A file
+            // claiming to predate version 0 simply IS a version 0 file.
+            int from = fileVersion < 0 ? 0 : fileVersion;
+
+            // One slot, one decision. Every rung is judged against the SAME unchanged snapshot — the
+            // stored value never advances along the ladder — so without this a key named twice is
+            // reported and reset once per rung, and a slot an earlier rung claimed can be
+            // re-classified by a later one. First match owns it. This matters more here than in the
+            // siblings, because this is the only ledger with rungs of two different kinds live at
+            // once: a key must never be both rebased and retired.
+            var decided = new HashSet<string>(StringComparer.Ordinal);
+
+            for (int version = from + 1; version <= toVersion; version++)
             {
                 Rebase[] steps;
-                if (Rebases.TryGetValue(version, out steps))
+                if (rebases != null && rebases.TryGetValue(version, out steps) && steps != null)
                 {
                     foreach (Rebase r in steps)
                     {
+                        if (r == null) continue;
                         string slot = Slot(r.Section, r.Key);
+                        if (decided.Contains(slot)) continue;
+
                         string stored;
                         if (!snapshot.TryGetValue(slot, out stored)) continue;
 
+                        decided.Add(slot);
+
                         bool wasOldDefault = false;
-                        foreach (string oldDefault in r.OldDefaults)
+                        if (r.OldDefaults != null)
                         {
-                            if (string.Equals(stored.Trim(), oldDefault, StringComparison.Ordinal)) { wasOldDefault = true; break; }
+                            foreach (string oldDefault in r.OldDefaults)
+                            {
+                                if (string.Equals(stored.Trim(), oldDefault, StringComparison.Ordinal)) { wasOldDefault = true; break; }
+                            }
                         }
 
                         if (wasOldDefault) plan.ResetToDefault.Add(slot);
@@ -184,13 +235,18 @@ namespace FireFront.Config
                     }
                 }
 
-                Retire[] retirements;
-                if (Retirements.TryGetValue(version, out retirements))
+                Retire[] retireSteps;
+                if (retirements != null && retirements.TryGetValue(version, out retireSteps) && retireSteps != null)
                 {
-                    foreach (Retire r in retirements)
+                    foreach (Retire r in retireSteps)
                     {
+                        if (r == null) continue;
                         string slot = Slot(r.Section, r.Key);
-                        if (snapshot.ContainsKey(slot)) plan.Retired.Add(slot);
+                        if (decided.Contains(slot)) continue;
+                        if (!snapshot.ContainsKey(slot)) continue;
+
+                        decided.Add(slot);
+                        plan.Retired.Add(slot);
                     }
                 }
             }

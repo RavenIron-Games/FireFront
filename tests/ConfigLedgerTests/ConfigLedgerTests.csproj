@@ -15,5 +15,13 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\..\Config\ConfigLedger.cs" Link="Config\ConfigLedger.cs" />
+    <!-- The ENGINE half too, since 2026-09-18. It names BepInEx types, so Stubs.cs stands in for
+         them - but leaving it out meant every engine-side rule in the mod with the most live
+         migration rungs was unmeasured. -->
+    <Compile Include="..\..\Config\ConfigMigration.cs" Link="Config\ConfigMigration.cs" />
+    <!-- And the real config surface, so the harness can cross-check that every slot ConfigLedger
+         names is a key this build actually binds. That join is a pair of bare strings written in
+         two different files; a typo in either stamps the version and never migrates again. -->
+    <Compile Include="..\..\Config\FireConfig.cs" Link="Config\FireConfig.cs" />
   </ItemGroup>
 </Project>

@@ -71,6 +71,39 @@ the Bind default AND add a row to `Rebases[n+1]` with the old default's on-disk 
 `.\tools\run-tests.ps1`.** Do not rename keys to dodge a stored value again. Verified on
 the test server 2026-09-18 with a hand-aged file (0.45 + the orphan key): see CHANGELOG.
 
+**0.21.4 corrected eight things in that machinery, and every one of them was invisible from
+outside the game.** The harness that shipped with it compiled the PURE ledger only, so no
+engine-side rule was measured at all — in the mod of the three with a live rung of each
+kind. It now stubs BepInEx, compiles the real `FireConfig`, and stands at 75 assertions
+with thirteen mutations each caught by a named test. Four facts worth carrying, all read
+out of `libs\BepInEx.dll` with `ilspycmd` rather than assumed:
+
+- **`ConfigDefinition.Equals` is ORDINAL and case-SENSITIVE** —
+  `string.Equals(Key, other.Key) && string.Equals(Section, other.Section)`, the two-argument
+  overload, over a case-sensitive `GetHashCode`. A mis-cased line is a DIFFERENT key to
+  BepInEx. The snapshot compared ignoring case, so it answered "present" for a key BepInEx
+  treats as absent — cancelling the one step whose entire safety is that absence test. The
+  test stub had it backwards too, so the assertions would have passed for a reason that does
+  not hold on a real machine. All three mods had this, all three are fixed.
+- **`ConfigEntryBase.SetSerializedValue` swallows EVERY exception** and leaves the value
+  untouched, logging a BepInEx warning. A try/catch around it is unreachable code. Read the
+  value back and compare instead — which also catches `ConfigEntry<T>`'s setter running
+  `ClampValue` and clamping silently.
+- **`ConfigFile.Bind` returns the EXISTING entry for an already-bound definition**, cast to
+  T. So relying on the cast to throw is NOT protection against retiring a live key: it only
+  fails when the type differs, and a string key would be deleted in silence.
+- **`ConfigFile.OrphanedEntries` is private, and every orphan is rewritten on each `Save`.**
+  A key you simply stop binding rides along in the file forever, which is why a retirement
+  has to bind-then-remove rather than just not bind.
+
+**And the rule the whole thing turns on: a stamped file NEVER migrates again.** So any step
+that failed for a reason that could succeed next time — today only a retirement whose drop
+threw, because a transient file lock is nobody's bug — must WITHHOLD the stamp. A ledger row
+naming a key this build does not bind must NOT withhold it: that cannot succeed next time
+either, and withholding would re-run the migration on every boot forever. `firestatus` reads
+`LastSummary`, which is written from the plan's INTENT before anything runs, so refusals have
+to be folded back into it or the one line an admin reads is confidently wrong.
+
 ## Rain: verify this before anything else (0.21.0, built 2026-09-16, not yet run)
 
 Rain never registered on a dedicated server - `EnvMan` only picks an environment

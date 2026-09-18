@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.21.4
+
+- **Eight corrections to 0.21.3's config migration, and a harness that can reach it.**
+  0.21.3 shipped the migration with a test project that compiled the *pure* ledger only —
+  every engine-side rule was unmeasured, in the one mod of the three with a live rung of
+  each kind. The harness now stubs BepInEx and compiles the real `FireConfig`, and went
+  35 → 75 assertions. Each fix below was proven by reverting it and watching a named test
+  fail; thirteen such mutations, all caught.
+
+  - **The pre-bind snapshot matched keys case-INSENSITIVELY.** BepInEx's own
+    `ConfigDefinition.Equals` is ordinal and case-sensitive, so a mis-cased line is a
+    *different* key to the game. An ignore-case snapshot answered "present" for a key
+    BepInEx treats as absent, which cancels the one step whose entire safety is that
+    absence test. Read out of `BepInEx.dll` rather than assumed; the test stub had it
+    backwards too, so every apply assertion would have passed for a reason that does not
+    hold on a real machine.
+  - **A retirement that failed was reported as harmless, and the version stamped anyway.**
+    Binding and removing a key both touch the file, so a transient lock — antivirus, cloud
+    sync, a config manager, a second process in the same directory — takes the drop down
+    through nobody's fault. The stamp then wrote "already migrated" and the retirement was
+    never retried: a one-second lock made permanent. The drop now reports upward and the
+    version is left unstamped, so the next boot tries again.
+  - **A rebase row naming a key this build does not bind was skipped in silence**, and the
+    file stamped as though it had moved. It warns now.
+  - **A retirement could be applied to a key this build STILL binds**, deleting a live
+    setting outright. Relying on BepInEx's cast to throw was not protection: `Bind` returns
+    the existing entry for an already-bound definition, so the cast only fails when the type
+    differs. Refused explicitly now, with a warning that names the row.
+  - **The version stamp only ever rises.** It was assigned unconditionally, so opening a
+    world with an older build dragged a newer file's stamp *down*; rolling forward then
+    replayed rungs against values the owner had since chosen, and a rebase cannot tell a
+    deliberate choice from the old default it happens to equal.
+  - **A negative stamp made the migration walk two billion rungs**, freezing the boot thread
+    on a hand-edited file. Clamped.
+  - **One key could be decided twice in one boot** when two rungs named it, the later
+    silently winning. First rung wins now, and the same key can no longer be rebased and
+    retired in the same pass.
+  - **The status line reported the plan's INTENT, not what happened.** `firestatus` printed
+    "1 retired key dropped" for a key still sitting in the file, with the only contradiction
+    a warning hundreds of log lines earlier. Refusals now correct the summary.
+
 ## 0.21.3
 
 - **The config file migrates itself.** BepInEx persists every bound value to disk, so a
