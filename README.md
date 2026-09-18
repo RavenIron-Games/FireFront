@@ -1,8 +1,8 @@
-🔥 **FireFront — Tester Build v0.19.11**
+🔥 **FireFront**
 
 Fire that actually spreads. Torch a wall and it can take the whole build with it, jump to the treeline, and crawl across open ground to get there — not just "this one piece is on fire," an actual moving front.
 
-**Requires:** BepInEx (you already have this if you're testing Valheim mods)
+**Requires:** BepInEx
 
 **Install:** drop `FireFront.dll` into `BepInEx/plugins/`, launch, done. No config needed to just play — everything below is for people who want to poke at it. On a dedicated server, the server needs the dll too (it runs the actual fire; your client just shows it to you).
 
