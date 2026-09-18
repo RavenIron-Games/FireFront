@@ -15,6 +15,8 @@ namespace FireFront.Config
         public static ConfigEntry<int> MaxConcurrentBurning;
         public static ConfigEntry<int> QueueSize;
         public static ConfigEntry<float> SpreadCheckInterval;
+        // [Meta] layout version, stamped by ConfigMigration; the rungs are in ConfigLedger. Not a setting.
+        public static ConfigEntry<int> ConfigVersion;
         public static ConfigEntry<bool> VerboseLogging;
         public static ConfigEntry<bool> BurnTreesAndLogs;
         public static ConfigEntry<bool> BurnPlayerBuildings;
@@ -222,6 +224,17 @@ namespace FireFront.Config
 
         public static void Bind(ConfigFile config)
         {
+            // Before ANY bind: snapshot the raw file so the migration can see what an old build
+            // wrote, before BepInEx's own bind normalises it. Finish runs after the last bind.
+            ConfigMigration.Begin(config);
+
+            ConfigVersion = config.Bind(
+                ConfigLedger.MetaSection, ConfigLedger.VersionKey, 0,
+                "The layout version of this file, stamped by the mod itself after it has moved any " +
+                "value still sitting at an OLD default onto the new one and dropped keys no current " +
+                "build reads (a copy of the previous file lands beside it as .vN.bak first). Not a " +
+                "setting: leave it alone. Delete the line to make the next boot re-run the migration.");
+
             Enabled = config.Bind(
                 "General", "Enabled", true,
                 "Master switch. When false, no burn timers run and no spread occurs.");
@@ -720,6 +733,9 @@ namespace FireFront.Config
                     "leashed to the FIRST fire's origin, not its own. Origin resets once every fire " +
                     "fully burns out.",
                     new AcceptableValueRange<float>(5f, 500f)));
+
+            // After EVERY bind, so each ConfigEntry the plan may reset exists: apply, stamp, save.
+            ConfigMigration.Finish(config, ConfigVersion);
         }
     }
 }

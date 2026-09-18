@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Off-game harness for the PURE half of the config migration. Compiles the mod's real
+       Config/ConfigLedger.cs on plain .NET - no BepInEx, no Unity, no Valheim - so the
+       decisions that fail silently (a default that should have moved and did not, an admin
+       value that should have been kept and was not) are checkable in about a second:
+       .\tools\run-tests.ps1 from the repo root. The mod's own csproj excludes tests\**. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>FireFront.Tests</RootNamespace>
+    <AssemblyName>ConfigLedgerTests</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\Config\ConfigLedger.cs" Link="Config\ConfigLedger.cs" />
+  </ItemGroup>
+</Project>

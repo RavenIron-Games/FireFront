@@ -4,11 +4,15 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>FireFront</AssemblyName>
     <RootNamespace>FireFront</RootNamespace>
-    <Version>0.21.2</Version>
+    <Version>0.21.3</Version>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
   </PropertyGroup>
+  <!-- The off-game harness under tests\ has its own csproj (and its own obj\); SDK globbing would otherwise compile it INTO the mod. -->
+  <ItemGroup>
+    <Compile Remove="tests\**" />
+  </ItemGroup>
 
   <!-- Adjust HintPaths to your libs folder, same layout as SteveCompanion -->
   <ItemGroup>

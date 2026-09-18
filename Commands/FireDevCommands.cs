@@ -224,6 +224,11 @@ namespace FireFront.Commands
 
         private static void FireStatus(Terminal.ConsoleEventArgs args)
         {
+            // This machine's own config migration, whichever side it is: the line the boot logged.
+            Say(args, "FireFront config: " + (string.IsNullOrEmpty(ConfigMigration.LastSummary)
+                ? "no migration ran this boot (file already at layout version " + ConfigLedger.CurrentVersion + ", or a first install)"
+                : ConfigMigration.LastSummary));
+
             if (ValheimBridge.IsServer())
             {
                 Say(args, FireManager.Instance.StatusLine());

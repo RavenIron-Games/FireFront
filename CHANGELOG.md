@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.21.3
+
+- **The config file migrates itself.** BepInEx persists every bound value to disk, so a
+  changed default never reaches an install that already wrote the key. This mod has hit
+  that twice and answered by hand both times: 0.18.7 renamed `VerboseLogging` to
+  `DebugLogging` so a stored `true` could not follow it, and 0.19.14 could only tell people
+  to set the smoulder threshold themselves after 0.19.13 moved its default from 0.45 to
+  0.65. Now the family's machinery, Wu'barrk's from Wings of the Valkyrie by way of
+  Valkyrie's Cargo, does it: the raw file is read before any bind, a `[Meta] ConfigVersion`
+  stamps the layout, a value still equal to an OLD default moves to the new one while
+  anything an admin set stays (and is named in the log), a key no current build binds is
+  dropped instead of riding along as an orphan, a copy of the previous file lands beside it
+  as `.v0.bak` first, and a migration that cannot back the file up changes nothing and
+  retries next boot. A failed migration never stops the mod loading.
+
+  Version 1, this release: `SmoulderAfterFraction` still at 0.45 becomes 0.65; the orphan
+  `Debug.VerboseLogging` is removed. Every install seen on the owner's machines already
+  carries 0.65, so on those the boot line reads "nothing to migrate" and stamps the version;
+  the rung is for the testers 0.19.14 could only advise. `firestatus` prints this machine's
+  own migration line. The decisions live in `Config/ConfigLedger.cs`, pure and off-game,
+  with a harness under `tests/` (`tools\run-tests.ps1`, 35 checks) - the mod's first.
+
 ## 0.21.2
 
 - **Flames on the outside of the crown, where a leafy tree can show them.** The first

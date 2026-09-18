@@ -60,6 +60,17 @@ the memory notes in the assistant's store point here.
   **Owner's call 2026-08-28: no Discord post needed** — the regenerated split
   in `dist\DISCORD_POST_READY.txt` exists but is not to be shipped unless the
   owner asks.
+## Config migration (0.21.3, 2026-09-18): the next default change goes in the ledger
+
+`Config/ConfigLedger.cs` (pure) decides, `Config/ConfigMigration.cs` (engine) applies:
+`[Meta] ConfigVersion`, a rebase table keyed by the version it produces, "a stored value
+still at an OLD default moves, anything else is the admin's", retired keys dropped,
+`.vN.bak` beside the file, never blocks loading. **To move a default from now on: change
+the Bind default AND add a row to `Rebases[n+1]` with the old default's on-disk text, bump
+`CurrentVersion`, add a check to `tests/ConfigLedgerTests/Program.cs`, run
+`.\tools\run-tests.ps1`.** Do not rename keys to dodge a stored value again. Verified on
+the test server 2026-09-18 with a hand-aged file (0.45 + the orphan key): see CHANGELOG.
+
 ## Rain: verify this before anything else (0.21.0, built 2026-09-16, not yet run)
 
 Rain never registered on a dedicated server - `EnvMan` only picks an environment
