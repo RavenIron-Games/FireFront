@@ -1829,7 +1829,7 @@ namespace FireFront.Fire
                 }
 
                 var vfxController = instance.AddComponent<FireVFXController>();
-                vfxController.Setup(b, duration);
+                vfxController.Setup(b, duration, target);
             }
             else if (!string.IsNullOrEmpty(FireConfig.VfxPrefabName.Value))
             {
@@ -2075,8 +2075,20 @@ namespace FireFront.Fire
             GameObject instance = null;
             if (FireConfig.UseProceduralVfx.Value)
             {
-                instance = ValheimBridge.CreateProceduralFireVfx(
-                    ValheimBridge.PositionOf(target), ValheimBridge.MeasureBurnerHeight(target), ValheimBridge.MeasureBurnerCrownRadius(target));
+                Vector3 pos = ValheimBridge.PositionOf(target);
+                instance = new GameObject("FireFrontProceduralVFX_Remote");
+                instance.transform.position = pos;
+
+                float h = ValheimBridge.MeasureBurnerHeight(target);
+                float r = ValheimBridge.MeasureBurnerCrownRadius(target);
+                if (h <= 0.1f) h = 2f;
+                if (r <= 0.1f) r = 0.5f;
+
+                Bounds b = new Bounds(pos + Vector3.up * (h / 2f), new Vector3(r * 2, h, r * 2));
+                float duration = FireConfig.BurnDurationSeconds.Value;
+
+                var vfxController = instance.AddComponent<FireVFXController>();
+                vfxController.Setup(b, duration, target);
             }
             else
             {

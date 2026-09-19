@@ -66,6 +66,36 @@ namespace FireFront.Fire
             tex.Apply(true);
             return tex;
         }
+
+        public static Texture2D GenerateSmokeTexture()
+        {
+            Texture2D tex = new Texture2D(Size, Size, TextureFormat.RGBA32, false);
+            tex.filterMode = FilterMode.Bilinear;
+
+            Vector2 center = new Vector2(Size / 2f, Size / 2f);
+            float maxDist = Size / 2f;
+
+            for (int y = 0; y < Size; y++)
+            {
+                for (int x = 0; x < Size; x++)
+                {
+                    Vector2 p = new Vector2(x + 0.5f, y + 0.5f);
+                    float dist = Vector2.Distance(p, center) / maxDist;
+                    float falloff = Mathf.Clamp01(1f - dist);
+                    falloff = Mathf.SmoothStep(0f, 1f, falloff);
+
+                    float n = Mathf.PerlinNoise(x * 0.08f, y * 0.08f) * 0.6f +
+                              Mathf.PerlinNoise(x * 0.16f + 10f, y * 0.16f + 10f) * 0.4f;
+                    float a = falloff * n * 0.6f;
+
+                    Color c = new Color(0.2f, 0.2f, 0.2f, a);
+                    tex.SetPixel(x, y, c);
+                }
+            }
+
+            tex.Apply(true);
+            return tex;
+        }
         
         public static Material GetOrCreateFireMaterial(Texture2D tex, bool isAdditive = true)
         {
