@@ -1813,8 +1813,23 @@ namespace FireFront.Fire
             GameObject instance = null;
             if (FireConfig.UseProceduralVfx.Value)
             {
-                instance = ValheimBridge.CreateProceduralFireVfx(
-                    position, ValheimBridge.MeasureBurnerHeight(target), ValheimBridge.MeasureBurnerCrownRadius(target));
+                instance = new GameObject("FireFrontProceduralVFX");
+                instance.transform.position = position;
+                
+                float h = ValheimBridge.MeasureBurnerHeight(target);
+                float r = ValheimBridge.MeasureBurnerCrownRadius(target);
+                if (h <= 0.1f) h = 2f; // Fallback
+                if (r <= 0.1f) r = 0.5f;
+
+                Bounds b = new Bounds(position + Vector3.up * (h / 2f), new Vector3(r * 2, h, r * 2));
+                float duration = FireConfig.BurnDurationSeconds.Value;
+                if (_burning.TryGetValue(id, out var state))
+                {
+                    duration = state.ExpireAt - state.IgnitedAt;
+                }
+
+                var vfxController = instance.AddComponent<FireVFXController>();
+                vfxController.Setup(b, duration);
             }
             else if (!string.IsNullOrEmpty(FireConfig.VfxPrefabName.Value))
             {
@@ -2247,6 +2262,16 @@ namespace FireFront.Fire
                     });
                 }
 
+                if (ValheimBridge.KindOf(target) == ValheimBridge.BurnKind.Tree || ValheimBridge.KindOf(target) == ValheimBridge.BurnKind.Log)
+                {
+                    if (UnityEngine.Random.Range(0f, 100f) > FireConfig.TreeDestructionRate.Value)
+                    {
+                        // Clone to burnt tree instead of total destruction
+                        string prefabName = ValheimBridge.NameOf(target);
+                        if (prefabName.Contains("(Clone)")) prefabName = prefabName.Replace("(Clone)", "");
+                        BurntTreeManager.CloneToBurntTree(target, prefabName, state.Position, target.transform.rotation);
+                    }
+                }
                 ValheimBridge.KillBurningTarget(target);
                 RemoveVfxFor(id);
                 killed++;
