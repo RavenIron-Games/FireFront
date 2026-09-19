@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.21.13
+
+- **Fire that would not go out.** A tree could finish burning, or you could clear every fire on the
+  server, and the flames stayed on screen - burning away on something that was no longer there,
+  forever, while the fire count read zero. The message that says a fire has stopped identifies it
+  by the object that was burning, and the most common way a fire stops is that the thing burned
+  down, which takes that identity with it. Your game then had no way left to work out which flames
+  the message meant, so it did nothing. It now remembers, when a fire starts, which flames belong
+  to it, and sweeps up anything left burning on something that has gone.
+
 ## 0.21.12
 
 - Whether fire keeps you warm, and how far that reaches, can now be changed from the console like

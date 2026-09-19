@@ -730,6 +730,7 @@ namespace FireFront.Fire
             DrainRemoteVfxSpawnQueue(); // client-side VFX budget — must run before the server gate below
             DrainRemoteObjectVfxQueue(); // same, for object fire — see EnqueueRemoteObjectVfx
             ProcessRemoteSmouldering(); // client-side: the server is headless, THIS is what a player sees
+            PruneOrphanedRemoteVfx();   // same: nothing else can reach a stranded effect
 
             // Everything below this point is the actual fire simulation, and it
             // must only ever run on the server. Ignition already only populates
@@ -1176,6 +1177,7 @@ namespace FireFront.Fire
             foreach (GameObject instance in _remoteVfx.Values) { if (instance != null) Destroy(instance); }
             foreach (GameObject instance in _remoteGroundVfx.Values) { if (instance != null) Destroy(instance); }
             _remoteVfx.Clear();
+            _remoteVfxOwner.Clear();
             _remoteGroundVfx.Clear();
             _groundVfxVisual.Clear();
             _groundVfxDamage.Clear();
@@ -2185,6 +2187,46 @@ namespace FireFront.Fire
         /// when it started showing a given fire, so no extra sync is needed.
         /// Cosmetic only, and throttled: nothing here is worth a per-frame pass.
         /// </summary>
+        /// <summary>
+        /// Destroys remote fire whose burner is gone, for the paths that never deliver a stop at
+        /// all - a peer that was out of range when the fire ended, a world object removed by
+        /// something other than fire, a dropped packet. The map above fixes the common case; this
+        /// is what makes an orphan impossible rather than merely unlikely, because the failure is
+        /// silent and permanent and a player just sees fire that will not go out.
+        /// </summary>
+        private void PruneOrphanedRemoteVfx()
+        {
+            if (_remoteVfx.Count == 0) return;
+            if (Time.time < _nextRemoteVfxPrune) return;
+            _nextRemoteVfxPrune = Time.time + 5f;
+
+            _orphanScratch.Clear();
+            foreach (KeyValuePair<Component, GameObject> kv in _remoteVfx)
+            {
+                // Unity's == is overloaded: a destroyed object compares equal to null while the
+                // reference itself stays valid, which is exactly what lets it still be used as the
+                // key to remove by.
+                if (kv.Key == null || kv.Value == null) _orphanScratch.Add(kv.Key);
+            }
+
+            for (int i = 0; i < _orphanScratch.Count; i++)
+            {
+                Component dead = _orphanScratch[i];
+                if (_remoteVfx.TryGetValue(dead, out GameObject go) && go != null) Destroy(go);
+                _remoteVfx.Remove(dead);
+                _remoteVfxSpawnedAt.Remove(dead);
+                _remoteSmouldering.Remove(dead);
+                _remoteObjectVfxQueued.Remove(dead);
+                _remoteObjectVfxQueue.Remove(dead);
+            }
+
+            if (_orphanScratch.Count > 0)
+                FireLogger.Debug($"[VFX] cleaned up {_orphanScratch.Count} stranded fire effect(s) whose burner is gone.");
+        }
+
+        private float _nextRemoteVfxPrune;
+        private readonly List<Component> _orphanScratch = new List<Component>();
+
         private void ProcessRemoteSmouldering()
         {
             if (!FireConfig.SmoulderingVfxEnabled.Value) return;
@@ -2225,11 +2267,31 @@ namespace FireFront.Fire
             if (ValheimBridge.IsServer()) return;
 
             Component target = ValheimBridge.ComponentFromZdoid(id);
-            if (target == null) return; // not loaded on this peer (out of range) — nothing to show
 
-            if (started) EnqueueRemoteObjectVfx(target);
-            else RemoveRemoteVfxFor(target);
+            if (started)
+            {
+                if (target == null) return; // not loaded on this peer (out of range) — nothing to show
+
+                // Remember which object this id drew, because the stop may not be able to ask.
+                _remoteVfxOwner[id] = target;
+                EnqueueRemoteObjectVfx(target);
+                return;
+            }
+
+            // A STOP MUST NOT DEPEND ON RESOLVING THE ID. _remoteVfx is keyed by Component, so
+            // until 0.21.13 this had to turn the id back into one - and the commonest reason a
+            // fire stops is that the thing burned DOWN, which destroys its ZDO. The lookup then
+            // returned null, the handler gave up, and the flames were left burning on screen
+            // with nothing left in the process that could ever find them again. 256 of those in
+            // one session's client log, every one a permanent orphan. The owner reported it as
+            // "clear fires and the vfx stays but the count goes to 0", which is the same fault:
+            // clearfires stops objects whose ZDO this peer may no longer hold either.
+            if (target == null) _remoteVfxOwner.TryGetValue(id, out target);
+            _remoteVfxOwner.Remove(id);
+            if (target != null) RemoveRemoteVfxFor(target);
         }
+
+        private readonly Dictionary<ZDOID, Component> _remoteVfxOwner = new Dictionary<ZDOID, Component>();
 
         private readonly List<Component> _remoteObjectVfxQueue = new List<Component>();
         private readonly HashSet<Component> _remoteObjectVfxQueued = new HashSet<Component>();
@@ -3143,6 +3205,7 @@ namespace FireFront.Fire
             // blocked those objects from ever being drawn again - the same bug, other collection.
             foreach (GameObject go in _remoteVfx.Values) { if (go != null) Destroy(go); }
             _remoteVfx.Clear();
+            _remoteVfxOwner.Clear();
         }
 
         private void SpawnRemoteGroundVfxFor(GroundCellKey key, Vector3 position)
