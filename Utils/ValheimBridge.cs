@@ -3214,6 +3214,7 @@ namespace FireFront.Utils
         private const string RpcStatusRequest = "FireFront_StatusRequest";
         private const string RpcStatusResponse = "FireFront_StatusResponse";
         private const string RpcCommandRelay = "FireFront_CommandRelay";
+        private const string RpcFireDamage = "FireFront_FireDamage";
 
         /// <summary>Client → server: run this whitelisted dev command there; replies stream back on the status-response channel.</summary>
         public static void SendCommandRelayToServer(string commandLine)
@@ -3273,6 +3274,85 @@ namespace FireFront.Utils
         }
 
         /// <summary>Server → one requesting peer: the authoritative status line.</summary>
+        /// <summary>
+        /// A connected player as the SERVER can see one: a position and a peer to talk to, and
+        /// nothing else. There is no Character instance and no collider on a dedicated server
+        /// where a player is standing - that is the whole reason this exists.
+        /// </summary>
+        public struct PlayerTarget
+        {
+            public long PeerId;
+            public Vector3 Position;
+            public string Name;
+        }
+
+        /// <summary>
+        /// Every connected REMOTE player's character position, read straight off its ZDO, plus the
+        /// peer id to route an RPC to. Excludes this machine's own player, which is a local object
+        /// and is handled directly by the caller.
+        ///
+        /// Why not physics: a dedicated server has no terrain, no instances and no colliders where
+        /// players actually are - only ZDOs - so Physics.OverlapSphere finds world scenery near a
+        /// fire and never finds the player standing in it. FireFront's fire damage polled exactly
+        /// that from 0.1 to 0.21.7, which is why fire never once hurt anyone on a dedicated server.
+        /// ZNet.m_peers and ZNetPeer.m_uid/m_characterID are genuinely public in the real 1.0.15
+        /// assembly (checked with ilspycmd, not trusted from the publicized DLL).
+        /// </summary>
+        public static bool CollectPlayerTargets(List<PlayerTarget> into)
+        {
+            into.Clear();
+            ZNet net = ZNet.instance;
+            ZDOMan man = ZDOMan.instance;
+            if (net == null || man == null) return false;
+
+            List<ZNetPeer> peers = net.m_peers;
+            if (peers == null) return false;
+
+            for (int i = 0; i < peers.Count; i++)
+            {
+                ZNetPeer peer = peers[i];
+                if (peer == null || !peer.IsReady() || peer.m_characterID.IsNone()) continue;
+
+                ZDO zdo = man.GetZDO(peer.m_characterID);
+                if (zdo == null) continue;
+
+                into.Add(new PlayerTarget
+                {
+                    PeerId = peer.m_uid,
+                    Position = zdo.GetPosition(),
+                    Name = peer.m_playerName,
+                });
+            }
+            return true;
+        }
+
+        /// <summary>Server side: tell ONE peer to set its own player alight for a tick.</summary>
+        public static void SendFireDamageToPeer(long targetPeer, float damage)
+        {
+            if (ZRoutedRpc.instance == null) return;
+            try { ZRoutedRpc.instance.InvokeRoutedRPC(targetPeer, RpcFireDamage, damage); }
+            catch (System.Exception ex) { FireLogger.Debug($"SendFireDamageToPeer threw: {ex.Message}"); }
+        }
+
+        /// <summary>True if this routed RPC came from the server rather than another client.</summary>
+        public static bool IsFromServer(long sender)
+        {
+            long server = GetServerPeerId();
+            return server != 0L ? sender == server : IsServer();
+        }
+
+        /// <summary>
+        /// Apply a fire tick to the player sitting at this keyboard. The server cannot do this
+        /// itself - burning is vanilla's own status effect on a live Character, and the only
+        /// machine with that object is the one the player is playing on.
+        /// </summary>
+        public static void ApplyFireDamageToLocalPlayer(float damage)
+        {
+            Player local = Player.m_localPlayer;
+            if (local == null) return;
+            ApplyFireDamageTick(local, damage);
+        }
+
         public static void SendStatusResponse(long targetPeer, string statusLine)
         {
             if (ZRoutedRpc.instance == null) return;
@@ -3344,7 +3424,8 @@ namespace FireFront.Utils
             System.Action<long, string, string> onConfigSet,
             System.Action<long> onStatusRequest,
             System.Action<long, string> onStatusResponse,
-            System.Action<long, string> onCommandRelay)
+            System.Action<long, string> onCommandRelay,
+            System.Action<long, float> onFireDamage)
         {
             if (ZRoutedRpc.instance == null)
             {
@@ -3369,6 +3450,7 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.Register(RpcStatusRequest, onStatusRequest);
                 ZRoutedRpc.instance.Register<string>(RpcStatusResponse, onStatusResponse);
                 ZRoutedRpc.instance.Register<string>(RpcCommandRelay, onCommandRelay);
+                ZRoutedRpc.instance.Register<float>(RpcFireDamage, onFireDamage);
                 FireLogger.Info($"[IGNITE-TRACE] All 8 FireFront RPCs registered successfully (IsServer={IsServer()}).");
             }
             catch (System.Exception ex)

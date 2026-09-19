@@ -688,7 +688,7 @@ namespace FireFront.Fire
             if (routedRpc != null && !ReferenceEquals(routedRpc, _registeredRpcInstance))
             {
                 _registeredRpcInstance = routedRpc; // guarded by reference, so a reconnect's fresh instance re-registers
-                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay);
+                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage);
             }
 
             if (FireConfig.ExtinguishKey.Value.IsDown())
@@ -741,6 +741,7 @@ namespace FireFront.Fire
             FlushPendingPaint();
             FlushGroundFireSync();
             PruneFirebreakCache();
+            DamagePlayersInFire();
             AdoptOrphanedFires();
             PruneDeadEvents();
             ProcessSmouldering();
@@ -829,6 +830,19 @@ namespace FireFront.Fire
         {
             if (!ValheimBridge.IsServer()) return;
             FireFront.Commands.FireDevCommands.ApplyRemote(sender, key, raw);
+        }
+
+        /// <summary>
+        /// This machine is being told by the server that its own player is standing in fire.
+        /// Applying it here is the point: burning is vanilla's status effect on a live Character,
+        /// and this is the only machine that has one for this player.
+        /// </summary>
+        private void HandleFireDamage(long sender, float damage)
+        {
+            // Only the server may set a player alight. Routed RPCs can be addressed peer to peer,
+            // and without this any client could burn any other client at will.
+            if (!ValheimBridge.IsFromServer(sender)) return;
+            ValheimBridge.ApplyFireDamageToLocalPlayer(damage);
         }
 
         /// <summary>Server side of a client's firestatus: reply to THAT peer with the real line.</summary>
@@ -2415,6 +2429,69 @@ namespace FireFront.Fire
         /// eight regrown trees reignited within seconds of spawning, since ground fire routinely
         /// outlives the 900 s regrowth timer.
         /// </summary>
+        /// <summary>
+        /// Burns every player standing in fire, on their own machine.
+        ///
+        /// This replaces asking physics. `FireBurnZone` polls Physics.OverlapSphere, which on a
+        /// dedicated server finds trees and scenery near a fire and NEVER finds a player, because
+        /// the server holds no instance or collider where players are - only ZDOs. Fire therefore
+        /// never hurt anyone on a dedicated server from 0.1 to 0.21.7, silently, while working
+        /// fine on a world someone hosted themselves. Reported by Wu'barrk 2026-09-19 and proved
+        /// from two servers' logs: the zone's own diagnostics recorded colliders found and a
+        /// Character resolved exactly zero times.
+        ///
+        /// A player's position IS in the ZDO layer and always readable, so the server decides who
+        /// is burning and the player's own machine carries it out - the same division this mod
+        /// already uses for ignition.
+        /// </summary>
+        private void DamagePlayersInFire()
+        {
+            if (!FireConfig.FireHurtsEnabled.Value) return;
+            if (_burning.Count == 0 && _groundBurning.Count == 0) return;
+
+            // Its own clock, not the spread cycle's: the damage interval is a player-facing number
+            // and should not change because someone tuned how often fire thinks about spreading.
+            float now = Time.time;
+            if (now < _nextPlayerDamageTick) return;
+            _nextPlayerDamageTick = now + Mathf.Max(0.1f, FireConfig.FireDamageTickInterval.Value);
+
+            float damage = FireConfig.FireDamagePerTick.Value;
+            float objRadius = FireConfig.FireHurtsObjectRadius.Value;
+
+            // The host's own player on a listen server is a local object, so it is burned directly
+            // rather than posted to itself.
+            Vector3? localPos = ValheimBridge.LocalPlayerPosition();
+            if (localPos.HasValue && IsStandingInFire(localPos.Value, objRadius))
+                ValheimBridge.ApplyFireDamageToLocalPlayer(damage);
+
+            if (!ValheimBridge.CollectPlayerTargets(_playerTargetScratch)) return;
+            for (int i = 0; i < _playerTargetScratch.Count; i++)
+            {
+                ValheimBridge.PlayerTarget t = _playerTargetScratch[i];
+                if (!IsStandingInFire(t.Position, objRadius)) continue;
+                ValheimBridge.SendFireDamageToPeer(t.PeerId, damage);
+                FireLogger.Debug($"[BURN] {t.Name} is standing in fire at {t.Position} — {damage} sent to their machine.");
+            }
+        }
+
+        /// <summary>
+        /// True if this position is inside a burning ground cell, or within <paramref name="objRadius"/>
+        /// of a burning object. The same two questions the physics zone used to answer, asked of
+        /// data that exists on every machine instead of colliders that exist on almost none.
+        /// </summary>
+        private bool IsStandingInFire(Vector3 pos, float objRadius)
+        {
+            if (_groundBurning.ContainsKey(KeyOf(pos))) return true;
+
+            float radiusSqr = objRadius * objRadius;
+            foreach (BurningState st in _burning.Values)
+                if ((st.Position - pos).sqrMagnitude <= radiusSqr) return true;
+            return false;
+        }
+
+        private float _nextPlayerDamageTick;
+        private readonly List<ValheimBridge.PlayerTarget> _playerTargetScratch = new List<ValheimBridge.PlayerTarget>();
+
         private bool IsFireNear(Vector3 pos, float radius)
         {
             float size = Mathf.Max(0.5f, FireConfig.GroundCellSize.Value);

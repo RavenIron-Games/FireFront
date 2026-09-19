@@ -184,6 +184,26 @@ either, and withholding would re-run the migration on every boot forever. `fires
 `LastSummary`, which is written from the plan's INTENT before anything runs, so refusals have
 to be folded back into it or the one line an admin reads is confidently wrong.
 
+## 0.21.8 (2026-09-19): fire damage to players does NOT come from physics
+
+`Fire/FireBurnZone.cs` polls `Physics.OverlapSphere`. **On a dedicated server that never finds a
+player**, because there is no Character instance or collider where players are, only ZDOs — so
+fire never hurt anyone there from 0.1 to 0.21.7, silently, while working on a listen host. The
+zone's own staged diagnostics are what proved it: with DebugLogging on, `OverlapSphereNonAlloc
+found` fired 4 times (trees, `viewblock`) and `resolved a real Character` fired **0** times.
+
+Players are now found by `ValheimBridge.CollectPlayerTargets` (positions off `ZNetPeer.m_characterID`'s
+ZDO, peer id off `ZNetPeer.m_uid` — both genuinely public in the real 1.0.15 assembly) and burned
+by `FireFront_FireDamage`, a routed RPC the OWNING machine acts on, because vanilla's `SE_Burning`
+needs a live Character. `FireBurnZone` now skips players entirely so a listen host is not burned
+twice, and returns immediately when PlayerOnly is set. The client refuses the RPC unless it came
+from the server.
+
+**This is the third instance of one trap** (spread 0.17.4, regrowth 0.21.5, player damage 0.21.8).
+**Anything that reaches for physics, colliders or instances on the server is wrong by default** —
+see [[dedicated-server-is-headless-at-origin]]. Grep for `Physics.` and `FindObjectsOfType` before
+assuming a feature works on a dedicated server just because it works when you host.
+
 ## 0.21.7 (2026-09-18): the config sync, and why it had no admin gate
 
 **Do not add a client-side admin gate to the config sync.** 0.21.6 did, and the feature was a

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.21.8
+
+- **Fire has never hurt a player on a dedicated server. It does now.** Damage was applied by a
+  zone that polls the physics engine for characters standing near a fire. A dedicated server has
+  no terrain, no instances and no colliders where players actually are, only networked data, so
+  that poll found trees and scenery near the flames and never once found the player standing in
+  them. Silent the whole way: no error, no warning, and it worked fine on a world someone hosted
+  themselves, where their own character is a real local object. Reported by Wu'barrk, who stood
+  in a fire on a dedicated server and did not burn, and confirmed from two servers' logs, where
+  the zone's own staged diagnostics recorded colliders found four times and a character resolved
+  zero times.
+
+  The server now reads player positions from the networked data, which is always available, and
+  tells each player's own machine to set them alight, since vanilla's burning effect needs a live
+  character and only that machine has one. The same division of labour the mod already uses for
+  ignition. The physics zone keeps handling creatures wherever physics is real, and no longer
+  touches players at all, so a host cannot be burned twice. A client only accepts this from the
+  server, never from another player.
+
+  This is the third time the same trap has bitten: spread hit it in 0.17.4, tree regrowth in
+  0.21.5, and now player damage. Anything that reaches for physics or instances on the server is
+  wrong by default.
+
 ## 0.21.7
 
 - **The config-manager sync did not work at all, and said nothing about it.** 0.21.6 gated it

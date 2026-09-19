@@ -70,3 +70,10 @@ There are a few more diagnostic-only commands (`firelistprefabs`, `firecheckpref
 Please grab your `LogOutput.log` (BepInEx folder) and send it over, especially if you see a wall of red repeating errors. Screenshots of weird spread behavior are also genuinely useful — "this jumped way further than it should have" is easier to diagnose with a picture than a description. For wind specifically: a screenshot of a burn scar plus which way the wind was blowing is exactly the evidence we need.
 
 Thanks for testing — this thing has had a real rough-and-tumble development process (ask if you want the story), so any weirdness you catch now saves everyone a headache later.
+
+—
+
+**Credits**
+
+**Wu'barrk** — visual effects, and the config-migration machinery FireFront's own is built on, by way of Wings of the Valkyrie and Valkyrie's Cargo.
+

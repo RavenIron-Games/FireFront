@@ -44,6 +44,13 @@ namespace FireFront.Fire
 
         private void Update()
         {
+            // Players are NOT damaged from here any more (0.21.8). This polls Physics.OverlapSphere,
+            // and on a dedicated server there is no player Character to find - no instance, no
+            // collider, only a ZDO - so fire never hurt anyone there from 0.1 to 0.21.7. Players are
+            // now found from their ZDO positions by FireManager.DamagePlayersInFire and burned on
+            // their own machine. This zone keeps doing what it CAN do wherever physics is real:
+            // creatures, on a listen host. With PlayerOnly set there is nothing left for it at all.
+            if (PlayerOnly) return;
             if (Time.time < _nextPollTime) return;
             _nextPollTime = Time.time + 0.25f; // poll a few times per tick interval for responsiveness
 
@@ -72,7 +79,9 @@ namespace FireFront.Fire
                                       $"from an overlapping collider — detection path works end-to-end.");
                 }
 
-                if (PlayerOnly && !ValheimBridge.IsPlayerCharacter(character)) continue;
+                // Skipped even on a listen host, where this zone CAN see the local player, or the
+                // new server-side path and this one would both burn them - twice the damage.
+                if (ValheimBridge.IsPlayerCharacter(character)) continue;
 
                 if (_nextTickTime.TryGetValue(character, out float next) && Time.time < next) continue;
                 _nextTickTime[character] = Time.time + TickInterval;
