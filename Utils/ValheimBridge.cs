@@ -2281,6 +2281,24 @@ namespace FireFront.Utils
         {
             if (_cachedAdditiveMaterial != null) return _cachedAdditiveMaterial;
             if (_additiveUnavailable) return null;
+            _cachedAdditiveMaterial = CreateAdditiveParticleMaterial(GetOrCreateAdditiveParticleTexture(), callerName);
+            return _cachedAdditiveMaterial;
+        }
+
+        /// <summary>
+        /// Builds an additive particle material around YOUR texture, with the blend setup this mod
+        /// had to work out the hard way. Returns null if the build ships no usable additive shader,
+        /// which is the caller's cue to fall back rather than render nothing.
+        ///
+        /// Use this for anything that should read as FIRE. The alpha chain behind
+        /// <see cref="ResolveParticleShader"/> lands on Sprites/Default, which is alpha-blended:
+        /// correct for smoke, wrong for flame, because alpha particles occlude one another instead
+        /// of accumulating and a mass of them reads as separate orange discs. That is exactly what
+        /// 0.20.1 looked like in play.
+        /// </summary>
+        public static Material CreateAdditiveParticleMaterial(Texture2D texture, string callerName)
+        {
+            if (_additiveUnavailable) return null;
 
             string how = "Shader.Find";
             Shader shader = Shader.Find("Custom/Particle (Unlit)");
@@ -2300,7 +2318,7 @@ namespace FireFront.Utils
                 return null;
             }
 
-            var mat = new Material(shader) { mainTexture = GetOrCreateAdditiveParticleTexture() };
+            var mat = new Material(shader) { mainTexture = texture };
 
             // WHICH CHANNEL IS ALPHA. Custom/Particle (Unlit) exposes
             //   [Enum(Red,0,Green,1,Blue,2,Alpha,3)] _AlphaChannel = 0
@@ -2336,11 +2354,19 @@ namespace FireFront.Utils
             mat.SetFloat("_DstBlend", 1f); // One
             mat.SetFloat("_ZWrite", 0f);
             mat.renderQueue = 3000;        // Transparent
-            _cachedAdditiveMaterial = mat;
 
-            FireLogger.Info("[SHADER-DIAG] additive flame material built (_SrcBlend=5 SrcAlpha, _DstBlend=1 One, _ZWrite=0).");
-            return _cachedAdditiveMaterial;
+            FireLogger.Info($"[SHADER-DIAG] additive flame material built for {callerName} " +
+                            "(_SrcBlend=5 SrcAlpha, _DstBlend=1 One, _ZWrite=0).");
+            return mat;
         }
+
+        /// <summary>
+        /// The alpha-blended particle shader this build actually ships, or null. Public so callers
+        /// outside this file resolve it HERE rather than calling Shader.Find themselves: the first
+        /// four obvious candidates are all stripped from Valheim, and a name-based guess returns
+        /// null and renders nothing. See the remarks on the chain itself.
+        /// </summary>
+        public static Shader ResolveParticleShader() => FindUsableParticleShader();
 
         /// <summary>
         /// Takes a shader off a vanilla fire material that is already loaded,

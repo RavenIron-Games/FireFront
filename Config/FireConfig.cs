@@ -19,6 +19,7 @@ namespace FireFront.Config
         public static ConfigEntry<int> ConfigVersion;
         public static ConfigEntry<bool> VerboseLogging;
         public static ConfigEntry<bool> BurnTreesAndLogs;
+        public static ConfigEntry<float> TreeDestructionRate;
         public static ConfigEntry<bool> BurnPlayerBuildings;
         public static ConfigEntry<string> VfxPrefabName;
         public static ConfigEntry<bool> UseProceduralVfx;
@@ -352,6 +353,10 @@ namespace FireFront.Config
             BurnTreesAndLogs = config.Bind(
                 "Fire", "BurnTreesAndLogs", true,
                 "Standing trees and felled logs can catch fire and spread alongside structures.");
+
+            TreeDestructionRate = config.Bind(
+                "Fire", "TreeDestructionRate", 65f,
+                "Percentage chance (0-100) that a burning tree is fully destroyed. If it survives, it turns into a Burnt Tree.");
 
             BurnPlayerBuildings = config.Bind(
                 "Fire", "BurnPlayerBuildings", true,
