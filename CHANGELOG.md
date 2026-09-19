@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.21.15
+
+- **Burnt ground leaves a scar you can actually see.** On a dedicated server it never did. The
+  scorch mark was drawn only on the machine running the simulation, and that machine has no
+  screen - so the server quietly made about two thousand invisible ones every five minutes and
+  no player ever saw a single mark. Your game now draws its own as each patch of ground burns out.
+- **A new fire no longer starts at full strength.** Fire is supposed to build for its first few
+  minutes rather than exploding outward. That ramp was measured from one clock shared by the whole
+  world, which only restarted once every fire everywhere had gone out - so for as long as anything
+  was still burning, a fresh torch fire began at full reach with no ramp at all. Every fire now
+  has its own clock, which is what the concurrency limits had always used.
+- **The ground-fire visual limit finally applies to the machine doing the drawing.** It governed
+  the server, which on a dedicated server draws nothing, while your game drew every burning patch
+  with no ceiling whatsoever. If you had turned the limit down, or switched on the low-spec preset
+  to survive a big fire, neither reached you. Now they do.
+- Dedicated servers stop doing a large amount of work that could never produce anything: a damage
+  probe was attached to every burning object and every burning patch of ground, sweeping for
+  victims four times a second, in a place where the things it sweeps for do not exist.
+- Honest about a limit rather than pretending: **creatures do not take fire damage on a dedicated
+  server**, and never have. Finding them needs a physical world, which a dedicated server does not
+  have. Players burn everywhere, on their own machine, and are unaffected. The setting now says so.
+- An object that burned down could, if a piece of the game had moved under us, quietly survive
+  while everyone was told the fire went out. It now removes it anyway and says what happened.
+- `fireset` gains `waterblocks`, `maxkills` and `firesmoke`. All three drive real behaviour and
+  could not be reached from anywhere, despite the promise that every setting is live-tunable.
+- Corrected three settings' descriptions and the README's line about rain, all of which described
+  behaviour the mod no longer has. Rain now puts out buildings and trees too, not just grass.
+
 ## 0.21.14
 
 - Requires BepInExPack Valheim 5.4.2350, which is what this is actually built and tested against.

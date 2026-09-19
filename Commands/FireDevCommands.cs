@@ -47,7 +47,7 @@ namespace FireFront.Commands
                 args => FireDebug(args));
 
             new Terminal.ConsoleCommand("fireset",
-                "FireFront: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|enabled> <value>",
+                "FireFront: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|enabled> <value>",
                 args => FireSet(args));
 
             new Terminal.ConsoleCommand("firelistprefabs",
@@ -285,7 +285,7 @@ namespace FireFront.Commands
         {
             if (args.Length < 3)
             {
-                Say(args, "Usage: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|enabled> <value>");
+                Say(args, "Usage: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|enabled> <value>");
                 return;
             }
 
@@ -553,6 +553,22 @@ namespace FireFront.Commands
                     break;
                 case "groundleashdistance":
                     if (float.TryParse(raw, out float gld)) { FireConfig.GroundMaxSpreadDistance.Value = gld; Ok(args, key, FireConfig.GroundMaxSpreadDistance.Value); }
+                    else Bad(args, raw);
+                    break;
+                // These three are read by the simulation but were reachable from no route at all,
+                // which FireConfig's own "every value is live-settable" doc comment promised was
+                // impossible. maxkills echoes the read-back value, not the token: its bind clamps
+                // to 1..50, so the raw number would report a value the entry does not hold.
+                case "waterblocks":
+                    if (bool.TryParse(raw, out bool wbs)) { FireConfig.GroundWaterBlocksSpreadEnabled.Value = wbs; Ok(args, key, wbs); }
+                    else Bad(args, raw);
+                    break;
+                case "maxkills":
+                    if (int.TryParse(raw, out int mkc)) { FireConfig.MaxKillsPerCycle.Value = mkc; Ok(args, key, FireConfig.MaxKillsPerCycle.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "firesmoke":
+                    if (bool.TryParse(raw, out bool fsm)) { FireConfig.FireSmokeEnabled.Value = fsm; Ok(args, key, fsm); }
                     else Bad(args, raw);
                     break;
                 default:
@@ -920,6 +936,9 @@ namespace FireFront.Commands
                 { "treeregrowthseconds", FireConfig.TreeRegrowthSeconds },
                 { "groundleashenabled", FireConfig.GroundMaxSpreadDistanceEnabled },
                 { "groundleashdistance", FireConfig.GroundMaxSpreadDistance },
+                { "waterblocks", FireConfig.GroundWaterBlocksSpreadEnabled },
+                { "maxkills", FireConfig.MaxKillsPerCycle },
+                { "firesmoke", FireConfig.FireSmokeEnabled },
                 { "enabled", FireConfig.Enabled },
             };
             return _settable;

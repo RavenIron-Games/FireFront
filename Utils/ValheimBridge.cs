@@ -528,15 +528,29 @@ namespace FireFront.Utils
             switch (KindOf(target))
             {
                 case BurnKind.Piece:
-                    ClaimOwnershipIfNeeded(AsZNetView(WntNviewField, target));
-                    WntDestroyMethod?.Invoke(target, new object[] { null, false });
+                {
+                    ZNetView pieceNv = AsZNetView(WntNviewField, target);
+                    ClaimOwnershipIfNeeded(pieceNv);
+                    if (WntDestroyMethod != null) WntDestroyMethod.Invoke(target, new object[] { null, false });
+                    else LogKillReflectionFailureOnce("WearNTear.Destroy(HitData, bool)");
+                    // The same fallback the Tree branch has always had. Without it a failed
+                    // reflection lookup was completely silent: the caller has already dropped its
+                    // bookkeeping and told every client the fire went out, so the object stays
+                    // standing and untouched while the mod believes it burned down.
+                    if (IsAlive(target) && pieceNv != null) pieceNv.Destroy();
                     break;
+                }
 
                 case BurnKind.Log:
-                    ClaimOwnershipIfNeeded(AsZNetView(LogNviewField, target));
+                {
+                    ZNetView logNv = AsZNetView(LogNviewField, target);
+                    ClaimOwnershipIfNeeded(logNv);
                     // cheatedTool: false — 1.0.7's added parameter; false is the honest path.
-                    LogDestroyMethod?.Invoke(target, new object[] { null, false });
+                    if (LogDestroyMethod != null) LogDestroyMethod.Invoke(target, new object[] { null, false });
+                    else LogKillReflectionFailureOnce("TreeLog.Destroy(HitData, bool)");
+                    if (IsAlive(target) && logNv != null) logNv.Destroy();
                     break;
+                }
 
                 case BurnKind.Tree:
                     // 0.2.3 used ZNetScene.Destroy(gameObject) here directly, which
@@ -572,6 +586,21 @@ namespace FireFront.Utils
                     }
                     break;
             }
+        }
+
+        private static readonly HashSet<string> _killFailuresLogged = new HashSet<string>();
+
+        /// <summary>
+        /// Says so, once, when a burn-down could not use vanilla's own destruction path. This
+        /// used to be a bare `?.Invoke` with no else branch, which meant a reflection break
+        /// showed up as objects that burned in the log and never moved in the world.
+        /// </summary>
+        private static void LogKillReflectionFailureOnce(string member)
+        {
+            if (!_killFailuresLogged.Add(member)) return;
+            FireLogger.Warn($"Could not resolve {member}, so burnt-down objects of that kind are being " +
+                            "removed through ZNetView.Destroy instead. They still disappear; their drops " +
+                            "may differ from a normal destruction.");
         }
 
         private static void ClaimOwnershipIfNeeded(ZNetView nv)
@@ -1834,6 +1863,38 @@ namespace FireFront.Utils
         private static readonly MethodInfo EnvManGetWindIntensityMethod =
             typeof(EnvMan).GetMethod("GetWindIntensity", AnyInstance, null, new System.Type[0], null);
         private static bool _windIntensityFailureLogged;
+        private static int _windFrame = -1;
+        private static Vector3? _windDirCache;
+        private static float? _windIntensityCache;
+
+        /// <summary>
+        /// Wind is ONE global value that cannot change within a frame, but every caller was
+        /// paying a reflected static-field read plus a reflected Invoke for it, each boxing its
+        /// result: IgniteAdjacentGroundCells once per burning ground cell per spread cycle, and
+        /// the VFX controllers once per burning object per frame. Memoizing on Time.frameCount is
+        /// behaviour-identical and fixes every caller without any of them having to change.
+        /// </summary>
+        private static void RefreshWindCache()
+        {
+            if (Time.frameCount == _windFrame) return;
+            _windFrame = Time.frameCount;
+            _windDirCache = GetWindDirectionUncached();
+            _windIntensityCache = GetWindIntensityUncached();
+        }
+
+        /// <summary>Current wind direction, memoized for this frame. See RefreshWindCache.</summary>
+        public static Vector3? GetWindDirection()
+        {
+            RefreshWindCache();
+            return _windDirCache;
+        }
+
+        /// <summary>Current wind strength, memoized for this frame. See RefreshWindCache.</summary>
+        public static float? GetWindIntensity()
+        {
+            RefreshWindCache();
+            return _windIntensityCache;
+        }
 
         /// <summary>
         /// Current wind direction per vanilla's own EnvMan state, or null if EnvMan
@@ -1841,7 +1902,7 @@ namespace FireFront.Utils
         /// against the publicized DLL: EnvMan.s_instance is a public static field,
         /// GetWindDir() is a public parameterless instance method returning Vector3.
         /// </summary>
-        public static Vector3? GetWindDirection()
+        private static Vector3? GetWindDirectionUncached()
         {
             object instance = EnvManInstanceField?.GetValue(null);
             if (instance == null || EnvManGetWindDirMethod == null) return null;
@@ -1860,7 +1921,7 @@ namespace FireFront.Utils
         /// pre-UpdateWind initial value IS 0 though, so callers should treat 0 as
         /// "no wind data yet" rather than as a real calm reading.
         /// </summary>
-        public static float? GetWindIntensity()
+        private static float? GetWindIntensityUncached()
         {
             object instance = EnvManInstanceField?.GetValue(null);
             if (instance == null || EnvManGetWindIntensityMethod == null)

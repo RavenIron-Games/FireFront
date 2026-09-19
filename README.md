@@ -52,7 +52,7 @@ On a dedicated server, **the server needs the dll too** — it runs the simulati
 A large fire is meant to be fightable rather than something you stand beside and hope.
 
 - **Dirt paths, cultivated ground and water are real firebreaks.** This protects a base more than you would expect: the levelled, pathed ground most bases sit on counts as fuel-free, so a wildfire burns to the edge of the yard and stalls. Walls only catch if fire starts inside the perimeter. If it looks like fire cannot touch your buildings, that is your groundwork doing its job.
-- **Rain douses grass fire.** A building already alight keeps burning.
+- **Rain douses fire, buildings included.** A burner caught in the rain stops passing fire on immediately and burns out in about a third of its normal time. Rain stops *spread*, not ignition — a torch, a fire arrow or lightning still lights something in a downpour.
 - **Press `G`** to extinguish what you are looking at plus the fire around you, ground fire and burning structures alike.
 - **The Dousing Bomb** puts out everything within about 6 m of where it lands. Hand-craftable anywhere and cheap on purpose: 3 Resin + 2 Leather scraps makes 3.
 - Anything extinguished stays soaked for about 90 seconds and cannot relight, so a line of bombs cuts a real break ahead of the front instead of the fire refilling the hole behind you.

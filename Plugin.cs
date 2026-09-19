@@ -12,19 +12,11 @@ namespace FireFront
     {
         public const string GUID = "com.raveniron.firefront";
         public const string NAME = "FireFront";
-        public const string VERSION = "0.21.14";
+        public const string VERSION = "0.21.15";
 
         public static Plugin Instance { get; private set; }
 
         private Harmony _harmony;
-
-        // TEMPORARY DIAGNOSTIC — remove alongside the matching one in
-        // FireManager.TryIgnite once the server-authority question is settled.
-        // ZNet.instance doesn't exist yet at Awake() (world not loaded), so this
-        // polls in Update() and logs once as soon as it appears — giving a clear
-        // "this peer is a server / this peer is a client" line near the top of
-        // each connected peer's log, to correlate against TryIgnite call counts.
-        private bool _authorityLogged;
 
         private void Awake()
         {
@@ -44,14 +36,6 @@ namespace FireFront
             _harmony.PatchAll();
 
             FireLogger.Info($"{NAME} {VERSION} loaded.");
-        }
-
-        private void Update()
-        {
-            if (_authorityLogged || ZNet.instance == null) return;
-            _authorityLogged = true;
-            FireLogger.Info($"[AUTHORITY-CHECK] ZNet.instance ready — IsServer={ZNet.instance.IsServer()}, " +
-                             $"peer={SystemInfo.deviceUniqueIdentifier}");
         }
 
         private void OnDestroy()

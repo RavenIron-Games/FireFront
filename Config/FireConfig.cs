@@ -436,7 +436,12 @@ namespace FireFront.Config
             GroundSpreadRadius = config.Bind(
                 "Ground", "GroundSpreadRadius", 4f,
                 new ConfigDescription(
-                    "Max distance (meters) a burning ground cell or object can ignite nearby ground cells.",
+                    "Max distance (meters) for object<->ground ignition: how far a burning tree, log " +
+                    "or piece seeds ground cells around itself, and how far a burning ground cell " +
+                    "reaches out to ignite nearby objects. It does NOT set the ground-to-ground crawl " +
+                    "distance - a burning cell only ever lights its 8 immediate neighbours - so raising " +
+                    "this does not make a grass front advance faster. That pace is one GroundCellSize " +
+                    "per SpreadCheckInterval, throttled by GroundMaxConcurrent.",
                     new AcceptableValueRange<float>(1f, 20f)));
 
             GroundBurnDurationSeconds = config.Bind(
@@ -488,15 +493,23 @@ namespace FireFront.Config
 
             FireHurtsEnabled = config.Bind(
                 "Damage", "FireHurtsEnabled", true,
-                "Standing in fire (object or ground) actually deals damage, via vanilla's own " +
-                "burn-check system (EffectArea/Type.Burning) — the same mechanism real campfires " +
-                "use. Independent of visuals: still works even if VfxPrefabName/UseProceduralVfx " +
-                "are both off, so turning off effects for performance doesn't silently disable this.");
+                "Standing in fire (object or ground) actually deals damage. Finding you is this " +
+                "mod's own job - players are located from their ZDO positions and burned on their " +
+                "own machine, creatures by a proximity poll wherever real physics exists. The damage " +
+                "itself is vanilla's: the real Burning status effect, the same one a campfire " +
+                "applies. (Vanilla's own EffectArea/Type.Burning was tried first and never fired " +
+                "once; FireBurnZone's history comment records why.) Independent of visuals: still " +
+                "works even if VfxPrefabName/UseProceduralVfx are both off, so turning off effects " +
+                "for performance doesn't silently disable this.");
 
             FireHurtsPlayerOnly = config.Bind(
                 "Damage", "FireHurtsPlayerOnly", false,
                 "If true, only players take damage from fire — creatures/mobs are unaffected. " +
-                "Default false: fire hurts anything standing in it, players and mobs alike.");
+                "Default false: fire hurts anything standing in it, players and mobs alike. " +
+                "Creature damage needs real physics to find them, which exists in single-player and " +
+                "in a listen host's own view but NOT on a dedicated server, where there are ZDOs and " +
+                "no colliders - so mobs do not burn there whatever this is set to. Players burn " +
+                "everywhere; they have their own path and do not depend on this.");
 
             FireHurtsObjectRadius = config.Bind(
                 "Damage", "FireHurtsObjectRadius", 2f,

@@ -1098,20 +1098,6 @@ namespace FireFront.Fire
         /// </summary>
         public void TryIgnite(Component target, long igniterPlayerId)
         {
-            // TEMPORARY DIAGNOSTIC — remove once the server-authority question is
-            // settled. Purpose: FireManager has no ZNet.instance.IsServer() gating
-            // anywhere, so every peer with this mod loaded runs its own independent
-            // simulation from whatever triggers TryIgnite. If RPC_Damage (the only
-            // ignition trigger) executes on every connected peer rather than just
-            // the object's owner, this line will fire once per peer for a single
-            // hit — confirming duplicate simulation. Compare counts across the
-            // dedicated server's log and each connected client's log for the same
-            // ignition event.
-            bool? isServer = ZNet.instance != null ? ZNet.instance.IsServer() : (bool?)null;
-            FireLogger.Debug($"[AUTHORITY-CHECK] TryIgnite called on {ValheimBridge.NameOf(target)} " +
-                              $"— IsServer={(isServer.HasValue ? isServer.Value.ToString() : "ZNet.instance null")}, " +
-                              $"peer={SystemInfo.deviceUniqueIdentifier}");
-
             if (!FireConfig.Enabled.Value) return;
             if (!ValheimBridge.IsAlive(target)) return;
             if (!ValheimBridge.IsBurnable(target)) return;
@@ -1845,7 +1831,17 @@ namespace FireFront.Fire
             // ZDO positions server-side instead. Spawning them anyway cost a GameObject, a
             // Collider[16] and a no-op Update dispatch per burning cell - up to 2000 of them
             // on a headless server during a big fire, every frame, for nothing.
-            bool wantDamage = FireConfig.FireHurtsEnabled.Value && !FireConfig.FireHurtsPlayerOnly.Value;
+            // ...and on a dedicated server there is nothing for it to FIND either. FireBurnZone
+            // polls Physics.OverlapSphere, and a headless server has no colliders where players or
+            // creatures are - only ZDOs. 0.21.8 measured it resolving a Character exactly zero
+            // times. Building the zone anyway cost a GameObject, a Collider[16] and a poll every
+            // 0.25s per burning cell and per burning object, for the life of every fire, for
+            // nothing. Creatures still burn wherever physics is real: single-player, and a listen
+            // host's own view. Players are unaffected either way - they have not come through this
+            // path since 0.21.8.
+            bool wantDamage = FireConfig.FireHurtsEnabled.Value
+                              && !FireConfig.FireHurtsPlayerOnly.Value
+                              && !ValheimBridge.IsDedicatedServer();
             // A dedicated server has no camera and nobody to show a particle to, yet it built one
             // per burning cell and per burning object and then simulated them all. Clients render
             // for themselves from the sync deltas; this machine was rendering to nothing. Only the
@@ -2039,7 +2035,17 @@ namespace FireFront.Fire
             // ZDO positions server-side instead. Spawning them anyway cost a GameObject, a
             // Collider[16] and a no-op Update dispatch per burning cell - up to 2000 of them
             // on a headless server during a big fire, every frame, for nothing.
-            bool wantDamage = FireConfig.FireHurtsEnabled.Value && !FireConfig.FireHurtsPlayerOnly.Value;
+            // ...and on a dedicated server there is nothing for it to FIND either. FireBurnZone
+            // polls Physics.OverlapSphere, and a headless server has no colliders where players or
+            // creatures are - only ZDOs. 0.21.8 measured it resolving a Character exactly zero
+            // times. Building the zone anyway cost a GameObject, a Collider[16] and a poll every
+            // 0.25s per burning cell and per burning object, for the life of every fire, for
+            // nothing. Creatures still burn wherever physics is real: single-player, and a listen
+            // host's own view. Players are unaffected either way - they have not come through this
+            // path since 0.21.8.
+            bool wantDamage = FireConfig.FireHurtsEnabled.Value
+                              && !FireConfig.FireHurtsPlayerOnly.Value
+                              && !ValheimBridge.IsDedicatedServer();
             if (!wantVisual && !wantDamage) return;
 
             GameObject instance = null;
@@ -3087,6 +3093,20 @@ namespace FireFront.Fire
                 int x = pkg.ReadInt();
                 int z = pkg.ReadInt();
                 var key = new GroundCellKey(x, z);
+
+                // Burnt ground leaves a scar - a thing the README has promised players for a long
+                // time and that, on a dedicated server, none of them has ever seen: the decal is
+                // not networked, and the only machine that drew one was the one simulating. The
+                // client already holds everything needed to draw its own. It recorded this cell's
+                // height when it ignited, and this is the moment the cell went out.
+                if (FireConfig.EffectiveScorchMarksEnabled &&
+                    _remoteGroundCells.TryGetValue(key, out float scorchY))
+                {
+                    ValheimBridge.SpawnScorchMark(CellCenter(key, scorchY),
+                        FireConfig.GroundCellSize.Value * 1.5f,
+                        FireConfig.ScorchMarkLifetimeSeconds.Value);
+                }
+
                 _remoteGroundCells.Remove(key);
                 _remoteVfxQueuedKeys.Remove(key); // expired before it ever spawned — drop it from the queue
                 RemoveRemoteGroundVfxFor(key);
@@ -3102,9 +3122,33 @@ namespace FireFront.Fire
 
         private void DrainRemoteVfxSpawnQueue()
         {
+            // GroundVfxMaxConcurrent governs SpawnGroundVfxFor, which is gated on
+            // !IsDedicatedServer() - so on a real dedicated server it governed nothing, and the
+            // client mirror below drew every synced cell with NO ceiling at all. The admin's cap
+            // never reached the machine actually rendering, and LowSpec's clamp of 10 never
+            // reached the players most likely to need it.
+            int cap = FireConfig.EffectiveGroundVfxMaxConcurrent;
+            if (cap <= 0)
+            {
+                // Ground visuals off entirely. Nothing will ever drain, so do not let the queue
+                // grow for the life of the session. Warmth and damage read _remoteGroundCells,
+                // not the VFX, so turning this to 0 still only changes what you see.
+                _remoteVfxSpawnQueue.Clear();
+                _remoteVfxQueuedKeys.Clear();
+                return;
+            }
+
             int spawned = 0;
             while (_remoteVfxSpawnQueue.Count > 0 && spawned < RemoteVfxSpawnsPerFrame)
             {
+                // BREAK, do not pop. Popping would drop the key from _remoteVfxQueuedKeys and
+                // SpawnRemoteGroundVfxFor would never be asked for that cell again - the client
+                // has no equivalent of UpgradeDarkGroundCells, so a discarded cell would stay
+                // dark until it expired. That is precisely the permanently patchy front 0.21.9
+                // fixed on the server side. Left queued, it retries for free next frame as
+                // expiries free headroom.
+                if (_remoteGroundVfx.Count >= cap) break;
+
                 (GroundCellKey key, Vector3 pos) = _remoteVfxSpawnQueue[_remoteVfxSpawnQueue.Count - 1];
                 _remoteVfxSpawnQueue.RemoveAt(_remoteVfxSpawnQueue.Count - 1);
                 if (!_remoteVfxQueuedKeys.Remove(key)) continue; // expired while queued
@@ -3274,7 +3318,12 @@ namespace FireFront.Fire
                 _groundPainted.Add(key);
             }
 
-            if (!FireConfig.EffectiveScorchMarksEnabled) return;
+            // A scorch mark is a bare mesh with no ZNetView, so it has never replicated to
+            // anyone - the machine running the simulation was the only one that ever saw one.
+            // On a dedicated server that machine draws nothing at all, so this built roughly
+            // 1,875 invisible GameObjects per five minutes at stock settings. Clients now spawn
+            // their own from the sync stream instead; see the expiry loop in HandleGroundFireSync.
+            if (!FireConfig.EffectiveScorchMarksEnabled || ValheimBridge.IsDedicatedServer()) return;
             float size = FireConfig.GroundCellSize.Value * 1.5f;
             ValheimBridge.SpawnScorchMark(position, size, FireConfig.ScorchMarkLifetimeSeconds.Value);
         }
@@ -3349,10 +3398,15 @@ namespace FireFront.Fire
         {
             if (_burning.Count == 0 && _groundBurning.Count == 0) return;
 
-            float ramp = GetRampFraction();
-            float effectiveSpreadRadius = FireConfig.EffectiveSpreadRadius * ramp;
-            float objRadiusSqr = effectiveSpreadRadius * effectiveSpreadRadius;
-            float groundRadius = FireConfig.EffectiveGroundSpreadRadius * ramp;
+            // The ramp is PER EVENT and so is the reach it scales. This used to call the
+            // parameterless GetRampFraction(), which reads one global clock that only resets when
+            // every fire on the server is out - so while any long-lived fire burned, a brand-new
+            // torch fire started at FULL spread radius and the anti-explosion ramp was silently
+            // off. The per-event overload was already used correctly for the concurrency caps;
+            // reach now matches it, computed inside the loops from the id already in hand.
+            //
+            // This one stays global on purpose: it sizes a diagnostic log line, nothing else.
+            float diagnosticRadius = FireConfig.EffectiveSpreadRadius * GetRampFraction();
 
             // Candidate picture is CACHED, not rebuilt per cycle. Rebuilding ran
             // three FindObjectsOfType scene scans plus the ZDO sector sweep every
@@ -3370,7 +3424,7 @@ namespace FireFront.Fire
                 BuildCandidateList();
                 RebuildCandidateGrids();
             }
-            LogSpreadCandidateDiagnostic(objRadiusSqr);
+            LogSpreadCandidateDiagnostic(diagnosticRadius * diagnosticRadius);
 
             // --- object burners: ignite nearby objects + seed nearby ground cells ---
             // Uses the cached Position from BurningState directly — no live
@@ -3396,6 +3450,12 @@ namespace FireFront.Fire
             {
                 if (!_burning.TryGetValue(burnerId, out BurningState burnerState)) continue;
                 if (Time.time - burnerState.IgnitedAt < maturitySeconds) continue;
+
+                float ramp = GetRampFraction(burnerState.EventId);
+                float effectiveSpreadRadius = FireConfig.EffectiveSpreadRadius * ramp;
+                float objRadiusSqr = effectiveSpreadRadius * effectiveSpreadRadius;
+                float groundRadius = FireConfig.EffectiveGroundSpreadRadius * ramp;
+
                 Vector3 origin = burnerState.Position;
                 // Rain on the burner stops it passing fire on at all - objects, ZDO
                 // candidates and ground seeds alike. It keeps burning (faster; see
@@ -3436,8 +3496,10 @@ namespace FireFront.Fire
                 _groundScratch.AddRange(_groundBurning.Keys);
                 foreach (GroundCellKey key in _groundScratch)
                 {
-                    float y = _groundBurning[key].Y;
+                    GroundCellState cellState = _groundBurning[key];
+                    float y = cellState.Y;
                     Vector3 origin = CellCenter(key, y);
+                    float groundRadius = FireConfig.EffectiveGroundSpreadRadius * GetRampFraction(cellState.EventId);
 
                     IgniteAdjacentGroundCells(key, y);
 
@@ -3460,7 +3522,7 @@ namespace FireFront.Fire
                         TryIgnite(candidate);
                     }
 
-                    IgniteZdoCandidatesNear(origin, groundRadius, _groundBurning[key].EventId);
+                    IgniteZdoCandidatesNear(origin, groundRadius, cellState.EventId);
                 }
             }
         }
