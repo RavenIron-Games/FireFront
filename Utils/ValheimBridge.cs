@@ -1414,8 +1414,32 @@ namespace FireFront.Utils
         private static bool _groundHeightLoggedOnce;
         private static bool _terrainLayerMaskLoggedOnce;
 
-        public static float GetGroundHeight(Vector3 xzPosition)
+        // WorldGenerator computes terrain height ANALYTICALLY - it is what generates the terrain in
+        // the first place - so unlike every collider-based route it works perfectly on a headless
+        // server. Reflected for the usual reason. Verified public in the shipping SERVER assembly:
+        // `public static WorldGenerator instance` and `public float GetHeight(float wx, float wy)`.
+        private static readonly PropertyInfo WorldGeneratorInstanceProp =
+            typeof(WorldGenerator).GetProperty("instance", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly MethodInfo WorldGeneratorGetHeightMethod =
+            typeof(WorldGenerator).GetMethod("GetHeight", AnyInstance, null, new[] { typeof(float), typeof(float) }, null);
+        private static bool _worldGenHeightLoggedOnce;
+
+        public static float GetGroundHeight(Vector3 xzPosition) => GetGroundHeight(xzPosition, out _);
+
+        /// <summary>
+        /// The ground height under a point, and - the reason this overload exists - whether that is a
+        /// REAL measurement or just the input handed back.
+        ///
+        /// The distinction is not academic. Both collider routes below need terrain colliders, a
+        /// dedicated server has none, and both then quietly return their own input: 14,518 misses and
+        /// zero hits in one logged session. Every caller that stored the result was storing the height
+        /// of whatever started the fire. 0.21.9 then hung a 1m vertical damage band off that value and
+        /// silently disarmed fire damage on exactly the platform 0.21.8 had just fixed it for.
+        /// So: measure properly where we can, and where we cannot, SAY SO.
+        /// </summary>
+        public static float GetGroundHeight(Vector3 xzPosition, out bool sampled)
         {
+            sampled = true;
             if (!_terrainLayerMaskLoggedOnce)
             {
                 _terrainLayerMaskLoggedOnce = true;
@@ -1441,13 +1465,10 @@ namespace FireFront.Utils
                 return hit.point.y;
             }
 
-            FireLogger.Debug($"[IGNITE-TRACE] GetGroundHeight: raycast against 'terrain' layer found nothing at " +
-                              $"({xzPosition.x:F1},{xzPosition.z:F1}) — falling back to the reflected ZoneSystem call.");
-
             object instance = ZoneSystemInstanceField?.GetValue(null);
             if (instance == null || ZoneSystemGetGroundHeightMethod == null)
             {
-                return xzPosition.y;
+                return WorldGenHeight(xzPosition, out sampled);
             }
 
             Vector3 queryPoint = new Vector3(xzPosition.x, 10000f, xzPosition.z);
@@ -1463,10 +1484,53 @@ namespace FireFront.Utils
 
             if (!(result is float f) || f > 9000f)
             {
-                return xzPosition.y;
+                // ZoneSystem.GetGroundHeight is itself just that same raycast with a fallback of
+                // "return the query point's own y" (decompiled from the shipping assembly), and we
+                // pass 10000f in, so this branch IS the headless case every time.
+                return WorldGenHeight(xzPosition, out sampled);
             }
 
             return f;
+        }
+
+        /// <summary>
+        /// The last resort that actually works headless. Returns the generated terrain height, which
+        /// ignores player terraforming - close enough to place fire, and immeasurably better than the
+        /// alternative of handing back the height of whatever object started the fire.
+        /// </summary>
+        private static float WorldGenHeight(Vector3 xzPosition, out bool sampled)
+        {
+            sampled = false;
+            if (WorldGeneratorInstanceProp == null || WorldGeneratorGetHeightMethod == null) return xzPosition.y;
+
+            object gen = WorldGeneratorInstanceProp.GetValue(null);
+            if (gen == null) return xzPosition.y; // world not generated yet
+
+            try
+            {
+                object h = WorldGeneratorGetHeightMethod.Invoke(gen, new object[] { xzPosition.x, xzPosition.z });
+                if (!(h is float f) || float.IsNaN(f) || float.IsInfinity(f)) return xzPosition.y;
+
+                if (!_worldGenHeightLoggedOnce)
+                {
+                    _worldGenHeightLoggedOnce = true;
+                    FireLogger.Debug($"[IGNITE-TRACE] GetGroundHeight: no terrain colliders here, so heights come " +
+                                      $"from WorldGenerator instead — {f:F2} at ({xzPosition.x:F1},{xzPosition.z:F1}), " +
+                                      $"against an inherited input y of {xzPosition.y:F2}.");
+                }
+                sampled = true;
+                return f;
+            }
+            catch (System.Exception ex)
+            {
+                if (!_worldGenHeightLoggedOnce)
+                {
+                    _worldGenHeightLoggedOnce = true;
+                    FireLogger.Warn($"Could not read terrain height from WorldGenerator ({ex.Message}); fire will be " +
+                                    "placed at the height of whatever lit it, and ground fire will not check height.");
+                }
+                return xzPosition.y;
+            }
         }
 
         // Same publicized-DLL-vs-real-assembly caution as everywhere else in
@@ -3167,6 +3231,25 @@ namespace FireFront.Utils
         /// handshake, so "ZNet is up" is NOT the same question and answering it instead loses
         /// whatever is sent in between.
         /// </summary>
+        // Reflected for the usual reason - a publicized DLL's access flags have lied about methods
+        // in this file before, and this one is called from the VFX path where a throw would be
+        // noisy. Failing to resolve it returns false, which means "build visuals as before": the
+        // fallback is the old behaviour, never a silent loss of fire on someone's screen.
+        private static readonly MethodInfo ZNetIsDedicatedMethod =
+            typeof(ZNet).GetMethod("IsDedicated", AnyInstance, null, System.Type.EmptyTypes, null);
+
+        /// <summary>
+        /// True only on a real dedicated server: a machine with no camera, no player and nobody to
+        /// show a particle to. A listen host is NOT dedicated and must keep its visuals.
+        /// </summary>
+        public static bool IsDedicatedServer()
+        {
+            ZNet net = ZNet.instance;
+            if (net == null || ZNetIsDedicatedMethod == null) return false;
+            try { return (bool)ZNetIsDedicatedMethod.Invoke(net, null); }
+            catch { return false; }
+        }
+
         public static bool CanReachServer() => !IsServer() && ZRoutedRpc.instance != null && GetServerPeerId() != 0L;
 
         private static long GetServerPeerId()
@@ -3215,6 +3298,7 @@ namespace FireFront.Utils
         private const string RpcStatusResponse = "FireFront_StatusResponse";
         private const string RpcCommandRelay = "FireFront_CommandRelay";
         private const string RpcFireDamage = "FireFront_FireDamage";
+        private const string RpcGroundSyncRequest = "FireFront_GroundSyncRequest";
 
         /// <summary>Client → server: run this whitelisted dev command there; replies stream back on the status-response channel.</summary>
         public static void SendCommandRelayToServer(string commandLine)
@@ -3286,6 +3370,15 @@ namespace FireFront.Utils
             public string Name;
         }
 
+        // Reflected, and ONLY this one needs to be. ZNet.m_peers is `private readonly` in the
+        // shipping assembly; the publicized libs\ copy declares it public, so 0.21.8 first read it
+        // directly and Mono threw FieldAccessException once per cycle on the real server, taking
+        // the rest of the fire tick down with it. I had "checked the decompile" - of the publicized
+        // file, not the shipping one. Same trap as ObjectDB.m_itemByHash in 0.17.5. ZNetPeer's own
+        // members below ARE public in the shipping assembly (ilspycmd on the server's DLL, 1.0.12).
+        private static readonly FieldInfo ZNetPeersField = typeof(ZNet).GetField("m_peers", AnyInstance);
+        private static bool _playerTargetsFailureLogged;
+
         /// <summary>
         /// Every connected REMOTE player's character position, read straight off its ZDO, plus the
         /// peer id to route an RPC to. Excludes this machine's own player, which is a local object
@@ -3295,9 +3388,70 @@ namespace FireFront.Utils
         /// players actually are - only ZDOs - so Physics.OverlapSphere finds world scenery near a
         /// fire and never finds the player standing in it. FireFront's fire damage polled exactly
         /// that from 0.1 to 0.21.7, which is why fire never once hurt anyone on a dedicated server.
-        /// ZNet.m_peers and ZNetPeer.m_uid/m_characterID are genuinely public in the real 1.0.15
-        /// assembly (checked with ilspycmd, not trusted from the publicized DLL).
         /// </summary>
+        /// <summary>
+        /// Is this peer id one the server is actually connected to? A routed RPC's sender is read off
+        /// the wire and relayed unchanged, so it is a CLAIM, not an identity - anything that keys
+        /// state or work off it has to resolve it against the real peer list first.
+        /// </summary>
+        // Character.OnNearFire is public and virtual - Player overrides it and the whole body is
+        // `m_nearFireTimer = 0f`. Reflected anyway, on the same principle as everything else here,
+        // and the cost is irrelevant because this is called about five times a second, not per frame.
+        private static readonly MethodInfo CharacterOnNearFireMethod =
+            typeof(Character).GetMethod("OnNearFire", AnyInstance, null, new[] { typeof(Vector3) }, null);
+        private static bool _nearFireFailureLogged;
+
+        /// <summary>
+        /// Tells the local player they are beside a fire, using the SAME hook a campfire uses.
+        ///
+        /// Vanilla decides you are warm in Player.UpdateEnvStatusEffects from `m_nearFireTimer &lt;
+        /// 0.25f`, and both the Cold and the Freezing branches are gated on it. EffectArea does this
+        /// for real heat sources every frame they contain you. Going through the same door means
+        /// shelter, frost resistance and the wet/cold interaction all keep behaving exactly as they
+        /// do around a campfire, instead of us adding and removing status effects behind vanilla's
+        /// back and fighting it for control of them.
+        /// </summary>
+        public static void MarkLocalPlayerNearFire(Vector3 firePoint)
+        {
+            Player local = Player.m_localPlayer;
+            if (local == null || CharacterOnNearFireMethod == null)
+            {
+                if (local != null && !_nearFireFailureLogged)
+                {
+                    _nearFireFailureLogged = true;
+                    FireLogger.Warn("Could not find Character.OnNearFire, so standing in a wildfire will not keep " +
+                                    "you warm. Everything else about fire is unaffected.");
+                }
+                return;
+            }
+            try { CharacterOnNearFireMethod.Invoke(local, new object[] { firePoint }); }
+            catch (System.Exception ex)
+            {
+                if (!_nearFireFailureLogged)
+                {
+                    _nearFireFailureLogged = true;
+                    FireLogger.Warn($"Marking the player as near fire failed ({ex.Message}); wildfires will not keep " +
+                                    "you warm. Everything else about fire is unaffected.");
+                }
+            }
+        }
+
+        public static bool IsConnectedPeer(long peerId)
+        {
+            if (peerId == 0L) return false; // ZRoutedRpc.Everybody
+            ZNet net = ZNet.instance;
+            if (net == null || ZNetPeersField == null) return false;
+            try
+            {
+                var peers = ZNetPeersField.GetValue(net) as List<ZNetPeer>;
+                if (peers == null) return false;
+                for (int i = 0; i < peers.Count; i++)
+                    if (peers[i] != null && peers[i].m_uid == peerId) return true;
+            }
+            catch { }
+            return false;
+        }
+
         public static bool CollectPlayerTargets(List<PlayerTarget> into)
         {
             into.Clear();
@@ -3305,25 +3459,49 @@ namespace FireFront.Utils
             ZDOMan man = ZDOMan.instance;
             if (net == null || man == null) return false;
 
-            List<ZNetPeer> peers = net.m_peers;
-            if (peers == null) return false;
-
-            for (int i = 0; i < peers.Count; i++)
+            if (ZNetPeersField == null)
             {
-                ZNetPeer peer = peers[i];
-                if (peer == null || !peer.IsReady() || peer.m_characterID.IsNone()) continue;
-
-                ZDO zdo = man.GetZDO(peer.m_characterID);
-                if (zdo == null) continue;
-
-                into.Add(new PlayerTarget
+                if (!_playerTargetsFailureLogged)
                 {
-                    PeerId = peer.m_uid,
-                    Position = zdo.GetPosition(),
-                    Name = peer.m_playerName,
-                });
+                    _playerTargetsFailureLogged = true;
+                    FireLogger.Warn("Could not reach ZNet's peer list, so fire cannot find players to burn. " +
+                                    "A Valheim update has probably renamed it; fire still spreads and still burns objects.");
+                }
+                return false;
             }
-            return true;
+
+            try
+            {
+                var peers = ZNetPeersField.GetValue(net) as List<ZNetPeer>;
+                if (peers == null) return false;
+
+                for (int i = 0; i < peers.Count; i++)
+                {
+                    ZNetPeer peer = peers[i];
+                    if (peer == null || !peer.IsReady() || peer.m_characterID.IsNone()) continue;
+
+                    ZDO zdo = man.GetZDO(peer.m_characterID);
+                    if (zdo == null) continue; // just connected, or between zones
+
+                    into.Add(new PlayerTarget
+                    {
+                        PeerId = peer.m_uid,
+                        Position = zdo.GetPosition(),
+                        Name = string.IsNullOrEmpty(peer.m_playerName) ? "player" : peer.m_playerName,
+                    });
+                }
+                return true;
+            }
+            catch (System.Exception ex)
+            {
+                if (!_playerTargetsFailureLogged)
+                {
+                    _playerTargetsFailureLogged = true;
+                    FireLogger.Warn($"Reading the peer list to find players in fire failed: {ex.Message}. " +
+                                    "Fire still spreads and still burns objects.");
+                }
+                return false;
+            }
         }
 
         /// <summary>Server side: tell ONE peer to set its own player alight for a tick.</summary>
@@ -3425,7 +3603,8 @@ namespace FireFront.Utils
             System.Action<long> onStatusRequest,
             System.Action<long, string> onStatusResponse,
             System.Action<long, string> onCommandRelay,
-            System.Action<long, float> onFireDamage)
+            System.Action<long, float> onFireDamage,
+            System.Action<long> onGroundSyncRequest)
         {
             if (ZRoutedRpc.instance == null)
             {
@@ -3451,7 +3630,8 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.Register<string>(RpcStatusResponse, onStatusResponse);
                 ZRoutedRpc.instance.Register<string>(RpcCommandRelay, onCommandRelay);
                 ZRoutedRpc.instance.Register<float>(RpcFireDamage, onFireDamage);
-                FireLogger.Info($"[IGNITE-TRACE] All 8 FireFront RPCs registered successfully (IsServer={IsServer()}).");
+                ZRoutedRpc.instance.Register(RpcGroundSyncRequest, onGroundSyncRequest);
+                FireLogger.Info($"[IGNITE-TRACE] All 10 FireFront RPCs registered successfully (IsServer={IsServer()}).");
             }
             catch (System.Exception ex)
             {
@@ -3513,6 +3693,25 @@ namespace FireFront.Utils
         /// per second rather than one RPC per cell event, the same reasoning
         /// that drove the batched terrain-paint rewrite earlier.
         /// </summary>
+        /// <summary>Client -> server: "tell me every ground cell you have alight right now."</summary>
+        public static void RequestGroundSnapshot()
+        {
+            if (ZRoutedRpc.instance == null) return;
+            try { ZRoutedRpc.instance.InvokeRoutedRPC(GetServerPeerId(), RpcGroundSyncRequest); }
+            catch (System.Exception ex) { FireLogger.Debug($"RequestGroundSnapshot threw: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Server -> ONE peer, in the same wire format the periodic delta broadcast uses, so the
+        /// client needs no second handler and no second code path to get it wrong in.
+        /// </summary>
+        public static void SendGroundFireSyncTo(long targetPeer, ZPackage pkg)
+        {
+            if (ZRoutedRpc.instance == null) return;
+            try { ZRoutedRpc.instance.InvokeRoutedRPC(targetPeer, RpcGroundFireSync, pkg); }
+            catch (System.Exception ex) { FireLogger.Debug($"SendGroundFireSyncTo threw: {ex.Message}"); }
+        }
+
         public static void BroadcastGroundFireSync(ZPackage pkg)
         {
             if (ZRoutedRpc.instance == null) return;

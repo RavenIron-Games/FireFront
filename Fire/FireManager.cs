@@ -44,6 +44,7 @@ namespace FireFront.Fire
     {
         public float ExpireAt;
         public float Y;
+        public bool YIsReal;  // false = Y is inherited from the igniter, not measured. See IsStandingInFire.
         public int EventId;   // which fire event this cell belongs to (0 = unassigned/legacy)
     }
 
@@ -116,7 +117,11 @@ namespace FireFront.Fire
         private readonly List<GroundCellKey> _groundExpiredSinceFlush = new List<GroundCellKey>();
         private readonly Dictionary<GroundCellKey, GameObject> _remoteGroundVfx = new Dictionary<GroundCellKey, GameObject>();
         private float _nextGroundSyncFlush;
-        private const float GroundSyncFlushInterval = 1f;
+        // Roughly two flushes per spread cycle at the 0.75s default, so a new cell reaches
+        // every client within half a second of lighting and a dead one stops being drawn just
+        // as fast. Was 1s, which combined with the cycle gate to make the real figure 1.5s.
+        // A flush with nothing to say costs a count check, so a short interval is nearly free.
+        private const float GroundSyncFlushInterval = 0.5f;
 
         // Headless dedicated servers have no interactive console to type
         // 'firestatus' into — this logs the same status line automatically so
@@ -688,7 +693,17 @@ namespace FireFront.Fire
             if (routedRpc != null && !ReferenceEquals(routedRpc, _registeredRpcInstance))
             {
                 _registeredRpcInstance = routedRpc; // guarded by reference, so a reconnect's fresh instance re-registers
-                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage);
+                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest);
+
+                // A fresh ZRoutedRpc means a fresh world, so everything this machine was drawing on
+                // behalf of the old one is stale. FireManager lives on the plugin's own GameObject
+                // and survives the scene change (Plugin.cs), but the VFX it spawned do NOT - Unity
+                // destroys those with the scene and leaves the dictionary holding keys that point at
+                // nothing. SpawnRemoteGroundVfxFor then refused those cells forever on ContainsKey,
+                // so a player who logged out once and came back could never see fire in those cells
+                // again for the rest of the process, and the dictionary grew every session.
+                ResetRemoteMirror();
+                _wantGroundSnapshot = true; // asked for below, once the connection can carry it
             }
 
             if (FireConfig.ExtinguishKey.Value.IsDown())
@@ -696,10 +711,21 @@ namespace FireFront.Fire
                 TryPlayerExtinguish();
             }
 
+            ApplyFireWarmth();
+
             // A config change made before the world loaded (the config manager at the main menu,
             // which is where people actually use it) has nowhere to go; this delivers it once the
             // connection and the admin list exist. No-op when there is nothing held.
             FireFront.Commands.FireDevCommands.FlushPendingConfigSync();
+
+            // The request cannot go out at registration time: the RPC instance exists several
+            // seconds before there is a server peer to address. Same wait the config sync uses.
+            if (_wantGroundSnapshot && ValheimBridge.CanReachServer())
+            {
+                _wantGroundSnapshot = false;
+                ValheimBridge.RequestGroundSnapshot();
+                FireLogger.Debug("[SYNC-DIAG] asked the server for the ground fire already burning.");
+            }
 
             DrainRemoteVfxSpawnQueue(); // client-side VFX budget — must run before the server gate below
             DrainRemoteObjectVfxQueue(); // same, for object fire — see EnqueueRemoteObjectVfx
@@ -727,6 +753,24 @@ namespace FireFront.Fire
             }
 
             if (!FireConfig.Enabled.Value) return;
+
+            // ABOVE the cycle gate, on its own clock. Below it, the damage interval would be a
+            // floor rather than the rate: with SpreadCheckInterval at its 0.75s default a 1s tick
+            // actually lands every 1.5s, and an admin who set the spread cycle to 10s would be
+            // quietly turning fire damage down by a factor of ten as well.
+            DamagePlayersInFire();
+
+            // ALSO above the cycle gate, and for exactly the same reason. Below it the flush could
+            // only ever fire on a spread-cycle boundary, so its own 1s interval quantized UP to the
+            // next multiple of SpreadCheckInterval: at the 0.75s default that is a real cadence of
+            // 1.5s, not the "roughly once a second" its own comment claimed. At the measured spread
+            // rate that left about nine cells alight at the front that no client had been told about
+            // and ten already dead that every client was still drawing - the drawn fire trailing the
+            // real one by up to two spread steps. Set SpreadCheckInterval to its 10s maximum and the
+            // visuals fell that far behind too. This is the second time the same gate has swallowed
+            // a subsystem's own clock; check for a third before adding anything below it.
+            FlushGroundFireSync();
+
             if (Time.time < _nextCycle) return;
             _nextCycle = Time.time + FireConfig.EffectiveSpreadCheckInterval;
 
@@ -736,12 +780,11 @@ namespace FireFront.Fire
             ExpireTimers();
             PromoteFromQueue();
             ExpireGroundTimers();
+            UpgradeDarkGroundCells(); // straight after the expiry that frees the slots
             ProcessTreeRegrowth();
             ProcessPendingIgniteResolutions();
             FlushPendingPaint();
-            FlushGroundFireSync();
             PruneFirebreakCache();
-            DamagePlayersInFire();
             AdoptOrphanedFires();
             PruneDeadEvents();
             ProcessSmouldering();
@@ -839,11 +882,78 @@ namespace FireFront.Fire
         /// </summary>
         private void HandleFireDamage(long sender, float damage)
         {
-            // Only the server may set a player alight. Routed RPCs can be addressed peer to peer,
-            // and without this any client could burn any other client at will.
+            // A filter, not an authenticator, and the difference matters. ZRoutedRpc reads
+            // m_senderPeerID straight off the wire (RoutedRPCData.Deserialize) and the server
+            // re-serializes it verbatim when it relays - it never stamps the real sender - so a
+            // modded client CAN forge this and address it to Everybody. It still stops ordinary
+            // client-to-client traffic, which is worth keeping, but it cannot be the only guard.
             if (!ValheimBridge.IsFromServer(sender)) return;
-            ValheimBridge.ApplyFireDamageToLocalPlayer(damage);
+
+            // THIS is the guard that matters. Without it the RPC above is a one-packet server-wide
+            // instakill: a forged 1e9 reaches SE_Burning as 1e9/ttl per hit, and a forged NaN is
+            // worse - vanilla has no finite check, `NaN < 0.2f` is false so the sub-threshold
+            // guard passes it, and `Mathf.Max(0f, NaN)` is NaN, so the burn pool never empties and
+            // the player's health goes NaN and is SAVED to their .fch: a character that can be
+            // neither healed nor killed. Clamped rather than rejected, deliberately - the ceiling
+            // is the config's own maximum, not this client's setting, so a legitimate tick from a
+            // server configured differently from this client still lands at full strength.
+            if (float.IsNaN(damage) || float.IsInfinity(damage) || damage <= 0f) return;
+            ValheimBridge.ApplyFireDamageToLocalPlayer(Mathf.Min(damage, FireConfig.MaxFireDamagePerTick));
         }
+
+        /// <summary>
+        /// A client has just connected and is asking what is already alight. Everything else about
+        /// ground fire is a delta, so without this a player who joins during a fire never learns
+        /// about a single cell that lit before they arrived - it simply burns invisibly beside them
+        /// for the rest of its life. This is the last place the client was not reconciled.
+        ///
+        /// Sent in the ordinary delta format with an empty expiry list, so it lands in the same
+        /// client handler as everything else rather than in a second one that could disagree.
+        /// </summary>
+        private void HandleGroundSyncRequest(long sender)
+        {
+            if (!ValheimBridge.IsServer()) return;
+
+            // Resolve the sender against the REAL peer list before anything else. It arrives off the
+            // wire and can be forged, and two things went wrong when it was merely rate-limited:
+            // a forged id of 0 is ZRoutedRpc's "Everybody", so one 40-byte request made the server
+            // fan a full snapshot out to every player; and a fresh random id each time missed the
+            // cooldown dictionary every time, so it both grew without bound and never throttled
+            // anything. Neither is possible against a list of who is actually connected.
+            if (!ValheimBridge.IsConnectedPeer(sender)) return;
+
+            float now = Time.time;
+            if (_lastSnapshotRequest.TryGetValue(sender, out float last) && now - last < SnapshotCooldownSeconds) return;
+            _lastSnapshotRequest[sender] = now;
+
+            var pkg = new ZPackage();
+            pkg.Write(_groundBurning.Count);
+            foreach (KeyValuePair<GroundCellKey, GroundCellState> kv in _groundBurning)
+            {
+                pkg.Write(kv.Key.X);
+                pkg.Write(kv.Key.Z);
+                pkg.Write(kv.Value.Y);
+            }
+            pkg.Write(0); // no expiries in a snapshot: this IS the full set
+
+            ValheimBridge.SendGroundFireSyncTo(sender, pkg);
+            FireLogger.Debug($"[SYNC-DIAG] sent a {_groundBurning.Count}-cell ground snapshot to peer {sender}.");
+
+            // Peer ids are per-session, so without this the table gains one entry per connection for
+            // the life of the process. Swept here rather than on a timer because this is the only
+            // thing that writes to it.
+            if (_lastSnapshotRequest.Count > 64)
+            {
+                _snapshotSweepScratch.Clear();
+                foreach (KeyValuePair<long, float> kv in _lastSnapshotRequest)
+                    if (now - kv.Value > 600f) _snapshotSweepScratch.Add(kv.Key);
+                for (int i = 0; i < _snapshotSweepScratch.Count; i++) _lastSnapshotRequest.Remove(_snapshotSweepScratch[i]);
+            }
+        }
+
+        private readonly List<long> _snapshotSweepScratch = new List<long>();
+        private readonly Dictionary<long, float> _lastSnapshotRequest = new Dictionary<long, float>();
+        private const float SnapshotCooldownSeconds = 5f;
 
         /// <summary>Server side of a client's firestatus: reply to THAT peer with the real line.</summary>
         private void HandleStatusRequest(long sender)
@@ -1067,6 +1177,9 @@ namespace FireFront.Fire
             foreach (GameObject instance in _remoteGroundVfx.Values) { if (instance != null) Destroy(instance); }
             _remoteVfx.Clear();
             _remoteGroundVfx.Clear();
+            _groundVfxVisual.Clear();
+            _groundVfxDamage.Clear();
+            _groundVfxDark.Clear();
             _remoteVfxSpawnQueue.Clear();
             _remoteVfxQueuedKeys.Clear();
             _remoteObjectVfxQueue.Clear();
@@ -1225,8 +1338,15 @@ namespace FireFront.Fire
                             if (remaining <= 0f) { skipped++; break; }
                             var key = new GroundCellKey(int.Parse(f[1]), int.Parse(f[2]));
                             float y = float.Parse(f[3]);
-                            _groundBurning[key] = new GroundCellState { ExpireAt = now + remaining, Y = y };
+                            _groundBurning[key] = new GroundCellState { ExpireAt = now + remaining, Y = y, YIsReal = true };
                             _groundIgnitedSinceFlush.Add((key, y)); // clients learn of it at the next flush
+                            // Queued rather than built here: the restore installs the whole fire at
+                            // once, and building fifty ground objects in one frame is the boot spike
+                            // this mod has already fixed twice. UpgradeDarkGroundCells drains it a
+                            // few per cycle. Without this, restored cells had no object at all - so
+                            // on a listen host after a restart, creatures walked through the fire
+                            // untouched, silently, because nothing ever revisited a restored cell.
+                            _groundVfxDark.Add(key);
                             ground++;
                             break;
                         }
@@ -1404,7 +1524,7 @@ namespace FireFront.Fire
             int fireCount = Mathf.Max(1, _events.Count);
             return $"FireFront: burning {_burning.Count}/{FireConfig.EffectiveMaxConcurrentBurning * fireCount}, " +
                    $"queued {_queue.Count}/{_queue.Capacity}, " +
-                   $"ground {_groundBurning.Count}/{FireConfig.EffectiveGroundMaxConcurrent * fireCount} (enabled {FireConfig.GroundSpreadEnabled.Value}, vfxcap {FireConfig.EffectiveGroundVfxMaxConcurrent}, dmgcap {FireConfig.EffectiveGroundDamageMaxConcurrent}, raining {RainingBurnersForStatus()}), " +
+                   $"ground {_groundBurning.Count}/{FireConfig.EffectiveGroundMaxConcurrent * fireCount} (enabled {FireConfig.GroundSpreadEnabled.Value}, vfxcap {FireConfig.EffectiveGroundVfxMaxConcurrent} [lit {_groundVfxVisual.Count}, waiting {_groundVfxDark.Count}], dmgcap {FireConfig.EffectiveGroundDamageMaxConcurrent}, raining {RainingBurnersForStatus()}), " +
                    $"burn {FireConfig.BurnDurationSeconds.Value}s (maturity {(FireConfig.EffectiveSpreadMaturityFraction * 100f):F0}%), " +
                    $"radius {FireConfig.EffectiveSpreadRadius}m, " +
                    $"groundradius {FireConfig.EffectiveGroundSpreadRadius}m, " +
@@ -1684,7 +1804,7 @@ namespace FireFront.Fire
             // the actual terrain height at this cell's real (x,z) instead, once,
             // at ignition time — same cheap "computed once" cost as before, just
             // accurate now.
-            float realY = ValheimBridge.GetGroundHeight(approxCenter);
+            float realY = ValheimBridge.GetGroundHeight(approxCenter, out bool realYSampled);
 
             // No grass grows on open water — without this, ground fire had no
             // way to tell "actual land" from "ocean/lake", and could spread
@@ -1708,7 +1828,7 @@ namespace FireFront.Fire
             // rain arrives on later.
             float duration = FireConfig.GroundBurnDurationSeconds.Value;
 
-            _groundBurning[key] = new GroundCellState { ExpireAt = Time.time + duration, Y = realY, EventId = cellEventId };
+            _groundBurning[key] = new GroundCellState { ExpireAt = Time.time + duration, Y = realY, YIsReal = realYSampled, EventId = cellEventId };
             FireLogger.Debug($"Ground ignited ({_groundBurning.Count}/{effectiveGroundMax}) at cell ({key.X},{key.Z})");
             SpawnGroundVfxFor(key, CellCenter(key, realY));
             _groundIgnitedSinceFlush.Add((key, realY));
@@ -1718,41 +1838,52 @@ namespace FireFront.Fire
         {
             if (_groundVfx.ContainsKey(key)) return;
 
-            bool wantDamage = FireConfig.FireHurtsEnabled.Value;
-            bool wantVisual = FireConfig.UseProceduralVfx.Value;
+            // PlayerOnly now means there is nothing for a damage zone to DO: FireBurnZone
+            // returns at the top of Update in that mode, because players are found from their
+            // ZDO positions server-side instead. Spawning them anyway cost a GameObject, a
+            // Collider[16] and a no-op Update dispatch per burning cell - up to 2000 of them
+            // on a headless server during a big fire, every frame, for nothing.
+            bool wantDamage = FireConfig.FireHurtsEnabled.Value && !FireConfig.FireHurtsPlayerOnly.Value;
+            // A dedicated server has no camera and nobody to show a particle to, yet it built one
+            // per burning cell and per burning object and then simulated them all. Clients render
+            // for themselves from the sync deltas; this machine was rendering to nothing. Only the
+            // two SERVER-side spawn paths are gated - SpawnRemoteVfxOnly is the client's own and
+            // this test is false there anyway.
+            bool wantVisual = FireConfig.UseProceduralVfx.Value && !ValheimBridge.IsDedicatedServer();
             if (!wantVisual && !wantDamage) return;
 
             // Overall cap on tracked ground effect objects (visual and/or damage-only
             // combined) — bounded by the higher of the two per-purpose caps, since a
             // damage-only object is cheap (just a polling FireBurnZone, no particles).
             int overallCap = Mathf.Max(FireConfig.EffectiveGroundVfxMaxConcurrent, FireConfig.EffectiveGroundDamageMaxConcurrent);
-            if (_groundVfx.Count >= overallCap) return;
+            if (_groundVfx.Count >= overallCap)
+            {
+                if (wantVisual) _groundVfxDark.Add(key);
+                return;
+            }
 
             // Visual has its OWN sub-cap, checked independently — this used to share
             // GroundVfxMaxConcurrent with damage entirely, meaning only ~30 of up to
             // 200 burning cells ever got a damage zone at all (objects have their own
             // separate, much higher cap and worked fine — that's why fire only hurt
             // near trees/pieces, never out in open ground).
-            if (wantVisual)
+            // Counted from the sets rather than by walking every live object and calling
+            // GetComponent twice: this runs on EVERY ground ignition, so the old form was O(cells)
+            // per ignition - quadratic across a spreading fire, and two GetComponent calls deep.
+            if (wantVisual && _groundVfxVisual.Count >= FireConfig.EffectiveGroundVfxMaxConcurrent)
             {
-                int visualCount = 0;
-                foreach (GameObject go in _groundVfx.Values)
-                {
-                    if (go != null && go.GetComponent<ParticleSystem>() != null) visualCount++;
-                }
-                if (visualCount >= FireConfig.EffectiveGroundVfxMaxConcurrent) wantVisual = false;
+                // Remembered, not discarded. Before 0.21.9 losing this race meant burning invisibly
+                // for the cell's whole life, because nothing ever revisited it: SpawnGroundVfxFor is
+                // called once, at ignition, and returns early ever after on ContainsKey. So a fire
+                // sat permanently pockmarked with cells that damaged you and showed nothing.
+                // UpgradeDarkGroundCells drains this as soon as another cell finishes.
+                _groundVfxDark.Add(key);
+                wantVisual = false;
             }
 
             // Damage gets its own independent check against its own (much higher) cap.
-            if (wantDamage)
-            {
-                int damageCount = 0;
-                foreach (GameObject go in _groundVfx.Values)
-                {
-                    if (go != null && go.GetComponent<FireBurnZone>() != null) damageCount++;
-                }
-                if (damageCount >= FireConfig.EffectiveGroundDamageMaxConcurrent) wantDamage = false;
-            }
+            if (wantDamage && _groundVfxDamage.Count >= FireConfig.EffectiveGroundDamageMaxConcurrent)
+                wantDamage = false;
 
             if (!wantVisual && !wantDamage) return;
 
@@ -1765,13 +1896,87 @@ namespace FireFront.Fire
             {
                 ValheimBridge.AttachFireDamageZone(instance, FireConfig.GroundCellSize.Value * 0.5f,
                     FireConfig.FireHurtsPlayerOnly.Value, FireConfig.FireDamagePerTick.Value, FireConfig.FireDamageTickInterval.Value);
+                _groundVfxDamage.Add(key);
             }
 
+            if (wantVisual) { _groundVfxVisual.Add(key); _groundVfxDark.Remove(key); }
             _groundVfx[key] = instance;
+        }
+
+        // What each tracked ground object actually IS. Kept alongside _groundVfx so the caps can be
+        // checked in O(1); every mutation of _groundVfx must keep these three in step, which is why
+        // the only paths that touch it are SpawnGroundVfxFor, RemoveGroundVfxFor and the clear-all.
+        private readonly HashSet<GroundCellKey> _groundVfxVisual = new HashSet<GroundCellKey>();
+        private readonly HashSet<GroundCellKey> _groundVfxDamage = new HashSet<GroundCellKey>();
+
+        // Cells that are burning and WANT a particle visual but could not have one when they lit.
+        private readonly HashSet<GroundCellKey> _groundVfxDark = new HashSet<GroundCellKey>();
+        private readonly List<GroundCellKey> _groundVfxUpgradeScratch = new List<GroundCellKey>();
+        private const int MaxGroundVfxUpgradesPerCycle = 5;
+
+        /// <summary>How many burning cells are waiting for a visual, for <c>firestatus</c>.</summary>
+        public int GroundDarkCount => _groundVfxDark.Count;
+
+        /// <summary>
+        /// Gives a visual to cells that were refused one, as soon as headroom frees. Without this the
+        /// visual cap is decided by a race at ignition and never revisited, so a long fire ends up
+        /// permanently patchy: the cells that happened to light while the cap was full stay dark for
+        /// their whole burn even after half the fire has gone out. That is the reported symptom -
+        /// "the visual spread is different to the cells burning" - and raising the cap alone would
+        /// only move the threshold, not fix the shape.
+        ///
+        /// Bounded per cycle: building particle systems is the expensive part, and doing a hundred in
+        /// one frame is the frametime spike this mod has fixed twice already.
+        /// </summary>
+        private void UpgradeDarkGroundCells()
+        {
+            if (_groundVfxDark.Count == 0) return;
+
+            _groundVfxUpgradeScratch.Clear();
+            _groundVfxUpgradeScratch.AddRange(_groundVfxDark);
+
+            int budget = MaxGroundVfxUpgradesPerCycle;
+            for (int i = 0; i < _groundVfxUpgradeScratch.Count; i++)
+            {
+                if (budget <= 0) return;
+
+                GroundCellKey key = _groundVfxUpgradeScratch[i];
+
+                // Only touch a cell if this pass can actually change something for it, or a cell
+                // waiting on a full visual budget would be torn down and rebuilt identically every
+                // cycle for its whole life.
+                bool visualHeadroom = _groundVfxVisual.Count < FireConfig.EffectiveGroundVfxMaxConcurrent;
+                bool hasObject = _groundVfx.ContainsKey(key);
+                if (hasObject && !visualHeadroom) continue;
+                if (!hasObject && !visualHeadroom &&
+                    _groundVfxDamage.Count >= FireConfig.EffectiveGroundDamageMaxConcurrent) continue;
+
+                // Self-healing, deliberately. A cell that burned out while dark may never have had an
+                // object for RemoveGroundVfxFor to remove, so this set cannot rely on that path alone
+                // and instead drops anything no longer burning. Cheap, and it cannot leak.
+                if (!_groundBurning.TryGetValue(key, out GroundCellState cell)) { _groundVfxDark.Remove(key); continue; }
+
+                // Replace the damage-only placeholder, if it got one, rather than leaving an object
+                // behind. SpawnGroundVfxFor re-attaches the damage zone from current config.
+                if (_groundVfx.TryGetValue(key, out GameObject old))
+                {
+                    if (old != null) Destroy(old);
+                    _groundVfx.Remove(key);
+                    _groundVfxVisual.Remove(key);
+                    _groundVfxDamage.Remove(key);
+                }
+
+                _groundVfxDark.Remove(key);
+                SpawnGroundVfxFor(key, CellCenter(key, cell.Y));
+                budget--;
+            }
         }
 
         private void RemoveGroundVfxFor(GroundCellKey key)
         {
+            _groundVfxVisual.Remove(key);
+            _groundVfxDamage.Remove(key);
+            _groundVfxDark.Remove(key);
             if (_groundVfx.TryGetValue(key, out GameObject instance))
             {
                 _groundVfx.Remove(key);
@@ -1820,17 +2025,32 @@ namespace FireFront.Fire
         {
             if (_vfx.ContainsKey(id)) return;
 
-            bool wantVisual = FireConfig.UseProceduralVfx.Value || !string.IsNullOrEmpty(FireConfig.VfxPrefabName.Value);
-            bool wantDamage = FireConfig.FireHurtsEnabled.Value;
+            // A dedicated server has no camera and nobody to show a particle to, yet it built one
+            // per burning cell and per burning object and then simulated them all. Clients render
+            // for themselves from the sync deltas; this machine was rendering to nothing. Only the
+            // two SERVER-side spawn paths are gated - SpawnRemoteVfxOnly is the client's own and
+            // this test is false there anyway.
+            bool wantVisual = (FireConfig.UseProceduralVfx.Value || !string.IsNullOrEmpty(FireConfig.VfxPrefabName.Value))
+                              && !ValheimBridge.IsDedicatedServer();
+            // PlayerOnly now means there is nothing for a damage zone to DO: FireBurnZone
+            // returns at the top of Update in that mode, because players are found from their
+            // ZDO positions server-side instead. Spawning them anyway cost a GameObject, a
+            // Collider[16] and a no-op Update dispatch per burning cell - up to 2000 of them
+            // on a headless server during a big fire, every frame, for nothing.
+            bool wantDamage = FireConfig.FireHurtsEnabled.Value && !FireConfig.FireHurtsPlayerOnly.Value;
             if (!wantVisual && !wantDamage) return;
 
             GameObject instance = null;
-            if (FireConfig.UseProceduralVfx.Value)
+            // wantVisual, NOT the config directly: the config says what the admin asked for, wantVisual
+            // says what this machine should actually build. Testing the config here made the headless
+            // gate above dead code whenever damage was also wanted - the server skipped it and built
+            // the particles anyway.
+            if (wantVisual && FireConfig.UseProceduralVfx.Value)
             {
                 instance = ValheimBridge.CreateProceduralFireVfx(
                     position, ValheimBridge.MeasureBurnerHeight(target), ValheimBridge.MeasureBurnerCrownRadius(target));
             }
-            else if (!string.IsNullOrEmpty(FireConfig.VfxPrefabName.Value))
+            else if (wantVisual && !string.IsNullOrEmpty(FireConfig.VfxPrefabName.Value))
             {
                 GameObject prefab = ValheimBridge.FindPrefabByName(FireConfig.VfxPrefabName.Value);
                 if (prefab != null) instance = ValheimBridge.SpawnVfx(prefab, position);
@@ -2446,6 +2666,41 @@ namespace FireFront.Fire
         /// </summary>
         private void DamagePlayersInFire()
         {
+            // Wrapped because this sits in the middle of the fire cycle: when the first cut of it
+            // threw, every step AFTER it in Update stopped running too, each tick, and the only
+            // clue was a Unity stack trace with no FireFront prefix on it. Burning players is the
+            // least important thing this loop does and must never be able to stop the rest.
+            // Backs OFF on a failure; it does not latch off. An earlier cut of this set a flag and
+            // never cleared it, so one unlucky frame - a peer disposed mid-iteration, a ZDO
+            // destroyed between two reads - would silently restore the exact bug this release
+            // exists to fix, on a server that otherwise looked completely healthy. That is the
+            // failure mode, not the accident that causes it.
+            if (Time.time < _playerDamageRetryAt) return;
+            try { DamagePlayersInFireCore(); }
+            catch (System.Exception ex)
+            {
+                _playerDamageRetryAt = Time.time + PlayerDamageRetrySeconds;
+                _playerDamageFailures++;
+                // Every failure for the first handful, then one line a minute: enough to diagnose a
+                // real fault, not enough to bury the log if it starts failing every retry.
+                if (_playerDamageFailures <= 3 || Time.time >= _nextPlayerDamageErrorLog)
+                {
+                    _nextPlayerDamageErrorLog = Time.time + 60f;
+                    FireLogger.Error($"Burning players failed ({_playerDamageFailures} time(s)); retrying in " +
+                                     $"{PlayerDamageRetrySeconds:0}s. Everything else carries on. Reason: " + ex);
+                }
+            }
+        }
+        private const float PlayerDamageRetrySeconds = 10f;
+        private float _playerDamageRetryAt;
+        private float _nextPlayerDamageErrorLog;
+        private int _playerDamageFailures;
+
+        /// <summary>How many times the player-damage pass has thrown, for <c>firestatus</c>.</summary>
+        internal int PlayerDamageFailureCount => _playerDamageFailures;
+
+        private void DamagePlayersInFireCore()
+        {
             if (!FireConfig.FireHurtsEnabled.Value) return;
             if (_burning.Count == 0 && _groundBurning.Count == 0) return;
 
@@ -2481,7 +2736,24 @@ namespace FireFront.Fire
         /// </summary>
         private bool IsStandingInFire(Vector3 pos, float objRadius)
         {
-            if (_groundBurning.ContainsKey(KeyOf(pos))) return true;
+            // The Y band is NOT optional. A GroundCellKey is (x,z) only - KeyOf throws the height
+            // away - so a bare ContainsKey makes every burning cell an infinite vertical column:
+            // ground fire under a longhouse would burn the player on the floor above it, with no
+            // flame in sight and nothing to tell them what was killing them. Also a cliff above a
+            // burning beach, and a crypt below one. The physics zone this replaced was a sphere of
+            // GroundCellSize*0.5, so that is the band restored here.
+            if (_groundBurning.TryGetValue(KeyOf(pos), out GroundCellState cell))
+            {
+                // The height band is only applied when the cell's Y is a MEASUREMENT. If it is not -
+                // no terrain and no WorldGenerator to ask - then Y is the height of whatever lit the
+                // fire, and comparing a player against it would refuse damage to anyone standing more
+                // than a metre above or below that, which on a slope is most of the fire. 0.21.9
+                // shipped exactly that and silently undid 0.21.8 on dedicated servers. Better to keep
+                // the old unbounded column in the rare case we are blind than to stop burning people.
+                if (!cell.YIsReal ||
+                    Mathf.Abs(pos.y - cell.Y) <= Mathf.Max(1f, FireConfig.GroundCellSize.Value * 0.5f))
+                    return true;
+            }
 
             float radiusSqr = objRadius * objRadius;
             foreach (BurningState st in _burning.Values)
@@ -2675,7 +2947,7 @@ namespace FireFront.Fire
 
         /// <summary>
         /// Server-side: packs accumulated ground-fire ignite/expire deltas into a
-        /// ZPackage and broadcasts once per second. Only the server should ever
+        /// ZPackage and broadcasts them on its own clock. Only the server should ever
         /// have anything in these lists — TryIgniteGroundCell/ExpireGroundTimers
         /// only run as part of the server-only simulation loop — but the empty-
         /// check makes this a no-op on clients regardless.
@@ -2733,6 +3005,13 @@ namespace FireFront.Fire
                 // systems in ONE frame was the client's other periodic frametime
                 // spike. The queue drains a few per frame in Update instead.
                 var key = new GroundCellKey(x, z);
+
+                // Recorded whether or not it is ever DRAWN. Anything that asks "is there fire near
+                // me" has to read this, not the VFX dictionary: with visuals switched off there are
+                // no GameObjects at all, and keying behaviour off them would make a setting about
+                // appearance silently change what fire does to you.
+                _remoteGroundCells[key] = y;
+
                 if (!_remoteGroundVfx.ContainsKey(key) && _remoteVfxQueuedKeys.Add(key))
                     _remoteVfxSpawnQueue.Add((key, CellCenter(key, y)));
             }
@@ -2746,6 +3025,7 @@ namespace FireFront.Fire
                 int x = pkg.ReadInt();
                 int z = pkg.ReadInt();
                 var key = new GroundCellKey(x, z);
+                _remoteGroundCells.Remove(key);
                 _remoteVfxQueuedKeys.Remove(key); // expired before it ever spawned — drop it from the queue
                 RemoveRemoteGroundVfxFor(key);
             }
@@ -2771,16 +3051,128 @@ namespace FireFront.Fire
             }
         }
 
+        /// <summary>
+        /// Drops everything this machine was drawing on behalf of a world it is no longer in. Safe to
+        /// call when already empty, which is what happens on a first connect.
+        /// </summary>
+        private bool _wantGroundSnapshot;
+        private float _nextWarmthCheck;
+        private readonly Dictionary<GroundCellKey, float> _remoteGroundCells = new Dictionary<GroundCellKey, float>();
+
+        /// <summary>
+        /// Keeps the player at this keyboard warm while they are near a wildfire.
+        ///
+        /// Runs on whatever machine the player is actually on, because warmth is a status effect on a
+        /// live Player and only that machine has one - the same division as fire damage. It reads the
+        /// fire THIS machine knows about: the real simulation on a host, the synced record of it on a
+        /// client. Note it reads the record rather than the effects, so turning visuals off changes
+        /// what you see and nothing else.
+        ///
+        /// Five times a second, because vanilla's window is a quarter of a second wide.
+        /// </summary>
+        private void ApplyFireWarmth()
+        {
+            if (!FireConfig.FireKeepsYouWarm.Value) return;
+
+            float now = Time.time;
+            if (now < _nextWarmthCheck) return;
+            _nextWarmthCheck = now + WarmthCheckInterval;
+
+            Vector3? here = ValheimBridge.LocalPlayerPosition();
+            if (!here.HasValue) return;
+
+            if (TryFindFireNearPlayer(here.Value, FireConfig.FireWarmthRadius.Value, out Vector3 fire))
+                ValheimBridge.MarkLocalPlayerNearFire(fire);
+        }
+
+        private const float WarmthCheckInterval = 0.2f;
+
+        /// <summary>
+        /// The nearest fire this machine knows about within <paramref name="radius"/>, if any. Checks
+        /// the authoritative collections when we are the server and the synced ones otherwise, so a
+        /// listen host and a connected client both get an answer about the fire they can actually see.
+        /// </summary>
+        private bool TryFindFireNearPlayer(Vector3 pos, float radius, out Vector3 fire)
+        {
+            fire = Vector3.zero;
+            float best = radius * radius;
+            bool found = false;
+
+            if (ValheimBridge.IsServer())
+            {
+                foreach (KeyValuePair<GroundCellKey, GroundCellState> kv in _groundBurning)
+                {
+                    Vector3 c = CellCenter(kv.Key, kv.Value.Y);
+                    float d = (c - pos).sqrMagnitude;
+                    if (d < best) { best = d; fire = c; found = true; }
+                }
+                foreach (BurningState st in _burning.Values)
+                {
+                    float d = (st.Position - pos).sqrMagnitude;
+                    if (d < best) { best = d; fire = st.Position; found = true; }
+                }
+                return found;
+            }
+
+            foreach (KeyValuePair<GroundCellKey, float> kv in _remoteGroundCells)
+            {
+                Vector3 c = CellCenter(kv.Key, kv.Value);
+                float d = (c - pos).sqrMagnitude;
+                if (d < best) { best = d; fire = c; found = true; }
+            }
+            foreach (KeyValuePair<Component, GameObject> kv in _remoteVfx)
+            {
+                if (kv.Key == null) continue;
+                Vector3 c = kv.Key.transform.position;
+                float d = (c - pos).sqrMagnitude;
+                if (d < best) { best = d; fire = c; found = true; }
+            }
+            return found;
+        }
+
+        private void ResetRemoteMirror()
+        {
+            foreach (GameObject go in _remoteGroundVfx.Values) { if (go != null) Destroy(go); }
+            _remoteGroundVfx.Clear();
+            _remoteGroundCells.Clear();
+            _remoteVfxSpawnQueue.Clear();
+            _remoteVfxQueuedKeys.Clear();
+
+            // The object half too. It is keyed by Component, and a Component from a world we have
+            // left is destroyed but still a live dictionary key, so this leaked every reconnect and
+            // blocked those objects from ever being drawn again - the same bug, other collection.
+            foreach (GameObject go in _remoteVfx.Values) { if (go != null) Destroy(go); }
+            _remoteVfx.Clear();
+        }
+
         private void SpawnRemoteGroundVfxFor(GroundCellKey key, Vector3 position)
         {
-            if (_remoteGroundVfx.ContainsKey(key)) return;
+            // Note the null test. A plain ContainsKey would treat a destroyed instance as a live one
+            // and refuse to redraw that cell ever again; ResetRemoteMirror catches the common cause
+            // but this catches every other way a GameObject can go away underneath us.
+            if (_remoteGroundVfx.TryGetValue(key, out GameObject existing))
+            {
+                if (existing != null) return;
+                _remoteGroundVfx.Remove(key);
+            }
             if (!FireConfig.UseProceduralVfx.Value)
             {
                 FireLogger.Debug($"[IGNITE-TRACE] SpawnRemoteGroundVfxFor({key.X},{key.Z}): UseProceduralVfx is false on THIS peer, skipping.");
                 return;
             }
 
-            GameObject instance = ValheimBridge.CreateProceduralGroundFireVfx(position);
+            // Re-sample the height locally. The Y on the wire is the SERVER's, and on a dedicated
+            // server it is not a terrain height at all: GetGroundHeight raycasts against terrain
+            // colliders, a headless server has none, and its ZoneSystem fallback is the same raycast
+            // wrapped - so it returns its own input. Every cell therefore inherits the Y of whatever
+            // object seeded the fire and carries it unchanged across the entire spread, out to the
+            // ground leash. On level ground nobody notices; on a slope the flames sink under the
+            // hill or float above it, and the further the fire has travelled the worse it gets. THIS
+            // machine has real terrain, so it asks its own. The same call falls back to the wire
+            // value if the zone is not loaded yet, which is exactly the behaviour we want.
+            Vector3 grounded = new Vector3(position.x, ValheimBridge.GetGroundHeight(position), position.z);
+
+            GameObject instance = ValheimBridge.CreateProceduralGroundFireVfx(grounded);
             if (instance != null)
             {
                 _remoteGroundVfx[key] = instance;

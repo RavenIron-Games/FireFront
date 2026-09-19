@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.21.11
+
+- **A wildfire keeps you warm.** You could stand in the middle of a burning forest and freeze to
+  death. Fire now holds off Cold and Freezing while you are near it, exactly as a campfire does -
+  it goes through vanilla's own near-a-fire check, so shelter, frost resistance and getting wet all
+  still behave the way you expect. Reaches a little further than the fire can burn you, because a
+  wildfire should be felt from further away than it hurts. `FireKeepsYouWarm`, `FireWarmthRadius`.
+- **Fire damage worked only near where the fire started.** 0.21.9 added a height check so burning
+  ground could not hurt someone on the floor above it, and measured it against a height the server
+  had no way to know - so a player even a little downhill of the fire's origin took nothing at all.
+  The server can now work out the real ground height for itself, which fixes the damage, and also
+  puts the flames on the ground instead of floating above or sunk into a slope.
+- **A joining player can no longer be impersonated to make the server shout.** The request a client
+  sends on connect is now checked against who is actually connected before the server acts on it.
+- Fire effects a client had drawn for a world it has left are cleared properly - the object half of
+  that was still leaking.
+- The Apocalypse preset no longer recreates the very problem 0.21.9 fixed: it raises how many
+  ground cells burn, so it now raises how many can be drawn to match.
+
+## 0.21.10
+
+- **Join a server mid-fire and you now see the fire.** Ground fire was sent to players purely as a
+  running list of changes, so anything already alight when you connected was never mentioned to
+  you at all - it burned invisibly beside you for the rest of its life, and it hurt. Your game now
+  asks for the current state as soon as it connects. This was the last place a player's screen was
+  never reconciled against the server.
+- **A dedicated server no longer builds fire effects for a machine with no screen.** It was
+  creating and simulating a particle system for every burning cell and every burning object, none
+  of which anything could ever render - players draw their own from the sync. A server hosting
+  from inside your own game is unaffected and still shows you its fire.
+- **Fire that survives a server restart can hurt things again.** Restored cells were written
+  straight into the simulation and skipped the step that gives a cell its damage zone, so after a
+  restart creatures wandered through a burning forest untouched. They now join the queue and are
+  set up a few at a time, so a restart does not stutter.
+
+## 0.21.9
+
+- **Two ground-fire cells in five were burning invisibly, and had been for a long time.** The cap
+  on how many cells get a particle visual defaulted to 30 while the cap on how many can burn
+  defaulted to 50, so at any real fire size the rest damaged you and showed nothing. It was sitting
+  in plain sight in a tester's log from three weeks ago - `ground 50/50` and `vfxcap 30` on the
+  same line, every heartbeat - and nobody had read the two numbers against each other. The visual
+  cap now defaults to 200, and an existing config file still holding the old 30 is moved up with
+  it, because a stored 30 was the mod's own default rather than anything anyone chose. A cap you
+  set yourself is left alone.
+- **A cell that cannot be drawn now waits its turn instead of staying dark forever.** The cap was
+  decided by a race at the moment each cell lit and never revisited: a cell that lost burned
+  invisibly for its whole life even after half the fire had gone out and the visuals were free.
+  That is why the flame front read as patchy and lagging rather than simply smaller - and why
+  raising the cap on its own would have moved the threshold without fixing the shape. Cells now
+  take a visual as soon as another finishes, a few per cycle so it cannot spike the frame.
+  `firestatus` reports how many are lit and how many are waiting.
+- Checking those two caps no longer walks every live fire object twice per ignition, which was
+  quadratic work across a spreading fire.
+- **The flame front was trailing the real one by up to two spread steps.** Ground fire is sent
+  to players as a running list of changes, and that send was sitting inside the spread cycle's own
+  timer, so its one-second interval was rounded up to the next cycle boundary - one and a half
+  seconds in practice, and up to ten on a server with a slow spread cycle. About nine cells were
+  alight at the front that nobody had been told about, and ten already dead that everyone was
+  still drawing. It now keeps its own clock, and sends twice as often.
+- **Fire is drawn on your ground, not the server's guess at it.** A dedicated server has no terrain
+  to measure against, so the height it sends for a burning cell is not a ground height at all - it
+  is inherited from whatever first caught fire and then carried unchanged across the whole spread.
+  On flat ground you would never notice; on a hillside the flames sank into the slope or floated
+  above it, further out the further the fire had travelled. Your own game knows where the ground
+  is and now asks itself.
+- **Fire is visible again after you log out and come back.** The effects a client was drawing are
+  destroyed with the world when you leave, but the record of them was not, so on rejoining those
+  cells were treated as already drawn and stayed dark for the rest of the session - and it got
+  worse every time you logged back in.
+
 ## 0.21.8
 
 - **Fire has never hurt a player on a dedicated server. It does now.** Damage was applied by a
@@ -16,12 +87,32 @@
   tells each player's own machine to set them alight, since vanilla's burning effect needs a live
   character and only that machine has one. The same division of labour the mod already uses for
   ignition. The physics zone keeps handling creatures wherever physics is real, and no longer
-  touches players at all, so a host cannot be burned twice. A client only accepts this from the
-  server, never from another player.
+  touches players at all, so a host cannot be burned twice, and with FireHurtsPlayerOnly set it
+  is no longer given a damage zone to attach at all - during a big fire that was up to two
+  thousand objects a frame doing nothing.
+
+  A client ignores a fire-damage message that did not come from the server, and clamps the one
+  it accepts. The sender check alone is not enough and it is worth being precise about why:
+  Valheim reads the sender id off the wire and relays it unchanged, so it can be forged. The
+  clamp is the guard that actually holds - without it the message would have been a one-packet
+  server-wide instakill, and a non-finite value would have left a character whose health could
+  be neither healed nor restored, saved to disk that way.
 
   This is the third time the same trap has bitten: spread hit it in 0.17.4, tree regrowth in
   0.21.5, and now player damage. Anything that reaches for physics or instances on the server is
   wrong by default.
+
+- **Burning ground burns what is standing on it, not everything above and below it.** A ground
+  fire cell is tracked by its horizontal position, so testing whether a player is in one had to
+  be given a height as well; without it a fire on the grass would have burned the player on the
+  floor above it, or in the crypt below, with no flame in sight and nothing to say what was
+  killing them.
+- **A failure in the player-damage pass backs off and retries** instead of switching itself off
+  for the rest of the session. One unlucky frame would otherwise have restored the exact bug
+  above on a server that still looked completely healthy.
+- **Fire damage keeps its own clock.** It was being delivered on the spread cycle's schedule, so
+  a one-second damage interval actually landed every 1.5 seconds at stock settings - and a
+  server with a slow spread cycle would have stretched it to ten.
 
 ## 0.21.7
 

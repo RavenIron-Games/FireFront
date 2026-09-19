@@ -27,13 +27,15 @@ namespace FireFront.Config
     /// Version numbers (backfilled; nothing before 0.21.3 stamped one):
     ///   0 = any unstamped file, whatever build wrote it.
     ///   1 = 0.21.3: Visuals.SmoulderAfterFraction still at 0.45 moves to 0.65; the orphan
-    ///       Debug.VerboseLogging is dropped. Current.
+    ///       Debug.VerboseLogging is dropped.
+    ///   2 = 0.21.9: Ground.GroundVfxMaxConcurrent still at 30 moves to 200 - at 30 against a
+    ///       GroundMaxConcurrent of 50, two cells in five burned invisibly. Current.
     /// </summary>
     public static class ConfigLedger
     {
         public const string MetaSection = "Meta";
         public const string VersionKey = "ConfigVersion";
-        public const int CurrentVersion = 1;
+        public const int CurrentVersion = 2;
 
         /// <summary>One slot's every old default, from Wings' shape. A stored value equal to ANY of them is the mod's own old default, not admin work.</summary>
         public sealed class Rebase
@@ -59,6 +61,15 @@ namespace FireFront.Config
                     // smouldering is the tail"); 0.19.14 could only tell people to set it by hand.
                     // net472 writes the float as "0.45" (invariant), so that is the text to match.
                     new Rebase { Section = "Visuals", Key = "SmoulderAfterFraction", OldDefaults = new[] { "0.45" } },
+                }
+            },
+            { 2, new[]
+                {
+                    // 0.21.9 moved the default 30 -> 200. At 30, with GroundMaxConcurrent at 50, two
+                    // cells in five burned invisibly - and a stored 30 is the mod's own old default,
+                    // not a choice anyone made, so it has to follow or the fix reaches nobody who
+                    // already has a config file. Anything else in that slot is admin work and is kept.
+                    new Rebase { Section = "Ground", Key = "GroundVfxMaxConcurrent", OldDefaults = new[] { "30" } },
                 }
             },
         };

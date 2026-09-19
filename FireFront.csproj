@@ -4,7 +4,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>FireFront</AssemblyName>
     <RootNamespace>FireFront</RootNamespace>
-    <Version>0.21.8</Version>
+    <Version>0.21.11</Version>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
