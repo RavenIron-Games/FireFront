@@ -21,7 +21,7 @@ Fire is wind-driven, doused by rain, stopped by dirt paths and water, survives s
 | | |
 |---|---|
 | Valheim | 1.0.15 (built and tested against; older builds are not supported) |
-| BepInEx | BepInExPack Valheim 5.4.2333 or newer |
+| BepInEx | BepInExPack Valheim 5.4.2350 or newer |
 
 ## Installation
 

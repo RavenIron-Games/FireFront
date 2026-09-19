@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.21.14
+
+- Requires BepInExPack Valheim 5.4.2350, which is what this is actually built and tested against.
+  The declared minimum had been left at 5.4.2333 while everything moved on around it - harmless so
+  far, since it reads as a floor rather than a pin, but it was drift rather than a decision.
+
 ## 0.21.13
 
 - **Fire that would not go out.** A tree could finish burning, or you could clear every fire on the
