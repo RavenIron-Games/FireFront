@@ -1,79 +1,154 @@
-🔥 **FireFront**
+# FireFront
 
-Fire that actually spreads. Torch a wall and it can take the whole build with it, jump to the treeline, and crawl across open ground to get there — not just "this one piece is on fire," an actual moving front.
+A Valheim mod that makes fire spread. Torch a wall and it can take the whole build with it, jump to the treeline, and crawl across open ground to get there — an actual moving front with a windward edge and a burnt-out middle, not one flagged object.
 
-**Requires:** BepInEx
+Fire is wind-driven, doused by rain, stopped by dirt paths and water, survives server restarts, and remembers who lit it.
 
-**Install:** drop `FireFront.dll` into `BepInEx/plugins/`, launch, done. No config needed to just play — everything below is for people who want to poke at it. On a dedicated server, the server needs the dll too (it runs the actual fire; your client just shows it to you).
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Features](#features)
+- [Fighting a fire](#fighting-a-fire)
+- [Dedicated servers](#dedicated-servers)
+- [Presets](#presets)
+- [Console commands](#console-commands)
+- [Configuration](#configuration)
+- [Building from source](#building-from-source)
+- [Reporting problems](#reporting-problems)
+- [Credits](#credits)
 
-—
+## Requirements
 
-**What it does**
-• Structures, standing trees, and felled logs can all catch fire and burn down for real — with real drops (trees fell via vanilla's own felling and leave logs, logs leave wood)
-• Fire spreads to nearby burnable stuff, structure-to-structure, tree-to-tree, or structure-to-tree
-• **Big fix in 0.17.4: forest spread now actually works on dedicated servers.** It turns out tree-to-tree and ground-to-tree spread had *never* worked on a dedicated server (fine in single-player) — the server literally couldn't see trees. If you tested on a server before and thought fire seemed weirdly tame, that was this. Burn a forest and see the difference.
-• Fire also spreads across open ground/grass between things too far apart to ignite each other directly — you can *see* it crawling through grass as small ember flickers
-• Standing in fire hurts, players and mobs alike — same mechanism vanilla campfires use
-• **New: fire follows the wind.** The front stretches downwind and thins out upwind, using the game's real wind — and how *hard* it's blowing matters now too. A gale drives a long narrow tongue of fire; a calm day burns in a lazy, even circle. Watch a fire when the weather turns.
-• Fires start small and ramp up over ~10 minutes instead of instantly raging
-• **New in 0.18.5: fire spreads at the pace of its fuel.** A burning tree has to be properly alight (~a minute in) before it starts torching neighbors and dropping fire to the ground — no more front teleporting through a forest faster than anything actually burns. Tune with `fireset firematurity` (0 = old instant spread)
-• **Fixed in 0.18.6/0.18.7: the periodic stutter during big fires is gone.** A tester clip (thank you — frametime graphs are gold) showed regular frame spikes every few seconds while a forest burned. Both feeders are dead: a periodic bookkeeping scan and debug logging that built its strings even when switched off. If big fires used to hiccup for you, try your worst on this build
-• Rain douses grass fire (an already-burning building keeps going)
-• Burned ground is spent — it can't relight for ~90s, so the front *advances* instead of churning in place, and it leaves burn scars behind
-• Dirt paths and cultivated ground are real firebreaks; water stops spread too. **This protects your base more than you'd expect**: the leveled/pathed ground most bases sit on counts as fuel-free, so a wildfire will burn right up to the edge of your yard and stall there — your walls only catch if fire starts *inside* the perimeter (or you clear less ground). If it looks like "fire can't touch my buildings," it's actually your groundwork doing its job — keep a tended break around your base and it genuinely works, exactly like real firefighting
-• Ground fire won't wander more than ~40m from where the fire started
-• Burned trees regrow after ~15 minutes if the spot's still clear
-• Press **G** to extinguish what you're looking at plus all fire around you — ground fire *and* burning structures/trees
-• **New in 0.17.5: the Dousing Bomb.** A throwable that puts fire OUT — everything within ~6m of where it lands, grass fire and burning buildings/trees alike. Hand-craftable anywhere, cheap on purpose: 3 Resin + 2 Leather scraps makes 3 bombs. (It borrows the ooze bomb's look for now — yes, the fire extinguisher is green. Art later, function first.) Fight a fire for real instead of just G-spamming next to it.
-• **Better in 0.18.4: dousing sticks.** Everything you extinguish is *soaked* for ~90s and can't re-light, so a line of bombs cuts a real firebreak ahead of the front instead of the fire instantly refilling the hole. Big fires are now genuinely fightable — get ahead of the front and cut it off, like actual wildfire crews do
-• Fires now remember who lit them — the whole spreading front carries its arsonist, even fire that crawled a long way from the first spark (natural/creature fire belongs to nobody). Nothing visible in-game yet; it feeds a companion mod's reputation system
-• **New in 0.18.0: fires survive server restarts.** Burning stuff comes back burning with its remaining time, burned-out ground stays spent, and trees waiting to regrow still regrow — a reboot no longer resets the world's fire state
-• **New in 0.18.2: server owners can make player builds fireproof.** `fireset burnbuildings false` (or the `BurnPlayerBuildings` config) means fire never ignites anything a player placed — not by spread, not by fire arrows, not by anything — while ruins and world structures still burn. The anti-grief switch, for servers that want wildfires without arson
-• **New in 0.19.0: every command works from anywhere.** `firestatus`, `startfire`, `clearfires` and friends used to refuse or answer wrong unless you typed them on the server itself — now they run on the server no matter where you type them (checked against the server's own admin list) and the output comes back to your console as `[server] ...`
-• Everything's config-tunable and adjustable live via console — no restart needed
+| | |
+|---|---|
+| Valheim | 1.0.15 (built and tested against; older builds are not supported) |
+| BepInEx | BepInExPack Valheim 5.4.2333 or newer |
 
-**Heads-up if updating from an older build:** update server and client together — a mixed-version pair (0.17.3 with anything older) means clicking `ignite` from a client silently does nothing.
+## Installation
 
-**Want the world to actually burn? `fireset burntheworld true`**
-The opposite switch. Fire catches instantly, dirt paths and even WATER stop stopping it, rain does not put it out, burned ground relights, fires start at full strength, nothing grows back, and the caps go to maximum — per fire, so several blazes can rage at once. Your visual settings are left alone on purpose: those are what cost frames, so you still choose how much of it your machine draws. Your own settings are untouched and turning it off puts everything back. (If you also have lowspec on, lowspec wins.)
+Drop `FireFront.dll` into `BepInEx/plugins/` and launch. Nothing needs configuring to play.
 
-**Struggling machine? Try `fireset lowspec true`**
-New in 0.19.6, and the first thing to reach for if big fires cost you frames. One switch: fewer things burning at once, fewer fire visuals, no scorch decals, and a slower spread tick. Fire still spreads and still burns your base down — there's just less happening simultaneously. It doesn't touch your own settings (anything you've already set lower is kept, and turning it off puts everything back), and `firestatus` shows you exactly what's in force. Also settable as `LowSpecPreset` in the config file if you'd rather not use the console.
+On a dedicated server, **the server needs the dll too** — it runs the simulation and your client only draws it. Update server and client together: a mixed pair can leave ignition silently doing nothing.
 
-If you've been running an older build and big fires stuttered, **update first** — 0.18.6, 0.18.7 and 0.19.5 each removed a separate cause of that, and the newest one cut out a full-scene scan whose cost grew with how much stuff was lying around your world.
+## Features
 
-**What to expect / known limits**
-• The fire visual is homemade, not a vanilla asset — it'll look like fire, just not *exactly* like Valheim's own fire
-• Default settings are tuned aggressive for testing — expect fire to spread fast and hungrily unless you dial it down yourself
+**Spread**
 
-—
+- Structures, standing trees and felled logs all burn, with real drops. Trees fall through vanilla's own felling and leave logs; logs leave wood.
+- Fire spreads by contact — structure to structure, tree to tree, structure to tree — and across open ground between things too far apart to light each other directly.
+- Spread follows the game's real wind, both direction and strength. A gale drives a long narrow tongue; a calm day burns in a lazy circle.
+- Fire spreads at the pace of its fuel. A tree must be properly alight, roughly a minute, before it torches its neighbours. Fires start small and build over about ten minutes rather than instantly raging.
+- Burnt ground is spent for about 90 seconds, so the front advances instead of churning in place.
 
-**Useful console commands** (` key to open console)
+**Consequences**
+
+- Standing in fire hurts, players and creatures alike, through vanilla's own burn mechanic.
+- Standing near fire keeps you warm — it holds off Cold and Freezing exactly as a campfire does, so you cannot freeze to death inside a burning forest.
+- Burnt ground leaves scars. Burnt trees regrow after about fifteen minutes if the spot is still clear.
+- Fires remember who lit them. The whole front carries its arsonist even after crawling a long way from the first spark; natural and creature-lit fire belongs to nobody. Nothing surfaces in game yet — it feeds a companion mod's reputation system.
+- Fires survive a server restart. Burning things come back burning with their remaining time, spent ground stays spent, and trees still waiting to regrow still do.
+
+## Fighting a fire
+
+A large fire is meant to be fightable rather than something you stand beside and hope.
+
+- **Dirt paths, cultivated ground and water are real firebreaks.** This protects a base more than you would expect: the levelled, pathed ground most bases sit on counts as fuel-free, so a wildfire burns to the edge of the yard and stalls. Walls only catch if fire starts inside the perimeter. If it looks like fire cannot touch your buildings, that is your groundwork doing its job.
+- **Rain douses grass fire.** A building already alight keeps burning.
+- **Press `G`** to extinguish what you are looking at plus the fire around you, ground fire and burning structures alike.
+- **The Dousing Bomb** puts out everything within about 6 m of where it lands. Hand-craftable anywhere and cheap on purpose: 3 Resin + 2 Leather scraps makes 3.
+- Anything extinguished stays soaked for about 90 seconds and cannot relight, so a line of bombs cuts a real break ahead of the front instead of the fire refilling the hole behind you.
+- Ground fire will not wander more than about 40 m from where the fire started.
+
+## Dedicated servers
+
+Fire is simulated entirely on the server. Several things that worked when hosting from your own game did **not** work on a dedicated server, silently, for a long time. If you tried FireFront on a server before and it felt tame, inert or oddly patchy, that was this — all of it is fixed:
+
+| Symptom | Cause |
+|---|---|
+| Forest fires barely spread | The server could not see trees at all |
+| Standing in fire never hurt | The server has no physical world where players stand |
+| Burnt trees never came back | Regrowth never planted anything |
+| Visible fire did not match the real fire | Ground fire was drawn from a running list of changes that was never reconciled |
+
+**Anti-grief:** `fireset burnbuildings false` (or `BurnPlayerBuildings` in the config) means fire never ignites anything a player placed — not by spread, not by fire arrows, not by anything — while ruins and world structures still burn.
+
+## Presets
+
+**`fireset burntheworld true`** — fire catches instantly, dirt paths and even water stop stopping it, rain does not put it out, burnt ground relights, fires start at full strength, nothing grows back, and the caps go to maximum *per fire*, so several blazes can rage at once. Visual settings are left alone deliberately: those are what cost frames, so you still choose how much your machine draws.
+
+**`fireset lowspec true`** — the first thing to reach for if big fires cost you frames. Fewer things burning at once, fewer visuals, no scorch decals, a slower spread tick. Fire still spreads and still burns your base down; there is simply less happening at once. Also available as `LowSpecPreset` in the config file.
+
+Both leave your own settings intact — anything you have already set lower is kept, and turning a preset off restores what you had. `firestatus` shows exactly what is in force. If both are on, lowspec wins.
+
+## Console commands
+
+Press `` ` `` to open the console.
+
+| Command | Does |
+|---|---|
+| `firestatus` | What is burning right now, plus every current setting |
+| `ignite` | Ignite whatever is under your crosshair |
+| `startfire [radius]` | Ignite everything burnable within radius of you |
+| `stopfire` | Extinguish whatever is under your crosshair |
+| `clearfires` | Every active fire out, instantly |
+| `firedebug` | Toggle verbose logging |
+| `fireset <key> <value>` | Live-tune any setting, no restart |
+
+Commands run on the server no matter where you type them, authorised against the server's own admin list, and the reply comes back to your console prefixed `[server]`.
+
+Diagnostic-only: `firelistprefabs`, `firecheckprefab`, `firepurgevfx`, `firegroundignite`, `firetreeregrow`, `firetreeregrowlist`.
+
+## Configuration
+
+Everything is in `BepInEx/config/com.raveniron.firefront.cfg` and everything is live-tunable with `fireset`, no restart required. The config file migrates itself between versions: when a default changes, a value you never touched follows it, and a value you chose is kept and named in the log.
+
+`fireset` keys:
+
+| Area | Keys |
+|---|---|
+| Core | `enabled`, `burnduration`, `firematurity`, `spreadradius`, `maxburning`, `queuesize`, `spreadinterval`, `trees`, `burnbuildings` |
+| Ground fire | `groundenabled`, `groundcellsize`, `groundradius`, `groundburnduration`, `groundmax`, `groundvfxmax`, `grounddamagemax`, `groundleashenabled`, `groundleashdistance` |
+| Damage and warmth | `firehurts`, `firehurtsplayeronly`, `firehurtsradius`, `firedamage`, `firetickinterval`, `firewarmth`, `firewarmthradius` |
+| Putting it out | `extinguishradius`, `dousingradius`, `douseimmunity`, `rainsuppress`, `rainmultiplier`, `rainobjects`, `rainobjectmultiplier`, `firebreaks` |
+| Wind | `windbias`, `windupwindchance`, `windinfluence` |
+| Aftermath | `scorchmarks`, `scorchlifetime`, `dirtpaint`, `dirtpaintradius`, `exhaustionenabled`, `fuelregrow`, `treeregrowth`, `treeregrowthseconds`, `persistfires` |
+| Ramp | `rampenabled`, `rampduration`, `rampstart` |
+| Visuals | `vfx`, `procedural`, `maxflameheight`, `treeflames`, `crownsparks`, `tallfiremax` |
+| Smouldering | `smouldering`, `smoulderafter` |
+| Presets and debug | `lowspec`, `burntheworld`, `debug` |
+
+Worth playing with: `fireset windinfluence 0` ignores wind entirely for old-style even spread; `1` is full effect and the default. `firestatus` reports the live wind strength the fire is currently feeling.
+
+## Building from source
+
+Requires the .NET SDK. The mod targets `net472`.
+
+```powershell
+.\tools\fetch-libs.ps1     # populate libs\ from your local Valheim install, once per machine
+dotnet build FireFront.csproj -c Release
 ```
-firestatus              — see what's currently burning + all current settings
-ignite                  — ignite whatever's under your crosshair
-startfire [radius]      — ignite everything burnable within radius of you
-stopfire                — extinguish whatever's under your crosshair
-clearfires              — nuke every active fire instantly
-firedebug               — toggle verbose fire logging
-fireset <key> <value>   — live-tune settings, no restart needed (applies on the server no matter where you type it)
-```
-Full list of tunable `fireset` keys: `burnduration`, `firematurity`, `spreadradius`, `maxburning`, `queuesize`, `spreadinterval`, `trees`, `burnbuildings`, `vfx`, `procedural`, `groundenabled`, `groundcellsize`, `groundradius`, `groundburnduration`, `groundmax`, `groundvfxmax`, `grounddamagemax`, `firehurts`, `firehurtsplayeronly`, `firehurtsradius`, `firedamage`, `firetickinterval`, `extinguishradius`, `douseimmunity`, `rainsuppress`, `rainmultiplier`, `scorchmarks`, `scorchlifetime`, `dirtpaint`, `dirtpaintradius`, `rampenabled`, `rampduration`, `rampstart`, `exhaustionenabled`, `fuelregrow`, `windbias`, `windupwindchance`, `windinfluence`, `dousingradius`, `persistfires`, `firebreaks`, `treeregrowth`, `treeregrowthseconds`, `groundleashenabled`, `groundleashdistance`, `lowspec`, `debug`, `burntheworld`, `enabled`
 
-Wind ones worth playing with: `fireset windinfluence 0` ignores wind entirely (old-style even spread), `1` is full effect (the default). `firestatus` shows the live wind strength the fire is currently feeling.
+`libs\` is gitignored deliberately — the game assemblies are not ours to redistribute. `fetch-libs.ps1` auto-detects Steam; pass `-ValheimPath` to override.
 
-There are a few more diagnostic-only commands (`firelistprefabs`, `firecheckprefab`, `firepurgevfx`, `firegroundignite`, `firetreeregrow`, `firetreeregrowlist`) mostly meant for dev-side debugging — ask in here if you're curious what they do.
+| Script | Does |
+|---|---|
+| `tools\fetch-libs.ps1` | Populates `libs\` from a local Valheim install |
+| `tools\run-tests.ps1` | Runs the off-game test harness under `tests\` |
+| `tools\package.ps1` | Builds the release zip into `dist\`. Refuses if the version in `Plugin.cs`, `FireFront.csproj` and `manifest.json` disagree |
+| `tools\start-test-server.ps1` / `stop-test-server.ps1` | Drive a local dedicated test server |
 
-—
+A note for contributors: the mod compiles against a *publicized* copy of the game assembly, so any vanilla member compiles regardless of its real accessibility and fails only at runtime. When checking whether something is public, decompile the **shipping** assembly from a real install, never the publicized copy in `libs\`.
 
-**If something breaks**
-Please grab your `LogOutput.log` (BepInEx folder) and send it over, especially if you see a wall of red repeating errors. Screenshots of weird spread behavior are also genuinely useful — "this jumped way further than it should have" is easier to diagnose with a picture than a description. For wind specifically: a screenshot of a burn scar plus which way the wind was blowing is exactly the evidence we need.
+## Reporting problems
 
-Thanks for testing — this thing has had a real rough-and-tumble development process (ask if you want the story), so any weirdness you catch now saves everyone a headache later.
+Send `LogOutput.log` from the BepInEx folder, especially if you see a wall of repeating red.
 
-—
+Screenshots of odd spread are genuinely useful — "this jumped further than it should have" is far easier to diagnose from a picture. For wind specifically, a shot of the burn scar plus the wind direction is exactly the evidence needed. Frametime graphs are gold; more than one stutter has been found and fixed from a tester's clip.
 
-**Credits**
+Known limits:
+
+- The fire visual is homemade, not a vanilla asset. It reads as fire; it is not Valheim's own.
+- Defaults are tuned aggressive. Expect fire to spread fast and hungrily unless you dial it down.
+
+## Credits
 
 **Wu'barrk** — visual effects, and the config-migration machinery FireFront's own is built on, by way of Wings of the Valkyrie and Valkyrie's Cargo.
-

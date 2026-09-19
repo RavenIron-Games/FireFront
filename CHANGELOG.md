@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.12
+
+- Whether fire keeps you warm, and how far that reaches, can now be changed from the console like
+  every other setting: `fireset firewarmth` and `fireset firewarmthradius`. They were config-file
+  only when the feature landed, which made them the odd ones out.
+- The README is a README again rather than an accumulated list of release announcements, and it
+  now documents all 59 tunable settings - eight of them had never been written down anywhere.
+
 ## 0.21.11
 
 - **A wildfire keeps you warm.** You could stand in the middle of a burning forest and freeze to

@@ -425,6 +425,16 @@ namespace FireFront.Commands
                     if (float.TryParse(raw, out float fhr)) { FireConfig.FireHurtsObjectRadius.Value = fhr; Ok(args, key, FireConfig.FireHurtsObjectRadius.Value); }
                     else Bad(args, raw);
                     break;
+
+                case "firewarmth":
+                    if (bool.TryParse(raw, out bool fw)) { FireConfig.FireKeepsYouWarm.Value = fw; Ok(args, key, fw); }
+                    else Bad(args, raw);
+                    break;
+
+                case "firewarmthradius":
+                    if (float.TryParse(raw, out float fwr)) { FireConfig.FireWarmthRadius.Value = fwr; Ok(args, key, FireConfig.FireWarmthRadius.Value); }
+                    else Bad(args, raw);
+                    break;
                 case "firedamage":
                     if (float.TryParse(raw, out float fd)) { FireConfig.FireDamagePerTick.Value = fd; Ok(args, key, FireConfig.FireDamagePerTick.Value); }
                     else Bad(args, raw);
@@ -877,6 +887,8 @@ namespace FireFront.Commands
                 { "firehurts", FireConfig.FireHurtsEnabled },
                 { "firehurtsplayeronly", FireConfig.FireHurtsPlayerOnly },
                 { "firehurtsradius", FireConfig.FireHurtsObjectRadius },
+                { "firewarmth", FireConfig.FireKeepsYouWarm },
+                { "firewarmthradius", FireConfig.FireWarmthRadius },
                 { "firedamage", FireConfig.FireDamagePerTick },
                 { "firetickinterval", FireConfig.FireDamageTickInterval },
                 { "extinguishradius", FireConfig.ExtinguishGroundRadius },
