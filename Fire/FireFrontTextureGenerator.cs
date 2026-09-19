@@ -97,18 +97,56 @@ namespace FireFront.Fire
             return tex;
         }
         
+        public static Texture2D BorrowVanillaTexture(string emitterKeyword)
+        {
+            string[] donors = { "fire_pit", "bonfire", "piece_groundtorch" };
+            for (int d = 0; d < donors.Length; d++)
+            {
+                GameObject prefab = ValheimBridge.FindPrefabByName(donors[d]);
+                if (prefab == null) continue;
+
+                ParticleSystemRenderer[] renderers = prefab.GetComponentsInChildren<ParticleSystemRenderer>(true);
+                for (int i = 0; i < renderers.Length; i++)
+                {
+                    ParticleSystemRenderer r = renderers[i];
+                    if (r == null || r.sharedMaterial == null || r.sharedMaterial.mainTexture == null) continue;
+
+                    if (r.gameObject.name.ToLower().Contains(emitterKeyword.ToLower()))
+                    {
+                        if (r.sharedMaterial.mainTexture is Texture2D t2d)
+                        {
+                            return t2d;
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        public static Material GetOrCreateFlameMaterial()
+        {
+            Texture2D tex = BorrowVanillaTexture("flame");
+            if (tex == null) tex = GenerateFireStreak();
+            return GetOrCreateFireMaterial(tex, true);
+        }
+
+        public static Material GetOrCreateSparkMaterial()
+        {
+            Texture2D tex = BorrowVanillaTexture("sparc");
+            if (tex == null) tex = BorrowVanillaTexture("spark");
+            if (tex == null) tex = GenerateSoftFireGlow();
+            return GetOrCreateFireMaterial(tex, true);
+        }
+
+        public static Material GetOrCreateSmokeMaterial()
+        {
+            Texture2D tex = BorrowVanillaTexture("smoke");
+            if (tex == null) tex = GenerateSmokeTexture();
+            return GetOrCreateFireMaterial(tex, false);
+        }
+        
         public static Material GetOrCreateFireMaterial(Texture2D tex, bool isAdditive = true)
         {
-            // Shader.Find("Particles/Standard Unlit") CANNOT work here, and neither can
-            // "Particles/Alpha Blended". Valheim strips both, along with Particles/Standard Surface
-            // and both Legacy Shaders/Particles variants - this repo settled it by parsing the
-            // ScriptMapper in globalgamemanagers rather than by guessing, and wrote the results up
-            // in ValheimBridge.FindUsableParticleShader. A name-based Find returns null, and a
-            // Material built on a null shader draws nothing at all.
-            //
-            // Additive is what makes a mass of particles read as fire instead of as separate orange
-            // discs, so that is tried first; the alpha chain is the fallback, because losing the
-            // look is survivable and rendering nothing is not.
             if (isAdditive)
             {
                 Material additive = ValheimBridge.CreateAdditiveParticleMaterial(tex, "FireFrontTextureGenerator");
@@ -118,9 +156,6 @@ namespace FireFront.Fire
             Shader shader = ValheimBridge.ResolveParticleShader();
             if (shader == null)
             {
-                // Nothing usable in this build. Returning null is deliberate: a Material built
-                // on a null shader is not an error Unity reports, it just draws nothing, and a
-                // silent invisible fire is far harder to diagnose than an absent one.
                 FireLogger.Warn("[SHADER-DIAG] FireFrontTextureGenerator: no usable particle shader in this build; " +
                                 "this effect will not be drawn.");
                 return null;
