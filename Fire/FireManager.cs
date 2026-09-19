@@ -2262,7 +2262,7 @@ namespace FireFront.Fire
                     });
                 }
 
-                if (ValheimBridge.KindOf(target) == ValheimBridge.BurnKind.Tree || ValheimBridge.KindOf(target) == ValheimBridge.BurnKind.Log)
+                if (ValheimBridge.KindOf(target) == BurnKind.Tree || ValheimBridge.KindOf(target) == BurnKind.Log)
                 {
                     if (UnityEngine.Random.Range(0f, 100f) > FireConfig.TreeDestructionRate.Value)
                     {

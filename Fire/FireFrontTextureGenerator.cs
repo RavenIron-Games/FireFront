@@ -1,3 +1,4 @@
+using FireFront.Utils;
 using UnityEngine;
 
 namespace FireFront.Fire
@@ -68,8 +69,32 @@ namespace FireFront.Fire
         
         public static Material GetOrCreateFireMaterial(Texture2D tex, bool isAdditive = true)
         {
-            Shader shader = Shader.Find(isAdditive ? "Particles/Standard Unlit" : "Particles/Standard Unlit");
-            if (shader == null) shader = Shader.Find("Particles/Alpha Blended"); // fallback
+            // Shader.Find("Particles/Standard Unlit") CANNOT work here, and neither can
+            // "Particles/Alpha Blended". Valheim strips both, along with Particles/Standard Surface
+            // and both Legacy Shaders/Particles variants - this repo settled it by parsing the
+            // ScriptMapper in globalgamemanagers rather than by guessing, and wrote the results up
+            // in ValheimBridge.FindUsableParticleShader. A name-based Find returns null, and a
+            // Material built on a null shader draws nothing at all.
+            //
+            // Additive is what makes a mass of particles read as fire instead of as separate orange
+            // discs, so that is tried first; the alpha chain is the fallback, because losing the
+            // look is survivable and rendering nothing is not.
+            if (isAdditive)
+            {
+                Material additive = ValheimBridge.CreateAdditiveParticleMaterial(tex, "FireFrontTextureGenerator");
+                if (additive != null) return additive;
+            }
+
+            Shader shader = ValheimBridge.ResolveParticleShader();
+            if (shader == null)
+            {
+                // Nothing usable in this build. Returning null is deliberate: a Material built
+                // on a null shader is not an error Unity reports, it just draws nothing, and a
+                // silent invisible fire is far harder to diagnose than an absent one.
+                FireLogger.Warn("[SHADER-DIAG] FireFrontTextureGenerator: no usable particle shader in this build; " +
+                                "this effect will not be drawn.");
+                return null;
+            }
             
             Material mat = new Material(shader);
             mat.mainTexture = tex;
