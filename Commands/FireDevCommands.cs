@@ -90,14 +90,45 @@ namespace FireFront.Commands
 
         private static void Ignite(Terminal.ConsoleEventArgs args)
         {
-            if (!RequireAdmin(args)) return;
+            // Relayed form "ignite <zdoUserId> <zdoId>". ignite is the one gated
+            // command that cannot be relayed as typed: it picks its target by
+            // raycasting the crosshair, and a headless server has no crosshair.
+            // So the CLIENT raycasts, then relays the resolved ZDOID here, where
+            // ExecuteRelayed has already authorized the sender against the
+            // server's own adminlist. That is the real, unspoofable check — the
+            // typist's local admin flag is not trusted, and on a dedicated
+            // server it is not even set for genuine admins: live 2026-09-19,
+            // clearfires (relayed) worked while ignite answered "Admin only."
+            // for a player who was in adminlist.txt in all three id forms.
+            if (ValheimBridge.IsServer() && args.Length >= 3)
+            {
+                if (!long.TryParse(args[1], out long zUser) || !uint.TryParse(args[2], out uint zId))
+                {
+                    Say(args, $"Couldn't parse ZDOID: '{args[1]} {args[2]}'.");
+                    return;
+                }
 
+                Component relayed = ValheimBridge.ComponentFromZdoid(new ZDOID(zUser, zId));
+                if (relayed == null) { Say(args, "That target no longer exists on the server."); return; }
+                if (!ValheimBridge.IsBurnable(relayed)) { Say(args, $"Not burnable: {ValheimBridge.NameOf(relayed)}"); return; }
+
+                FireManager.Instance.TryIgnite(relayed);
+                Say(args, FireManager.Instance.IsBurning(relayed)
+                    ? $"Ignited: {ValheimBridge.NameOf(relayed)}"
+                    : $"Queued or dropped (cap full): {ValheimBridge.NameOf(relayed)}");
+                return;
+            }
+
+            // Typed locally: only this machine has a crosshair, so the raycast
+            // happens here whichever side we are on.
             Component target = ValheimBridge.RaycastBurnable();
             if (target == null) { Say(args, "No burnable target under crosshair."); return; }
             if (!ValheimBridge.IsBurnable(target)) { Say(args, $"Not burnable: {ValheimBridge.NameOf(target)}"); return; }
 
             if (ValheimBridge.IsServer())
             {
+                if (!RequireAdmin(args)) return;
+
                 FireManager.Instance.TryIgnite(target);
                 Say(args, FireManager.Instance.IsBurning(target)
                     ? $"Ignited: {ValheimBridge.NameOf(target)}"
@@ -109,14 +140,13 @@ namespace FireFront.Commands
                 // _burning dict — but Update()'s simulation loop only runs on the
                 // server now, so that fire would ignite visually and then never
                 // expire, while its StartBurning broadcast tells every other peer
-                // a fire started that the server has no record of. Route through
-                // the same RPC real ignition already uses instead.
+                // a fire started that the server has no record of. Relay the
+                // resolved target instead and let the server ignite it.
                 ZDOID? id = ValheimBridge.ZDOIDOf(target);
                 if (id.HasValue)
                 {
-                    // The typist is the igniter — commands run where they are typed.
-                    ValheimBridge.SendIgniteRequestToServer(id.Value, ValheimBridge.LocalPlayerId());
-                    Say(args, $"Sent ignite request to server: {ValheimBridge.NameOf(target)}");
+                    Say(args, "FireFront: sent to server — replies appear as [server] lines. (ignite)");
+                    ValheimBridge.SendCommandRelayToServer($"ignite {id.Value.UserID} {id.Value.ID}");
                 }
                 else
                 {
@@ -727,6 +757,7 @@ namespace FireFront.Commands
                 { "firetreeregrow", FireTreeRegrow },
                 { "firetreeregrowlist", FireTreeRegrowList },
                 { "fireweather", FireWeather },
+                { "ignite", Ignite },
             };
 
         // When non-null, Say() writes here instead of the local console —
