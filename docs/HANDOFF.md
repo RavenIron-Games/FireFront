@@ -53,6 +53,88 @@ methods live there): `SharedMedia/ProceduralTextures.cs` (the generator; FireFro
 
 # FireFront — 0.22.0 (2026-09-20): tree fire rework, charred trees, rebuilt VFX
 
+**Reviewed 2026-09-20 evening (0.22.1, 66 Opus agents) and first run - five things fixed in
+place, the look handed back.** Fixed here: (1) `CharredTextures` built the 512² crack field and
+all four 512² ember masks synchronously, reached from `FireVFXController.Update` on the first
+bark tick of the first burning tree - several hundred milliseconds of hashing on the main
+thread. Fields, masks and the atlas erosion now build on worker threads (`Task.Run`; the
+generator touches no Unity object), one variant at a time on demand; `EmberMask` /
+`EmberMaskForAtlas` return null until ready, which every caller already treats as black, and
+`OnEmberMasksRebuilt` re-points the clones when variant 0 lands. The GPU read-backs stay on
+the main thread. The charred albedo/normal at charring time are still synchronous (once per
+species, not on the ignition frame) - a follow-up if it shows. A tiered review of this fix
+(Haiku map, Sonnet, Opus) found the one hole: a tree that streams in already charred skins
+on its spawn frame with no local burn first, so `CharredAlbedoFor` joined the field build
+synchronously. `CharredTextures.Prewarm()` now starts it from `Plugin.Awake` on any client
+(`GraphicsAvailable`), a few MB once per process, so the build is done before a world loads. (2) `HandleObjectFireSync` read
+the burn age off the wire unchecked (a NaN poisons the smoulder skip test and the VFX
+progress) and stored it as an age, stale by however long the burner took to instantiate; now
+clamped and stored as an ignition instant. (3) The scorch thinning hashed the floored metre,
+not the cell. (4) Found in play, not on review: Unity logged `Particle Velocity curves must
+all be in the same mode` every frame a flame was alive - 80,000 lines in eight minutes,
+each a BepInEx console + disk write. Shuriken requires a velocity (and force) module's
+x/y/z `MinMaxCurve`s to share one mode; `BuildFlames` set y to two constants with x/z left
+constant, and `SetVelocity` assigned bare floats (implicit Constant) on every wind change.
+Same shape in `CharredSmoke` and in `ValheimBridge.BuildCrownFlames` (main, since 0.21.2).
+Every site writes all three in one mode now; `SetVelocity` reads `vel.y.mode` first.
+(5) Also found in play: the client spawned a scorch decal the moment the sync stream said a
+cell went out, wherever that cell was and even during the loading screen - both sessions
+logged five of five marks with `terrain-hit=False`, the second set 500 m from the player
+before any heightmap existed. `QueueScorchMark` / `DrainPendingScorch` (FireManager, client
+path of Update) hold the mark until `ZoneSystem.IsZoneLoaded(pos)` and spawn it with the
+lifetime it has left, so the 300 s contract in the config text stays true. A tiered review
+of this fix (Sonnet, Opus) then shaped it: the 42 % keep is applied before queuing
+(`ValheimBridge.ScorchMarkKept`), the drain runs per frame with a scan window (256) and a
+spawn budget (8) so a region that loads at once fills in over seconds, the cap (4000) evicts
+the entry at the cursor (O(1): this runs inside the sync handler), and anything with under
+15 s or half the configured lifetime left is dropped rather than flashed. A second Opus pass
+over that shape added one entry per cell (a cell that re-burns unseen would have spawned
+coincident multiply blots, N deep, in one batch), made the scan bound a single pass rather
+than a re-walk, and made the drain drop everything when marks are switched off while they
+wait. A third pass on that: the cell set became an index (`Dictionary<cell, int>`, kept in
+step through swap-remove), so a cell that re-burns while its mark waits refreshes the entry;
+the floor is stored per entry from its own lifetime, so a runtime `scorchlifetime` change
+cannot wipe the queue; eviction walks its own cursor so a burst at the cap cannot push the
+drain past unchecked entries. A fourth pass then removed the direct-spawn path altogether
+(a sync batch of expiries in the zone the player stands in is the COMMON case, and inline
+spawning was the one-frame burst the budget exists to prevent; a loaded cell now spawns from
+the drain within a frame or two) and rebuilt the probe: the synced height is not a terrain
+height on a dedicated server (every cell inherits the seed object's Y for the whole spread),
+so `SpawnScorchMark` casts from y=6000 down 10 km on the terrain layer, the way
+`ZoneSystem.GetGroundHeight` does, and answers false with no quad when nothing is there.
+`ResetScorchDiagnostics` restarts the five-mark `[SCORCH]` log on reconnect. Accepted, not
+fixed: a cell that re-burns after its mark has already spawned gets a second coincident
+blot for the overlap of their lifetimes (pre-existing; the multiply material squares it),
+and the quad's spin is `Random.Range`, the one property peers do not agree on (radially
+symmetric blot, invisible); `ScorchMarkKept` keys on each machine's own `GroundCellSize`, so
+two clients with different values draw different keep sets (the same key already sizes
+their decals differently; the real fix is a server-to-client config broadcast, see the key
+map), a runtime `GroundCellSize` change re-rolls queued cells, and the `IsDedicatedServer`
+gate fails open if its reflection misses (pre-existing, every visual path shares it). Same
+hole exists on `main` since 0.21.15 (the remote-mirror path); `DrainRemoteVfxSpawnQueue` has
+no zone gate either and spawns ground VFX at any synced cell world-wide, capped only by
+`EffectiveGroundVfxMaxConcurrent` - not touched, worth the same treatment.
+Two changelog numbers corrected to the code (32 smoking objects, 10 s retry).
+Handed to Wu'barrk on PR #3, look-side: the blot is 1.5x bigger than the changelog says (both
+callers pass GroundCellSize*1.5 and SpawnScorchMark scales again) and at 42 % keep that is
+~2.7 multiply blots deep everywhere, so burnt ground may go near-black; the multiply material
+inherits the spark donor's tint (needs an in-game look - neutralise `_Color`/`_TintColor`
+explicitly); the charred twin of an atlas species binds the plain mask, not the bark-confined
+one; `SetEmber` drives `_EmissionColor` on slots that never got a mask; the live-burn glow
+steps at 70 m where the charred path fades. Retired mask sets are parked until unload (5.5 MB
+per coverage change; admin action, left alone on purpose - a destroyed texture samples white).
+**Merge with main (0.21.16, dd22ad4) conflicts in six files**, all resolvable: the four
+version/changelog files take 0.22.1 on top with main's manifest `description`; FireManager
+and ValheimBridge both add an RPC in `RegisterFireRpcs` (make it 12 and say `All 12`), and
+main's `LeaveScorchMark` no longer queues paint locally. First play run 2026-09-20 afternoon
+(test rig, both sides on this build): 0 exceptions either side, the 8-object join snapshot
+was sent, five `[SCORCH]` marks logged at join with `terrain-hit=False` (spawned before the
+terrain loaded - inconclusive), and the velocity-mode error above. Tester's client had
+`LowSpecPreset` on, which silently turns off scorch marks, charred smoke, crown sparks,
+haze and shadows (`Effective*` flags are `!LowSpec && ...`), and `[CHARRED]` / snapshot
+arrival lines are Debug level - `fireset lowspec false` and `fireset debug true` on the
+client before judging the look.
+
 **Reviewed 2026-09-20, before any run - two blockers fixed in place.** `LightFlicker.m_baseIntensity`
 (written every frame per burner from `UpdateLight`) and `LightLod.m_baseRange` (from `SetSmoulder`)
 are both `private float` in the shipping assembly and public only in the publicized reference.

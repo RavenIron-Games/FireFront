@@ -11,7 +11,7 @@
   to embers. The client books each one exactly as a `FireEvent` would (it is idempotent
   against fires it already heard about), backdates its own smoulder clock by the server's
   age so a fire that burned ten minutes elsewhere does not start fresh, and asks again after
-  20 s if no object snapshot arrived (three tries; the server rate-limits per sender, so a
+  10 s if no object snapshot arrived (three tries; the server rate-limits per sender, so a
   repeat that was not needed costs nothing). Only the connected server's reply is accepted.
   A burner that is not loaded on the client yet is drawn when it instantiates, as before.
 - **Charred wood looks like charred wood, and the embers are dialled back.** The 0.22.0
@@ -40,7 +40,7 @@
   wisps for `CharredSmokeSeconds` (90 s, world time, so every peer and every late joiner sees
   the same stage), full for two thirds of it and tapering to nothing; the same Lux-lit vanilla
   smoke material the fire uses, at a hundredth of the rate, drifting with the real wind. Off
-  under LowSpec, `CharredSmokeEnabled` otherwise, capped at 40 smoking objects world-wide.
+  under LowSpec, `CharredSmokeEnabled` otherwise, capped at 32 smoking objects world-wide.
 - **The whole-tree glow from the first in-game run (NomadicWar, PR #3, 2026-09-20) is closed
   at the root.** Trunks rendered as pink-white rods root to crown, canopies flat pink, distant
   LOD trunks neon. The mask kept bright orange in RGB everywhere with the pattern only in
@@ -79,6 +79,25 @@
   re-defaulted.
 - Verified headless: 0.22.0 booted the real Valheim `l-1.0.15` Linux dedicated server with
   every patch applied and 0 exceptions (`~/valheim-testbed/boot-check.sh`, see HANDOFF).
+- **Five things fixed on review and on the first run** (NomadicWar, 2026-09-20): the charred
+  textures are generated on worker threads, because the first version built a 512² field and
+  four 512² masks on the main thread the frame the first tree caught, a freeze of several
+  hundred milliseconds (the field build starts at plugin load on a client, so a tree that
+  streams in already charred does not wait for it either); the join snapshot's burn age is clamped and turned into an ignition
+  instant on arrival, so a burner that instantiates a minute after the packet is not a minute
+  behind; the scorch thinning is keyed on the ground cell rather than the metre, which at
+  a GroundCellSize below 1 folded neighbouring cells onto one pick; and every velocity and
+  force module now writes x, y and z in one curve mode, because Unity logged `Particle
+  Velocity curves must all be in the same mode` once per frame per live flame (80,000 lines
+  in the first eight minutes of play, each a BepInEx disk write) - `BuildFlames` set y to two
+  constants and left x and z as constants, and the wind update assigned bare floats. The
+  same shape sat in `BuildCrownFlames` since 0.21.2, so 0.21.x logged it too whenever a
+  crown burned. And a scorch decal now waits for its zone: the sync stream reports a cell
+  going out anywhere on the map, during the loading screen included, and the mark was
+  spawned on the spot - five of five logged marks had no terrain under them, 500 m from the
+  player, floating at the synced height with no tilt. They queue and spawn, with the
+  lifetime they have left, once the zone is loaded on that client (since 0.21.15 the
+  remote-mirror path had this hole on `main` too).
 
 ## 0.22.0
 

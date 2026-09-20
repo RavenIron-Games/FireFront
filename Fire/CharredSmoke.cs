@@ -170,6 +170,10 @@ namespace FireFront.Fire
             vel.enabled = true;
             vel.space = ParticleSystemSimulationSpace.World;
             vel.y = new ParticleSystem.MinMaxCurve(0.28f, 0.55f);
+            // x, y and z must share one curve mode or Unity logs an error every frame (see
+            // FireVFXController.BuildFlames); the wind update below keeps them two-constant.
+            vel.x = new ParticleSystem.MinMaxCurve(0f, 0f);
+            vel.z = new ParticleSystem.MinMaxCurve(0f, 0f);
 
             var r = go.GetComponent<ParticleSystemRenderer>();
             r.renderMode = ParticleSystemRenderMode.Billboard;
@@ -213,8 +217,8 @@ namespace FireFront.Fire
                 var e = ps.emission;
                 e.rateOverTime = BaseRate(i) * taper;
                 var v = ps.velocityOverLifetime;
-                v.x = windVel.x;
-                v.z = windVel.z;
+                v.x = new ParticleSystem.MinMaxCurve(windVel.x, windVel.x);
+                v.z = new ParticleSystem.MinMaxCurve(windVel.z, windVel.z);
             }
         }
 

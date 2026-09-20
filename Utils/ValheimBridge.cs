@@ -2249,6 +2249,38 @@ namespace FireFront.Utils
         }
 
         /// <summary>
+        /// True when the zone under <paramref name="pos"/> is instantiated in this process, so a
+        /// terrain collider exists there to probe. On a dedicated server that is only the ring
+        /// around the world origin; on a client it is the ring around the player.
+        /// </summary>
+        public static bool IsZoneLoaded(Vector3 pos)
+        {
+            ZoneSystem zs = ZoneSystem.instance;
+            return zs != null && zs.IsZoneLoaded(pos);
+        }
+
+        /// <summary>
+        /// The deterministic 42 % keep for a scorch mark at <paramref name="position"/>, decided
+        /// by ground cell so every peer that draws the cell, and a re-ignition of it, agree. By
+        /// CELL: GroundCellSize goes down to 0.5 m, and keying on the metre would fold
+        /// neighbouring cells onto one pick and one jitter, which is the grid this exists to
+        /// break. Public so the client's queue can drop what would never spawn.
+        /// </summary>
+        public static bool ScorchMarkKept(Vector3 position)
+        {
+            ScorchCell(position, out int cx, out int cz);
+            return SharedMedia.ProceduralTextures.Hash(cx, cz, 7) <= 0.42f;
+        }
+
+        /// <summary>The ground cell a scorch mark is keyed on, in the local GroundCellSize grid.</summary>
+        public static void ScorchCell(Vector3 position, out int cx, out int cz)
+        {
+            float cell = Mathf.Max(0.01f, FireFront.Config.FireConfig.GroundCellSize.Value);
+            cx = Mathf.FloorToInt(position.x / cell);
+            cz = Mathf.FloorToInt(position.z / cell);
+        }
+
+        /// <summary>
         /// Leaves a burn scar on the ground where a cell went out. Purely cosmetic and
         /// fire-and-forget (self-destructs via Unity's delayed Destroy). Since 0.22.1 it is a
         /// multiply-blended soot blot laid on the terrain's own normal, not an umber disc:
@@ -2261,13 +2293,10 @@ namespace FireFront.Utils
         /// overlap. The first few placements are logged (position, terrain hit, shader) so
         /// "no marks" is diagnosable as absent vs invisible.
         /// </summary>
-        public static void SpawnScorchMark(Vector3 position, float size, float lifetimeSeconds)
+        public static bool SpawnScorchMark(Vector3 position, float size, float lifetimeSeconds)
         {
-            // Thin the field deterministically by cell, so both peers that draw this cell (and
-            // a re-ignition of it) make the same choice.
-            int cx = Mathf.FloorToInt(position.x), cz = Mathf.FloorToInt(position.z);
-            float pick = SharedMedia.ProceduralTextures.Hash(cx, cz, 7);
-            if (pick > 0.42f) return;
+            if (!ScorchMarkKept(position)) return true; // see ScorchMarkKept: by cell, so every peer agrees; not a failure
+            ScorchCell(position, out int cx, out int cz);
             float jx = (SharedMedia.ProceduralTextures.Hash(cx, cz, 11) - 0.5f) * 0.8f;
             float jz = (SharedMedia.ProceduralTextures.Hash(cx, cz, 13) - 0.5f) * 0.8f;
             float scale = size * (1.6f + 0.6f * SharedMedia.ProceduralTextures.Hash(cx, cz, 17));
@@ -2275,13 +2304,21 @@ namespace FireFront.Utils
 
             // Sit on the real ground, tilted to it: the client has the terrain collider (the
             // headless server does not, which is why the spawn moved client-side in 0.21.15).
-            Vector3 normal = Vector3.up;
-            bool hit = false;
-            if (Physics.Raycast(pos + Vector3.up * 3f, Vector3.down, out RaycastHit rh, 8f, TerrainLayerMask))
+            // The height that arrived with the sync stream is not a terrain height at all on a
+            // dedicated server - every cell inherits the Y of whatever seeded the fire - so the
+            // probe ignores it and casts the way ZoneSystem.GetGroundHeight does: from far above,
+            // terrain layer only (a heightfield, so one crossing at most, and nothing overhangs).
+            // No terrain under a loaded zone is a miss, and a miss is no mark: the queue only
+            // sends a position here once the zone is loaded, and a quad floating at a made-up
+            // height was the failure this exists to remove.
+            if (!Physics.Raycast(new Vector3(pos.x, 6000f, pos.z), Vector3.down, out RaycastHit rh, 10000f, TerrainLayerMask))
             {
-                pos = rh.point; normal = rh.normal; hit = true;
+                FireLogger.Debug($"[SCORCH] no terrain under {pos.x:F0},{pos.z:F0}; mark dropped.");
+                return false;
             }
-            pos += normal * 0.04f; // off the surface, along its normal, not straight up
+            Vector3 normal = rh.normal;
+            bool hit = true;
+            pos = rh.point + normal * 0.04f; // off the surface, along its normal, not straight up
 
             var quad = new GameObject("FireFrontScorchMark");
             quad.transform.position = pos;
@@ -2303,9 +2340,13 @@ namespace FireFront.Utils
             }
 
             Object.Destroy(quad, lifetimeSeconds);
+            return true;
         }
 
         private static int _scorchLogged;
+
+        /// <summary>The first five marks of a session are logged; a reconnect starts that count again.</summary>
+        public static void ResetScorchDiagnostics() { _scorchLogged = 0; }
 
         private static Mesh _cachedQuadMesh;
         private static Material _cachedScorchMaterial;
@@ -3290,6 +3331,10 @@ namespace FireFront.Utils
             velocity.enabled = true;
             velocity.space = ParticleSystemSimulationSpace.World;
             velocity.y = new ParticleSystem.MinMaxCurve(1.2f, 2.4f); // the lick upward that makes it fire, not a glow
+            // x, y and z must share one curve mode or Unity logs "Particle Velocity curves must
+            // all be in the same mode" every frame the crown burns (see FireVFXController.BuildFlames).
+            velocity.x = new ParticleSystem.MinMaxCurve(0f, 0f);
+            velocity.z = new ParticleSystem.MinMaxCurve(0f, 0f);
 
             ParticleSystem.SizeOverLifetimeModule sizeOverLifetime = ps.sizeOverLifetime;
             sizeOverLifetime.enabled = true;

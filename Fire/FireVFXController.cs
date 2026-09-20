@@ -407,6 +407,13 @@ namespace FireFront.Fire
             vel.enabled = true;
             vel.space = ParticleSystemSimulationSpace.World;
             vel.y = front ? new ParticleSystem.MinMaxCurve(1.0f, 3.2f) : new ParticleSystem.MinMaxCurve(0.6f, 1.8f);
+            // Unity insists x, y and z share one curve mode and logs "Particle Velocity curves
+            // must all be in the same mode" EVERY FRAME a system simulates when they do not:
+            // 80k lines in eight minutes on the first play test, each one a BepInEx disk write.
+            // y is a random lick between two constants, so x and z are two-constant zeros, and
+            // SetVelocity keeps whatever mode a system was built with when the wind moves them.
+            vel.x = new ParticleSystem.MinMaxCurve(0f, 0f);
+            vel.z = new ParticleSystem.MinMaxCurve(0f, 0f);
 
             return ps;
         }
@@ -476,6 +483,9 @@ namespace FireFront.Fire
             force.enabled = true;
             force.space = ParticleSystemSimulationSpace.World;
             force.y = new ParticleSystem.MinMaxCurve(0.2f, 0.4f);
+            // Same one-mode rule as velocity: x and z in y's two-constant mode.
+            force.x = new ParticleSystem.MinMaxCurve(0f, 0f);
+            force.z = new ParticleSystem.MinMaxCurve(0f, 0f);
 
             var noise = ps.noise;
             noise.enabled = true;
@@ -544,6 +554,9 @@ namespace FireFront.Fire
             force.enabled = true;
             force.space = ParticleSystemSimulationSpace.World;
             force.y = new ParticleSystem.MinMaxCurve(0.1f, 0.5f);
+            // Same one-mode rule as velocity: x and z in y's two-constant mode.
+            force.x = new ParticleSystem.MinMaxCurve(0f, 0f);
+            force.z = new ParticleSystem.MinMaxCurve(0f, 0f);
 
             var vel = ps.velocityOverLifetime;
             vel.enabled = true;
@@ -746,9 +759,13 @@ namespace FireFront.Fire
         {
             if (ps == null) return;
             var vel = ps.velocityOverLifetime;
-            vel.x = v.x;
-            vel.z = v.z;
-            if (y != 0f) vel.y = y;
+            // A bare float converts to a Constant curve, which broke the one-mode rule on the
+            // flame systems (their y is two constants) every time the wind changed. Write x and
+            // z in whatever mode y already has; a two-constant pair with equal ends is a constant.
+            bool two = vel.y.mode == ParticleSystemCurveMode.TwoConstants;
+            vel.x = two ? new ParticleSystem.MinMaxCurve(v.x, v.x) : new ParticleSystem.MinMaxCurve(v.x);
+            vel.z = two ? new ParticleSystem.MinMaxCurve(v.z, v.z) : new ParticleSystem.MinMaxCurve(v.z);
+            if (y != 0f) vel.y = two ? new ParticleSystem.MinMaxCurve(y, y) : new ParticleSystem.MinMaxCurve(y);
         }
 
         private void UpdateRates()

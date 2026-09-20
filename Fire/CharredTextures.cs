@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 using FireFront.Config;
 using FireFront.Utils;
 using SharedMedia;
@@ -31,27 +32,107 @@ namespace FireFront.Fire
         public const int Variants = 4;
         private const int Seed = 20260920;
 
+        // Everything below is built OFF the main thread. The generator (SharedMedia.
+        // ProceduralTextures) is pure CPU code over Color32[] and float[] - it touches no Unity
+        // object until MakeTexture uploads the result - and a 512² field plus four 512² masks is
+        // several hundred milliseconds of hashing, which the first version of this did
+        // synchronously inside FireVFXController.Update the frame the first tree caught: a
+        // visible freeze at the worst possible moment (2026-09-20 review, before any run). Now a
+        // mask that is not ready yet is null, every caller already treats null as "no mask"
+        // (blackTexture, no emission), and the texture appears on a later tick; when variant 0 of
+        // a generation lands, the skin re-points its clones. Only the GPU read-backs stay on the
+        // main thread. The synchronous paths (a charred albedo or normal at charring time,
+        // `firedumptex`) join a build in flight rather than starting a second.
+        private sealed class Fields
+        {
+            public ProceduralTextures.CrackField Crack;
+            public float[] Height;
+            public float[] AlbedoPocket;
+        }
+        private sealed class AtlasSet
+        {
+            public int Generation;
+            public readonly Texture2D[] Masks = new Texture2D[Variants];
+            public readonly Task<Color32[]>[] Tasks = new Task<Color32[]>[Variants];
+        }
+
         private static ProceduralTextures.CrackField s_crack;
         private static float[] s_height;
         private static float[] s_albedoPocket;
+        private static Task<Fields> s_fieldsTask;
+        private static bool s_fieldsFailed;
         private static Texture2D[] s_emberMasks;
+        private static Task<Color32[]>[] s_maskTasks;
+        private static int s_generation; // bumps on every coverage change; a set built for an older generation is retired
         private static readonly List<Texture2D> s_retiredMasks = new List<Texture2D>();
         private static float s_maskCoverage = -1f;
         /// <summary>Per-atlas mask sets (pine, fir): the standard masks confined to the atlas' opaque bark block, so needle cards never light during a live burn.</summary>
-        private static readonly Dictionary<Texture, Texture2D[]> s_atlasMasks = new Dictionary<Texture, Texture2D[]>();
+        private static readonly Dictionary<Texture, AtlasSet> s_atlasMasks = new Dictionary<Texture, AtlasSet>();
         private static readonly Dictionary<Texture, float[]> s_atlasRegions = new Dictionary<Texture, float[]>();
+        private static readonly Dictionary<Texture, Task<float[]>> s_atlasRegionTasks = new Dictionary<Texture, Task<float[]>>();
         private static readonly Dictionary<Texture, Texture2D> s_albedos = new Dictionary<Texture, Texture2D>();
         private static readonly Dictionary<Texture, Texture2D> s_normals = new Dictionary<Texture, Texture2D>();
         private static Texture2D s_heightOnlyNormal;
         private static readonly HashSet<Texture> s_failed = new HashSet<Texture>();
         private static bool s_blitFailureLogged;
+        private static bool s_taskFailureLogged;
 
+        private static Fields BuildFields()
+        {
+            var f = new Fields { Crack = ProceduralTextures.BuildCrackField(Size, Size, 9, 5, Seed) };
+            f.Height = ProceduralTextures.CharHeight(f.Crack, Size, Size, Seed);
+            f.AlbedoPocket = ProceduralTextures.PocketField(Size, Size, 0.25f, Seed + 100);
+            return f;
+        }
+
+        private static void AdoptFields(Fields f)
+        {
+            s_crack = f.Crack; s_height = f.Height; s_albedoPocket = f.AlbedoPocket;
+            s_fieldsTask = null;
+        }
+
+        /// <summary>
+        /// Starts the field build on a worker thread now, so a tree that streams in already charred
+        /// (a persisted flag, no local burn ever ran) finds it done instead of joining it on its own
+        /// spawn frame through EnsureFields. A few MB of arrays per client process, once; idempotent.
+        /// </summary>
+        public static void Prewarm()
+        {
+            if (s_crack != null || s_fieldsFailed || s_fieldsTask != null) return;
+            s_fieldsTask = Task.Run((System.Func<Fields>)BuildFields);
+        }
+
+        /// <summary>The fields, NOW, for the synchronous paths. Joins a build already in flight; .Result rethrows a build failure into the caller's own catch.</summary>
         private static void EnsureFields()
         {
             if (s_crack != null) return;
-            s_crack = ProceduralTextures.BuildCrackField(Size, Size, 9, 5, Seed);
-            s_height = ProceduralTextures.CharHeight(s_crack, Size, Size, Seed);
-            s_albedoPocket = ProceduralTextures.PocketField(Size, Size, 0.25f, Seed + 100);
+            if (s_fieldsTask == null) s_fieldsTask = Task.Run((System.Func<Fields>)BuildFields);
+            AdoptFields(s_fieldsTask.Result);
+        }
+
+        /// <summary>The fields if they are ready; otherwise starts building them and answers false.</summary>
+        private static bool TryGetFields()
+        {
+            if (s_crack != null) return true;
+            if (s_fieldsFailed) return false;
+            if (s_fieldsTask == null) { s_fieldsTask = Task.Run((System.Func<Fields>)BuildFields); return false; }
+            if (!s_fieldsTask.IsCompleted) return false;
+            if (s_fieldsTask.IsFaulted)
+            {
+                s_fieldsFailed = true;
+                LogTaskFailure("char fields", s_fieldsTask.Exception);
+                s_fieldsTask = null;
+                return false;
+            }
+            AdoptFields(s_fieldsTask.Result);
+            return true;
+        }
+
+        private static void LogTaskFailure(string what, System.Exception ex)
+        {
+            if (s_taskFailureLogged) return;
+            s_taskFailureLogged = true;
+            FireLogger.Warn($"[CHARRED] building the {what} threw ({ex?.GetBaseException().Message}); charred trees will not glow.");
         }
 
         /// <summary>Which of the ember mask variants a given object uses; stable per object and spread evenly.</summary>
@@ -66,31 +147,45 @@ namespace FireFront.Fire
         }
 
         /// <summary>
-        /// Ember mask <paramref name="variant"/>, built for the current CharredEmberCoverage. A
-        /// coverage change rebuilds the set on the next call; the skin re-points its clones.
+        /// Ember mask <paramref name="variant"/> for the current CharredEmberCoverage, or null
+        /// while it is still being built (or if it cannot be). Built one variant at a time, on a
+        /// worker thread, on demand. A coverage change starts a new generation; the previous set
+        /// is NOT destroyed: material clones and property blocks still point at it, and a
+        /// destroyed texture samples as white - exactly the whole-tree glow this mask exists to
+        /// prevent. It is parked and freed on unload.
         /// </summary>
         public static Texture2D EmberMask(int variant)
         {
             float coverage = Mathf.Clamp01(FireConfig.CharredEmberCoverage.Value);
             if (s_emberMasks == null || !Mathf.Approximately(coverage, s_maskCoverage))
             {
-                EnsureFields();
-                // The previous set is NOT destroyed here: material clones and property blocks
-                // still point at it, and a destroyed texture samples as white — exactly the
-                // whole-tree glow this mask exists to prevent. It is parked and freed on unload.
-                if (s_emberMasks != null) s_retiredMasks.AddRange(s_emberMasks);
+                if (s_emberMasks != null)
+                    for (int v = 0; v < s_emberMasks.Length; v++) if (s_emberMasks[v] != null) s_retiredMasks.Add(s_emberMasks[v]);
                 s_emberMasks = new Texture2D[Variants];
-                for (int v = 0; v < Variants; v++)
-                {
-                    float[] pocket = ProceduralTextures.PocketField(Size, Size, coverage, Seed + 100 + v * 17);
-                    Color32[] px = ProceduralTextures.EmberMask(Size, Size, s_crack, pocket, Seed + v * 17);
-                    s_emberMasks[v] = MakeTexture(px, Size, Size, linear: true, name: "FireFront_EmberMask_" + v);
-                }
+                s_maskTasks = new Task<Color32[]>[Variants];
                 s_maskCoverage = coverage;
-                FireLogger.Debug($"[CHARRED] ember masks built: {Variants}x{Size}² at coverage {coverage:F2}");
-                CharredTreeSkin.OnEmberMasksRebuilt(s_emberMasks[0]);
+                s_generation++;
             }
             int i = variant % Variants; if (i < 0) i += Variants;
+            if (s_emberMasks[i] != null) return s_emberMasks[i];
+            if (!TryGetFields()) return null;
+
+            Task<Color32[]> task = s_maskTasks[i];
+            if (task == null)
+            {
+                ProceduralTextures.CrackField crack = s_crack;
+                int pocketSeed = Seed + 100 + i * 17, maskSeed = Seed + i * 17;
+                s_maskTasks[i] = Task.Run(() => ProceduralTextures.EmberMask(Size, Size, crack,
+                    ProceduralTextures.PocketField(Size, Size, coverage, pocketSeed), maskSeed));
+                return null;
+            }
+            if (!task.IsCompleted) return null;
+            if (task.IsFaulted) { LogTaskFailure("ember mask", task.Exception); return null; }
+
+            s_emberMasks[i] = MakeTexture(task.Result, Size, Size, linear: true, name: "FireFront_EmberMask_" + i);
+            s_maskTasks[i] = null;
+            FireLogger.Debug($"[CHARRED] ember mask {i} built ({Size}², coverage {coverage:F2}, generation {s_generation})");
+            if (i == 0) CharredTreeSkin.OnEmberMasksRebuilt(s_emberMasks[0]);
             return s_emberMasks[i];
         }
 
@@ -98,52 +193,101 @@ namespace FireFront.Fire
         /// Ember mask for a material whose _MainTex is a trunk+foliage atlas (Pine, Fir): the
         /// standard mask multiplied by the atlas' opaque bark block, found by eroding its alpha
         /// (needle cards are cut-outs full of holes and erode away; the bark rectangle survives).
-        /// Falls back to the plain mask if the atlas cannot be read back.
+        /// Null while it is being built - the caller then lights NOTHING on that slot rather than
+        /// the plain mask, which would light the needle cards. Falls back to the plain mask only
+        /// when the atlas cannot be read back at all.
         /// </summary>
         public static Texture2D EmberMaskForAtlas(Texture atlas, int variant)
         {
-            Texture2D plain = EmberMask(variant); // also rebuilds the base set on a coverage change
+            Texture2D plain = EmberMask(variant); // also starts, or advances, the base set
+            if (plain == null) return null;
             if (atlas == null || !FireVFXController.GraphicsAvailable) return plain;
             int i = variant % Variants; if (i < 0) i += Variants;
-            if (s_atlasMasks.TryGetValue(atlas, out Texture2D[] set) && set != null && set[i] != null && set[Variants] == s_emberMasks[0]) return set[i];
-            float[] region = TrunkRegionFor(atlas);
-            if (region == null) return plain;
-            EnsureFields();
-            float coverage = Mathf.Clamp01(FireConfig.CharredEmberCoverage.Value);
-            var built = new Texture2D[Variants + 1];
-            for (int v = 0; v < Variants; v++)
+
+            if (!s_atlasMasks.TryGetValue(atlas, out AtlasSet set) || set == null || set.Generation != s_generation)
             {
-                float[] pocket = ProceduralTextures.PocketField(Size, Size, coverage, Seed + 100 + v * 17);
-                Color32[] px = ProceduralTextures.EmberMask(Size, Size, s_crack, pocket, Seed + v * 17, region: region);
-                built[v] = MakeTexture(px, Size, Size, linear: true, name: "FireFront_EmberMask_" + atlas.name + "_" + v);
+                if (set != null)
+                    for (int v = 0; v < Variants; v++) if (set.Masks[v] != null) s_retiredMasks.Add(set.Masks[v]);
+                set = new AtlasSet { Generation = s_generation };
+                s_atlasMasks[atlas] = set;
             }
-            built[Variants] = s_emberMasks[0]; // records which base set this was built against (coverage changes rebuild it)
-            if (set != null) s_retiredMasks.AddRange(set);
-            s_atlasMasks[atlas] = built;
-            FireLogger.Debug($"[CHARRED] atlas ember masks built for {atlas.name}");
-            return built[i];
+            if (set.Masks[i] != null) return set.Masks[i];
+
+            if (!TryGetTrunkRegion(atlas, out float[] region)) return null; // still being read back or eroded
+            if (region == null) return plain;                                // unreadable atlas: the old behaviour
+
+            Task<Color32[]> task = set.Tasks[i];
+            if (task == null)
+            {
+                ProceduralTextures.CrackField crack = s_crack;
+                float coverage = s_maskCoverage;
+                int pocketSeed = Seed + 100 + i * 17, maskSeed = Seed + i * 17;
+                set.Tasks[i] = Task.Run(() => ProceduralTextures.EmberMask(Size, Size, crack,
+                    ProceduralTextures.PocketField(Size, Size, coverage, pocketSeed), maskSeed, region: region));
+                return null;
+            }
+            if (!task.IsCompleted) return null;
+            if (task.IsFaulted) { LogTaskFailure("atlas ember mask", task.Exception); return null; }
+
+            set.Masks[i] = MakeTexture(task.Result, Size, Size, linear: true, name: "FireFront_EmberMask_" + atlas.name + "_" + i);
+            set.Tasks[i] = null;
+            FireLogger.Debug($"[CHARRED] atlas ember mask {i} built for {atlas.name}");
+            return set.Masks[i];
         }
 
-        /// <summary>Trunk-only region of an atlas texture (1 on the opaque bark block), or null if it cannot be read.</summary>
-        private static float[] TrunkRegionFor(Texture atlas)
+        /// <summary>
+        /// Trunk-only region of an atlas texture (1 on the opaque bark block). The GPU read-back
+        /// must run on the main thread and is cheap; the erosion is not and runs on a worker.
+        /// False while that is in flight. True with a null region when the atlas cannot be read
+        /// or has nothing solid, in which case the caller uses the plain mask, as before.
+        /// </summary>
+        private static bool TryGetTrunkRegion(Texture atlas, out float[] region)
         {
-            if (s_atlasRegions.TryGetValue(atlas, out float[] cached)) return cached;
-            float[] region = null;
-            try
+            if (s_atlasRegions.TryGetValue(atlas, out region)) return true;
+            if (!s_atlasRegionTasks.TryGetValue(atlas, out Task<float[]> task))
             {
-                Color32[] src = ReadableCopy(atlas, linear: false, out int w, out int h);
-                if (w != Size || h != Size) src = ProceduralTextures.Resample(src, w, h, Size, Size);
-                region = ProceduralTextures.OpaqueBlockMask(src, Size, Size, Size / 48);
-                int on = 0; for (int k = 0; k < region.Length; k++) if (region[k] > 0f) on++;
-                FireLogger.Debug($"[CHARRED] trunk region of {atlas.name}: {(100f * on / region.Length):F1}% of the atlas is solid bark");
-                if (on == 0) region = null; // nothing solid: leave the plain mask rather than a black one
+                Color32[] src;
+                int w, h;
+                try
+                {
+                    src = ReadableCopy(atlas, linear: false, out w, out h);
+                }
+                catch (System.Exception ex)
+                {
+                    FireLogger.Debug($"[CHARRED] trunk region of {atlas.name} failed ({ex.Message}); plain mask used.");
+                    s_atlasRegions[atlas] = null;
+                    region = null;
+                    return true;
+                }
+                int cw = w, ch = h;
+                s_atlasRegionTasks[atlas] = Task.Run(() =>
+                {
+                    Color32[] px = (cw != Size || ch != Size) ? ProceduralTextures.Resample(src, cw, ch, Size, Size) : src;
+                    float[] r = ProceduralTextures.OpaqueBlockMask(px, Size, Size, Size / 48);
+                    int on = 0; for (int k = 0; k < r.Length; k++) if (r[k] > 0f) on++;
+                    return on == 0 ? null : r; // nothing solid: leave the plain mask rather than a black one
+                });
+                region = null;
+                return false;
             }
-            catch (System.Exception ex)
+            if (!task.IsCompleted) { region = null; return false; }
+            s_atlasRegionTasks.Remove(atlas);
+            if (task.IsFaulted)
             {
-                FireLogger.Debug($"[CHARRED] trunk region of {atlas.name} failed ({ex.Message}); plain mask used.");
+                FireLogger.Debug($"[CHARRED] trunk region of {atlas.name} failed ({task.Exception?.GetBaseException().Message}); plain mask used.");
+                region = null;
+            }
+            else
+            {
+                region = task.Result;
+                if (region != null)
+                {
+                    int on = 0; for (int k = 0; k < region.Length; k++) if (region[k] > 0f) on++;
+                    FireLogger.Debug($"[CHARRED] trunk region of {atlas.name}: {(100f * on / region.Length):F1}% of the atlas is solid bark");
+                }
             }
             s_atlasRegions[atlas] = region;
-            return region;
+            return true;
         }
 
         /// <summary>
@@ -313,6 +457,7 @@ namespace FireFront.Fire
                 for (int i = 0; i < s_emberMasks.Length; i++) if (s_emberMasks[i] != null) Object.Destroy(s_emberMasks[i]);
                 s_emberMasks = null;
             }
+            s_maskTasks = null; // a build still in flight completes into nothing and is collected
             for (int i = 0; i < s_retiredMasks.Count; i++) if (s_retiredMasks[i] != null) Object.Destroy(s_retiredMasks[i]);
             s_retiredMasks.Clear();
         }
@@ -320,18 +465,19 @@ namespace FireFront.Fire
         /// <summary>Plugin unload: everything here is ours to free.</summary>
         public static void ReleaseAll()
         {
-            foreach (KeyValuePair<Texture, Texture2D[]> kv in s_atlasMasks)
+            foreach (KeyValuePair<Texture, AtlasSet> kv in s_atlasMasks)
             {
                 if (kv.Value == null) continue;
-                for (int i = 0; i < Variants; i++) if (kv.Value[i] != null) Object.Destroy(kv.Value[i]);
+                for (int i = 0; i < Variants; i++) if (kv.Value.Masks[i] != null) Object.Destroy(kv.Value.Masks[i]);
             }
-            s_atlasMasks.Clear(); s_atlasRegions.Clear();
+            s_atlasMasks.Clear(); s_atlasRegions.Clear(); s_atlasRegionTasks.Clear();
             ReleaseMasks();
             foreach (KeyValuePair<Texture, Texture2D> kv in s_albedos) if (kv.Value != null) Object.Destroy(kv.Value);
             foreach (KeyValuePair<Texture, Texture2D> kv in s_normals) if (kv.Value != null) Object.Destroy(kv.Value);
             s_albedos.Clear(); s_normals.Clear(); s_failed.Clear();
             if (s_heightOnlyNormal != null) { Object.Destroy(s_heightOnlyNormal); s_heightOnlyNormal = null; }
             s_crack = null; s_height = null; s_albedoPocket = null; s_maskCoverage = -1f;
+            s_fieldsTask = null; s_fieldsFailed = false;
         }
     }
 }

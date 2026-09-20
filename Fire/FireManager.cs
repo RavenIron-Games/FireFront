@@ -749,6 +749,7 @@ namespace FireFront.Fire
             DrainRemoteVfxSpawnQueue(); // client-side VFX budget — must run before the server gate below
             DrainRemoteObjectVfxQueue(); // same, for object fire — see EnqueueRemoteObjectVfx
             ProcessRemoteSmouldering(); // client-side: the server is headless, THIS is what a player sees
+            DrainPendingScorch(); // client-side: scorch decals whose zone has loaded since they were queued
             PruneOrphanedRemoteVfx();   // same: nothing else can reach a stranded effect
 
             // Everything below this point is the actual fire simulation, and it
@@ -2384,11 +2385,16 @@ namespace FireFront.Fire
                 float age = pkg.ReadSingle();
                 bool smouldering = pkg.ReadBool();
                 if (id == ZDOID.None) continue;
+                // Same discipline as HandleFireDamage: IsFromServer is a filter, not an
+                // authenticator, and a NaN here would poison two clocks (the smoulder skip test
+                // and FireVFXController's progress) for the life of the fire. Clamped, not
+                // dropped, so the fire is still drawn.
+                age = (float.IsNaN(age) || float.IsInfinity(age)) ? 0f : Mathf.Clamp(age, 0f, 36000f);
                 if (!_remoteBurningIds.Add(id))
                 {
                     continue; // heard its FireEvent already; its own clock stands
                 }
-                _remoteAgeAtSync[id] = age;
+                _remoteAgeAtSync[id] = Time.time - age; // as an ignition instant on this clock: the rig may be built much later
                 if (smouldering) _remoteSmoulderAtSync.Add(id);
                 EnqueueRemoteObjectVfx(id);
                 added++;
@@ -2396,7 +2402,12 @@ namespace FireFront.Fire
             FireLogger.Debug($"[SYNC-DIAG] object snapshot from {sender}: {count} burning, {added} new to this client.");
         }
 
-        /// <summary>Burn age the server reported for a fire this client learned of from a snapshot; consumed when its rig is built.</summary>
+        /// <summary>
+        /// When a fire this client learned of from a snapshot ignited, on THIS machine's clock
+        /// (Time.time at arrival minus the age the server reported). Stored that way rather than
+        /// as the age itself because the rig is built when the burner instantiates, which can be
+        /// long after the packet - a stored age would then be stale by exactly that long.
+        /// </summary>
         private readonly Dictionary<ZDOID, float> _remoteAgeAtSync = new Dictionary<ZDOID, float>();
         private readonly HashSet<ZDOID> _remoteSmoulderAtSync = new HashSet<ZDOID>();
 
@@ -2465,7 +2476,7 @@ namespace FireFront.Fire
             if (!wantVisual) return;
 
             float age = 0f;
-            if (_remoteAgeAtSync.TryGetValue(id, out float synced)) { age = synced; _remoteAgeAtSync.Remove(id); }
+            if (_remoteAgeAtSync.TryGetValue(id, out float ignitedAt)) { age = Mathf.Max(0f, Time.time - ignitedAt); _remoteAgeAtSync.Remove(id); }
 
             GameObject instance = null;
             if (FireConfig.UseProceduralVfx.Value)
@@ -3351,7 +3362,7 @@ namespace FireFront.Fire
                 if (FireConfig.EffectiveScorchMarksEnabled &&
                     _remoteGroundCells.TryGetValue(key, out float scorchY))
                 {
-                    ValheimBridge.SpawnScorchMark(CellCenter(key, scorchY),
+                    QueueScorchMark(CellCenter(key, scorchY),
                         FireConfig.GroundCellSize.Value * 1.5f,
                         FireConfig.ScorchMarkLifetimeSeconds.Value);
                 }
@@ -3418,6 +3429,111 @@ namespace FireFront.Fire
         private const int SnapshotMaxRequests = 3;
         private float _nextWarmthCheck;
         private readonly Dictionary<GroundCellKey, float> _remoteGroundCells = new Dictionary<GroundCellKey, float>();
+
+        // A scorch decal waits for its zone. A cell can go out anywhere on the map, and the sync
+        // stream delivers the expiry during the loading screen: the first play test logged five
+        // of five marks with no terrain hit, spawned 500 m from the player before any heightmap
+        // existed. A quad placed then floats at the synced height, untilted, and spends its
+        // lifetime unseen. So the mark is queued with its expiry and spawned, with whatever
+        // lifetime is left, once ZoneSystem has the zone loaded here. Bounded, thinned before it
+        // is queued, one entry per cell, and drained on a per-frame budget.
+        private struct PendingScorch { public Vector3 Pos; public float Size; public float ExpiresAt; public float Floor; public (int x, int z) Cell; }
+        private readonly List<PendingScorch> _pendingScorch = new List<PendingScorch>();
+        // One entry per cell, found in O(1). A cell that re-burns while its mark waits refreshes
+        // the entry instead of adding one (two entries would spawn as coincident multiply blots).
+        // Kept in step by every add, swap-remove, overwrite and clear. Every mark goes through
+        // the queue, loaded zone or not: a sync batch of expiries in the zone the player stands
+        // in is the common case, and spawning it inline would be the one-frame burst the drain
+        // budget exists to prevent. A loaded cell is spawned by the drain within a frame or two.
+        private readonly Dictionary<(int x, int z), int> _pendingScorchIndex = new Dictionary<(int x, int z), int>();
+        private const int PendingScorchCap = 4000;          // distinct real marks (thinned, one per cell): the Apocalypse preset's ground counts to reach
+        private const int PendingScorchScanPerFrame = 256;  // entries checked for a loaded zone per frame
+        private const int PendingScorchSpawnsPerFrame = 8;  // a raycast and a quad each: a full cap fills in ~8 s at 60 fps
+        private const float PendingScorchMinVisible = 15f;  // or half the mark's own lifetime, whichever is less; under that is a blink, not a scar
+        private int _pendingScorchCursor; // the drain's
+        private int _pendingScorchEvict;  // the cap's, separate: a burst of evictions must not push the drain past entries it never checked
+
+        private void QueueScorchMark(Vector3 pos, float size, float lifetimeSeconds)
+        {
+            if (!ValheimBridge.ScorchMarkKept(pos)) return; // never queue what would never spawn
+            ValheimBridge.ScorchCell(pos, out int cx, out int cz);
+            var cell = (cx, cz);
+            bool queued = _pendingScorchIndex.TryGetValue(cell, out int at);
+            var entry = new PendingScorch
+            {
+                Pos = pos, Size = size, Cell = cell,
+                ExpiresAt = Time.time + lifetimeSeconds,
+                Floor = Mathf.Min(PendingScorchMinVisible, 0.5f * lifetimeSeconds),
+            };
+            if (queued) { _pendingScorch[at] = entry; return; } // re-burnt while waiting: the newer expiry wins
+            if (_pendingScorch.Count >= PendingScorchCap)
+            {
+                // Full. This runs inside the sync handler, so the victim is whatever sits at the
+                // eviction cursor: O(1), round-robin over time, no scan for the best one.
+                if (_pendingScorchEvict >= _pendingScorch.Count) _pendingScorchEvict = 0;
+                _pendingScorchIndex.Remove(_pendingScorch[_pendingScorchEvict].Cell);
+                _pendingScorch[_pendingScorchEvict] = entry;
+                _pendingScorchIndex[cell] = _pendingScorchEvict;
+                _pendingScorchEvict++;
+                return;
+            }
+            _pendingScorchIndex[cell] = _pendingScorch.Count;
+            _pendingScorch.Add(entry);
+        }
+
+        /// <summary>
+        /// Client side, every frame, budgeted both ways: at most min(window, count) entries are
+        /// checked for a loaded zone (after a removal the tail entry moves under the cursor, so
+        /// one can be checked twice in a frame, but never spawned twice), and a bounded number
+        /// of marks is spawned, so a burnt region that loads all at once (a teleport, the loading
+        /// screen) fills in over a few seconds rather than in one frame - the same reason the
+        /// ground VFX queue drains a few per frame. A mark spawns with the lifetime it has left;
+        /// one under its own floor is dropped instead of flashing. Marks switched off while they
+        /// waited are dropped, and so is one whose loaded zone turns out to have no terrain under
+        /// it (SpawnScorchMark answers false), rather than floating it at the synced height.
+        /// </summary>
+        private void DrainPendingScorch()
+        {
+            int count = _pendingScorch.Count;
+            if (count == 0) return;
+            if (!FireConfig.EffectiveScorchMarksEnabled) { ClearPendingScorch(); return; }
+            float now = Time.time;
+            int limit = Mathf.Min(PendingScorchScanPerFrame, count);
+            int scanned = 0, spawned = 0;
+            while (scanned < limit && spawned < PendingScorchSpawnsPerFrame && _pendingScorch.Count > 0)
+            {
+                if (_pendingScorchCursor >= _pendingScorch.Count) _pendingScorchCursor = 0;
+                scanned++;
+                PendingScorch p = _pendingScorch[_pendingScorchCursor];
+                float left = p.ExpiresAt - now;
+                if (left < p.Floor) { RemovePendingScorchAt(_pendingScorchCursor); continue; }
+                if (!ValheimBridge.IsZoneLoaded(p.Pos)) { _pendingScorchCursor++; continue; }
+                RemovePendingScorchAt(_pendingScorchCursor);
+                ValheimBridge.SpawnScorchMark(p.Pos, p.Size, left);
+                spawned++;
+            }
+        }
+
+        private void RemovePendingScorchAt(int i)
+        {
+            int last = _pendingScorch.Count - 1;
+            _pendingScorchIndex.Remove(_pendingScorch[i].Cell);
+            if (i != last)
+            {
+                PendingScorch tail = _pendingScorch[last];
+                _pendingScorch[i] = tail;
+                _pendingScorchIndex[tail.Cell] = i;
+            }
+            _pendingScorch.RemoveAt(last);
+        }
+
+        private void ClearPendingScorch()
+        {
+            _pendingScorch.Clear();
+            _pendingScorchIndex.Clear();
+            _pendingScorchCursor = 0;
+            _pendingScorchEvict = 0;
+        }
 
         /// <summary>
         /// Keeps the player at this keyboard warm while they are near a wildfire.
@@ -3495,6 +3611,8 @@ namespace FireFront.Fire
             foreach (GameObject go in _remoteGroundVfx.Values) { if (go != null) Destroy(go); }
             _remoteGroundVfx.Clear();
             _remoteGroundCells.Clear();
+            ClearPendingScorch();
+            ValheimBridge.ResetScorchDiagnostics(); // the first five marks of the NEXT session are worth logging too
             _remoteVfxSpawnQueue.Clear();
             _remoteVfxQueuedKeys.Clear();
 
@@ -3584,7 +3702,7 @@ namespace FireFront.Fire
             // their own from the sync stream instead; see the expiry loop in HandleGroundFireSync.
             if (!FireConfig.EffectiveScorchMarksEnabled || ValheimBridge.IsDedicatedServer()) return;
             float size = FireConfig.GroundCellSize.Value * 1.5f;
-            ValheimBridge.SpawnScorchMark(position, size, FireConfig.ScorchMarkLifetimeSeconds.Value);
+            QueueScorchMark(position, size, FireConfig.ScorchMarkLifetimeSeconds.Value);
         }
 
         // ---------------------------------------------------------------
