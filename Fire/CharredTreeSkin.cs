@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using FireFront.Config;
 using FireFront.Utils;
 using UnityEngine;
 
@@ -66,11 +67,21 @@ namespace FireFront.Fire
             "birch_leaf", "birch_leaf_aut", "beech_leaf", "oak_leaf", "Shoot_Leaf_mat", "swamptree1_branch",
         };
 
-        /// <summary>Charcoal: near-black with a hint of warm brown so the vanilla bark grain still reads through the tint.</summary>
+        /// <summary>Charcoal: near-black with a hint of warm brown so the vanilla bark grain still reads through the tint (fallback look, when the bark could not be read back).</summary>
         public static readonly Color CharTint = new Color(0.10f, 0.09f, 0.08f, 1f);
-        /// <summary>Vanilla's own Ashlands ember colour (AshlandsTrees_mat._EmissionColor) — HDR, so the bloom does the work.</summary>
-        public static readonly Color EmberHot = new Color(4.78f, 0.34f, 0.0f, 1f);
-        public static readonly Color EmberCool = new Color(1.2f, 0.05f, 0.0f, 1f);
+        /// <summary>Tint over the GENERATED charred albedo, which is already black: near-white so the generator's tones are what is drawn.</summary>
+        private static readonly Color GeneratedTint = new Color(0.96f, 0.94f, 0.92f, 1f);
+
+        /// <summary>
+        /// Peak ember emission in HDR. 1.0 on the dial is roughly vanilla's Ashlands tree value
+        /// (AshlandsTrees_mat._EmissionColor = 4.78, on a mask of pin-points); the default 0.4
+        /// sits just over the bloom threshold, so only the cores bloom.
+        /// </summary>
+        public static float EmberPeakHdr => 4f * Mathf.Clamp(FireConfig.CharredEmberIntensity.Value, 0f, 2f);
+        /// <summary>Fresh embers: the mask carries the orange→yellow hue, this carries the heat.</summary>
+        public static Color EmberHot => new Color(1f, 0.42f, 0.10f, 1f) * EmberPeakHdr;
+        /// <summary>Cooling embers: deeper red, less than half the heat.</summary>
+        public static Color EmberCool => new Color(1f, 0.20f, 0.03f, 1f) * (EmberPeakHdr * 0.55f);
 
         private static readonly Dictionary<Material, Material> s_clones = new Dictionary<Material, Material>();
         private static Texture s_ash;
@@ -105,7 +116,11 @@ namespace FireFront.Fire
                     FireLogger.Warn($"[CHARRED] donor texture lookup threw ({ex.Message}); charred trees use tint only.");
                 }
             }
-            if (s_emberMask == null) s_emberMask = FireFrontTextureGenerator.GetOrCreateEmberCrackMask();
+            if (FireVFXController.GraphicsAvailable)
+            {
+                try { s_emberMask = CharredTextures.EmberMask(0); }
+                catch (System.Exception ex) { FireLogger.Warn($"[CHARRED] ember mask generation threw ({ex.Message}); charred trees will not glow."); }
+            }
             FireLogger.Debug($"[CHARRED] donors: ash={(s_ash != null)}, deadPine={(s_deadPine != null)}, deadFir={(s_deadFir != null)}, emberMask={(s_emberMask != null)}");
         }
 
@@ -142,6 +157,43 @@ namespace FireFront.Fire
         }
 
         /// <summary>
+        /// The surface of a char: a generated charred albedo (from the species' own bark) and a
+        /// normal carrying the char relief over the bark's grain. When the bark cannot be read
+        /// back (no graphics device, or an unexpected format) the vanilla textures stay and a
+        /// dark tint plus a pushed bump scale approximate it.
+        /// </summary>
+        private static void ApplyCharSurface(Material c, Texture srcAlbedo, Texture srcNormal, Color fallbackTint)
+        {
+            Texture2D charAlbedo = CharredTextures.CharredAlbedoFor(srcAlbedo);
+            if (charAlbedo != null)
+            {
+                c.SetTexture(P_MainTex, charAlbedo);
+                if (c.HasProperty(P_Color)) c.SetColor(P_Color, GeneratedTint);
+            }
+            else
+            {
+                if (srcAlbedo != null && c.HasProperty(P_MainTex)) c.SetTexture(P_MainTex, srcAlbedo);
+                if (c.HasProperty(P_Color)) c.SetColor(P_Color, fallbackTint);
+            }
+
+            Texture2D charNormal = c.HasProperty(P_BumpMap) ? CharredTextures.CharredNormalFor(srcNormal) : null;
+            if (charNormal != null)
+            {
+                c.SetTexture(P_BumpMap, charNormal);
+                if (c.HasProperty(P_BumpScale)) c.SetFloat(P_BumpScale, 1.25f);
+                // Standard reads its normal map only under _NORMALMAP; a stub or log whose vanilla
+                // material had none would otherwise ignore the relief. Custom/Vegetation has no
+                // such keyword (the whole shader has only _USEMETALMAP_ON).
+                if (c.shader != null && c.shader.name.StartsWith("Standard")) c.EnableKeyword("_NORMALMAP");
+            }
+            else if (c.HasProperty(P_BumpScale))
+            {
+                // The vanilla bark normal, pushed harder: ridges become fissures.
+                c.SetFloat(P_BumpScale, 1.8f);
+            }
+        }
+
+        /// <summary>
         /// The charred twin of a vanilla material, built once and shared by every charred
         /// tree of that species. Never mutates the source.
         /// </summary>
@@ -165,15 +217,13 @@ namespace FireFront.Fire
             {
                 // Atlas species: trunk and needles share one material, so the needles are
                 // removed by swapping in vanilla's own dead atlas (same UV layout).
-                if (src.name == "PineTree_01" && s_deadPine != null) c.SetTexture(P_MainTex, s_deadPine);
-                else if (src.name == "Pine_tree" && s_deadFir != null) c.SetTexture(P_MainTex, s_deadFir);
+                Texture srcAlbedo = src.HasProperty(P_MainTex) ? src.GetTexture(P_MainTex) : null;
+                if (src.name == "PineTree_01" && s_deadPine != null) srcAlbedo = s_deadPine;
+                else if (src.name == "Pine_tree" && s_deadFir != null) srcAlbedo = s_deadFir;
 
-                c.SetColor(P_Color, CharTint);
+                ApplyCharSurface(c, srcAlbedo, src.HasProperty(P_BumpMap) ? src.GetTexture(P_BumpMap) : null, CharTint);
                 if (c.HasProperty(P_Glossiness)) c.SetFloat(P_Glossiness, 0.08f); // charcoal plates: faint glassy sheen
                 if (c.HasProperty(P_Metallic)) c.SetFloat(P_Metallic, 0f);
-                // The vanilla bark normal, pushed harder: ridges become fissures. Keeps the
-                // species' own grain instead of a generic crack pattern.
-                if (c.HasProperty(P_BumpScale)) c.SetFloat(P_BumpScale, 1.8f);
 
                 // Ash dusting rides the shader's moss layer: grey only on upward faces, and
                 // the shader zeroes smoothness where it sits. _MossBlend must be 0 here — it
@@ -200,9 +250,9 @@ namespace FireFront.Fire
             else
             {
                 // Standard (Birch/Beech/Oak/Ygga stubs and logs) or Custom/StaticRock (swamp log).
-                if (c.HasProperty(P_Color)) c.SetColor(P_Color, new Color(0.09f, 0.08f, 0.075f, 1f));
+                ApplyCharSurface(c, src.HasProperty(P_MainTex) ? src.GetTexture(P_MainTex) : null,
+                                 src.HasProperty(P_BumpMap) ? src.GetTexture(P_BumpMap) : null, new Color(0.09f, 0.08f, 0.075f, 1f));
                 if (c.HasProperty(P_Glossiness)) c.SetFloat(P_Glossiness, 0.08f);
-                if (c.HasProperty(P_BumpScale)) c.SetFloat(P_BumpScale, 1.5f);
                 if (c.HasProperty(P_EmissionMap) && s_emberMask != null)
                 {
                     c.EnableKeyword("_EMISSION");
@@ -220,7 +270,7 @@ namespace FireFront.Fire
         /// toggles visibility, each LOD has its own material array) and silences leaf-particle
         /// emitters. Returns the renderers touched so the caller can drive the ember fade.
         /// </summary>
-        public static List<Renderer> Apply(GameObject root, Color ember)
+        public static List<Renderer> Apply(GameObject root, Color ember, int emberVariant = 0)
         {
             var touched = new List<Renderer>();
             if (root == null) return touched;
@@ -255,14 +305,23 @@ namespace FireFront.Fire
                 touched.Add(r);
             }
 
-            SetEmber(touched, ember);
+            SetEmber(touched, ember, emberVariant);
             return touched;
         }
 
-        /// <summary>Per-tree ember glow, through the property block only — no material is touched.</summary>
-        public static void SetEmber(List<Renderer> renderers, Color ember)
+        /// <summary>
+        /// Per-tree ember glow, through the property block only — no material is touched. The
+        /// mask variant rides along so two charred trees side by side glow in different places,
+        /// and so a rebuilt mask set (coverage changed) is picked up on the next fade tick.
+        /// </summary>
+        public static void SetEmber(List<Renderer> renderers, Color ember, int emberVariant = 0)
         {
             if (renderers == null) return;
+            Texture2D mask = null;
+            if (FireVFXController.GraphicsAvailable)
+            {
+                try { mask = CharredTextures.EmberMask(emberVariant); } catch (System.Exception) { }
+            }
             for (int i = 0; i < renderers.Count; i++)
             {
                 Renderer r = renderers[i];
@@ -270,17 +329,26 @@ namespace FireFront.Fire
                 s_mpb.Clear();
                 if (r.HasPropertyBlock()) r.GetPropertyBlock(s_mpb);
                 s_mpb.SetColor(P_EmissionColor, ember);
+                if (mask != null)
+                {
+                    s_mpb.SetTexture(P_EmissiveTex, mask);
+                    s_mpb.SetTexture(P_EmissionMap, mask);
+                }
                 r.SetPropertyBlock(s_mpb);
             }
         }
 
-        /// <summary>Ember colour for a charred tree that has been charred for <paramref name="ageSeconds"/>.</summary>
+        /// <summary>
+        /// Ember colour for a charred tree that has been charred for <paramref name="ageSeconds"/>.
+        /// Fades as (1-t)² over CharredEmberGlowSeconds with a slow breathing pulse; each pocket
+        /// in the mask is a different brightness already, so one colour is enough per tree.
+        /// </summary>
         public static Color EmberAt(float ageSeconds, float glowSeconds, float noiseSeed)
         {
-            if (glowSeconds <= 0f) return Color.black;
+            if (glowSeconds <= 0f || EmberPeakHdr <= 0f) return Color.black;
             float t = Mathf.Clamp01(ageSeconds / glowSeconds);
             float fade = (1f - t) * (1f - t);
-            float pulse = 0.85f + 0.15f * Mathf.PerlinNoise(Time.time * 3f, noiseSeed);
+            float pulse = 0.82f + 0.18f * Mathf.PerlinNoise(Time.time * 0.9f, noiseSeed);
             Color c = Color.Lerp(EmberHot, EmberCool, t);
             return c * (fade * pulse);
         }
@@ -290,7 +358,7 @@ namespace FireFront.Fire
         /// how far the fire has climbed, through property blocks so the vanilla materials are
         /// untouched and <see cref="ClearBurnChar"/> restores the tree exactly.
         /// </summary>
-        public static void ApplyBurnChar(List<Renderer> renderers, float progress, float emberPulse)
+        public static void ApplyBurnChar(List<Renderer> renderers, float progress, float emberPulse, int emberVariant = 0)
         {
             if (renderers == null) return;
             EnsureDonors();
@@ -299,7 +367,14 @@ namespace FireFront.Fire
             // to scorch once the fire is well up the trunk.
             Color barkTint = Color.Lerp(Color.white, CharTint, Mathf.SmoothStep(0f, 1f, p));
             Color leafTint = Color.Lerp(Color.white, new Color(0.18f, 0.12f, 0.06f, 1f), Mathf.Clamp01((p - 0.45f) / 0.5f));
-            Color ember = EmberHot * (Mathf.SmoothStep(0f, 1f, p) * emberPulse);
+            // Wood that is still burning glows harder than a char that has been left to cool,
+            // but through the same sparse mask: pockets, not a lit lattice up the whole trunk.
+            Color ember = EmberHot * (1.4f * Mathf.SmoothStep(0f, 1f, p) * emberPulse);
+            Texture2D mask = null;
+            if (FireVFXController.GraphicsAvailable)
+            {
+                try { mask = CharredTextures.EmberMask(emberVariant); } catch (System.Exception) { }
+            }
 
             for (int i = 0; i < renderers.Count; i++)
             {
@@ -321,9 +396,9 @@ namespace FireFront.Fire
                         // _Color multiplies the albedo; keep alpha 1 or the cutoff discards bark.
                         Color tint = m.HasProperty(P_Color) ? m.GetColor(P_Color) : Color.white;
                         s_mpb.SetColor(P_Color, new Color(tint.r * barkTint.r, tint.g * barkTint.g, tint.b * barkTint.b, tint.a));
-                        if (vegetation && s_emberMask != null)
+                        if (vegetation && mask != null)
                         {
-                            s_mpb.SetTexture(P_EmissiveTex, s_emberMask);
+                            s_mpb.SetTexture(P_EmissiveTex, mask);
                             s_mpb.SetColor(P_EmissionColor, ember);
                         }
                     }
@@ -358,6 +433,22 @@ namespace FireFront.Fire
             return list;
         }
 
+        /// <summary>
+        /// A new mask set exists (CharredEmberCoverage changed): every cached clone is re-pointed
+        /// at it. Live trees pick up their own variant on their next fade tick through the block.
+        /// </summary>
+        public static void OnEmberMasksRebuilt(Texture2D mask0)
+        {
+            s_emberMask = mask0;
+            foreach (KeyValuePair<Material, Material> kv in s_clones)
+            {
+                Material c = kv.Value;
+                if (c == null) continue;
+                if (c.HasProperty(P_EmissiveTex) && c.GetTexture(P_EmissiveTex) != null) c.SetTexture(P_EmissiveTex, mask0);
+                if (c.HasProperty(P_EmissionMap) && c.GetTexture(P_EmissionMap) != null) c.SetTexture(P_EmissionMap, mask0);
+            }
+        }
+
         /// <summary>Plugin unload: the clones are ours to free; the donor textures are not.</summary>
         public static void ReleaseAll()
         {
@@ -366,6 +457,9 @@ namespace FireFront.Fire
                 if (kv.Value != null) Object.Destroy(kv.Value);
             }
             s_clones.Clear();
+            s_emberMask = null;
+            s_donorsResolved = false;
+            CharredTextures.ReleaseAll();
         }
     }
 }

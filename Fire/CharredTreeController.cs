@@ -18,10 +18,13 @@ namespace FireFront.Fire
         private TreeBase _tree;
         private TreeLog _log;
         private List<Renderer> _renderers;
+        private CharredSmoke _smoke;
+        private int _emberVariant;
         private float _noiseSeed;
         private float _nextCheck;
         private bool _done;
         private bool _skinned;
+        private bool _smokeTried;
 
         private const float CheckInterval = 0.25f;
 
@@ -46,7 +49,8 @@ namespace FireFront.Fire
             if (!FireVFXController.GraphicsAvailable) return; // headless: the fate logic below still runs, the look does not
             try
             {
-                _renderers = CharredTreeSkin.Apply(gameObject, CurrentEmber());
+                _emberVariant = CharredTextures.VariantFor(_nview.GetZDO().m_uid);
+                _renderers = CharredTreeSkin.Apply(gameObject, CurrentEmber(), _emberVariant);
                 // m_text is a localisation token ("$prop_beech"); Localize replaces tokens inside
                 // a longer string, so this reads "Charred Beech" in whatever language is set.
                 HoverText hover = GetComponent<HoverText>();
@@ -59,6 +63,27 @@ namespace FireFront.Fire
             {
                 FireLogger.Debug($"[CHARRED] skinning {name} threw: {ex.Message}");
             }
+            TrySmoke();
+        }
+
+        /// <summary>Post-fire smoke, once, if the object is still young enough to be smoking.</summary>
+        private void TrySmoke()
+        {
+            if (_smokeTried || _nview == null || !_nview.IsValid()) return;
+            _smokeTried = true;
+            try
+            {
+                _smoke = CharredSmoke.TryAttach(gameObject, _log != null, CharredAge());
+            }
+            catch (System.Exception ex)
+            {
+                FireLogger.Debug($"[CHARRED] smoke on {name} threw: {ex.Message}");
+            }
+        }
+
+        private float CharredAge()
+        {
+            return CharredTreeLifecycle.SecondsSince(_nview.GetZDO().GetLong(CharredTreeLifecycle.CharredAtHash, CharredTreeLifecycle.NowTicks));
         }
 
         private Color CurrentEmber()
@@ -80,9 +105,10 @@ namespace FireFront.Fire
             // Cosmetic first, and independent of ownership: every peer fades its own view.
             if (_renderers != null && FireConfig.CharredEmberGlowSeconds.Value > 0f)
             {
-                float age = CharredTreeLifecycle.SecondsSince(_nview.GetZDO().GetLong(CharredTreeLifecycle.CharredAtHash, CharredTreeLifecycle.NowTicks));
-                if (age <= FireConfig.CharredEmberGlowSeconds.Value + 1f) CharredTreeSkin.SetEmber(_renderers, CurrentEmber());
+                float age = CharredAge();
+                if (age <= FireConfig.CharredEmberGlowSeconds.Value + 1f) CharredTreeSkin.SetEmber(_renderers, CurrentEmber(), _emberVariant);
             }
+            if (_smoke != null) _smoke.Tick(CharredAge());
 
             if (!_nview.IsOwner()) return;
             ZDO zdo = _nview.GetZDO();

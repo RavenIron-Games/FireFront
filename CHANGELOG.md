@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.22.1
+
+- **A player who joins mid-fire now sees the fire.** Object fires (structures, trees, logs)
+  were announced only by a `FireEvent` broadcast at ignition; a client that connected after
+  it saw the tree taking damage, charring and falling with no flames on it. The join-time
+  snapshot request the ground fire already had (`FireFront_GroundSyncRequest`, sent once the
+  routed channel can reach the server) is now answered with a second package,
+  `FireFront_ObjectFireSync`: every burning ZDOID with its burn age and whether it has dropped
+  to embers. The client books each one exactly as a `FireEvent` would (it is idempotent
+  against fires it already heard about), backdates its own smoulder clock by the server's
+  age so a fire that burned ten minutes elsewhere does not start fresh, and asks again after
+  20 s if no object snapshot arrived (three tries; the server rate-limits per sender, so a
+  repeat that was not needed costs nothing). Only the connected server's reply is accepted.
+  A burner that is not loaded on the client yet is drawn when it instantiates, as before.
+- **Charred wood looks like charred wood, and the embers are dialled back.** The 0.22.0
+  char was a dark tint over the vanilla bark with a uniform ember lattice glowing at the
+  game's Ashlands HDR value (4.78) through every crack of the whole trunk: it consumed the
+  tree. Now the client builds, once per species, a charred albedo FROM the species' own bark
+  texture (read back through a RenderTexture; the bundle textures are not CPU-readable) -
+  domain-warped "alligator" plates cut by black fissures, the grain kept as tone, per-plate
+  variation, pale ash flecks on the plate tops - and a normal map that carries the char
+  relief over the vanilla bark grain, AG-packed like every map the game ships. The ember
+  glow lives only in scattered pockets: `CharredEmberCoverage` (0.2) is the fraction of the
+  trunk carrying live embers, thresholded at an honest quantile of a low-frequency field so
+  the number means what it says; inside a pocket the glow bleeds along the fissures and adds
+  pin-point embers on the plates, the way vanilla's own Ashlands tree mask is a field of
+  points, and nothing glows outside. `CharredEmberIntensity` (0.4; 1.0 ≈ the Ashlands value)
+  sets the heat, so at the default only the cores cross the bloom threshold. Four mask
+  variants, picked per object from its ZDOID, so neighbouring snags glow in different places;
+  the same masks and dial drive the live-burn bark char below the fire front. When the read-
+  back fails (no graphics device, unexpected format) the tint look of 0.22.0 stays. The
+  generator is `SharedMedia.ProceduralTextures`, vendored from libs-Tools and previewable
+  offline with `libs-Tools/CSharp/TexturePreview` against the extracted vanilla bark - the
+  contact sheet there is what shipped. `firedumptex` writes what this client generated as PNG
+  under `BepInEx/config/FireFront-textures/`.
+- **Charred wood smokes after the fire is out.** A charred trunk (two or three points on
+  its lower two thirds) and a fallen charred log (three points along it) give off thin grey
+  wisps for `CharredSmokeSeconds` (90 s, world time, so every peer and every late joiner sees
+  the same stage), full for two thirds of it and tapering to nothing; the same Lux-lit vanilla
+  smoke material the fire uses, at a hundredth of the rate, drifting with the real wind. Off
+  under LowSpec, `CharredSmokeEnabled` otherwise, capped at 40 smoking objects world-wide.
+- **Only the server may paint fire on a client.** `ZRoutedRpc` relays the sender id verbatim,
+  and the two cosmetic handlers (`FireEvent`, `GroundFireSync`) accepted it from anyone, so a
+  modded client could address a forged event to Everybody and put phantom fires on every
+  screen. All three client-side handlers now apply the `IsFromServer` check the fire-damage
+  handler already had. (Found by the 2026-09-20 decompile pass; `ZRoutedRpc.Register` is also
+  a `Dictionary.Add` that throws on a duplicate name, not the overwrite the old comment
+  claimed — the per-instance registration guard is what keeps it safe, and the comment now
+  says so.)
+- New `fireset` keys: `charredember`, `charredembercover`, `charredsmoke`,
+  `charredsmokeseconds`. `firestatus` reports all four. No ledger rung: nothing renamed or
+  re-defaulted.
+- Verified headless: 0.22.0 booted the real Valheim `l-1.0.15` Linux dedicated server with
+  every patch applied and 0 exceptions (`~/valheim-testbed/boot-check.sh`, see HANDOFF).
+
 ## 0.22.0
 
 - **Fire climbs the tree, and the height of the flames is the tree's health.** A burning

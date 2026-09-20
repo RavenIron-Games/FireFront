@@ -84,6 +84,10 @@ namespace FireFront.Config
         public static ConfigEntry<float> CharredTreeHealthFraction;
         public static ConfigEntry<float> CharredLogCrumbleSeconds;
         public static ConfigEntry<float> CharredEmberGlowSeconds;
+        public static ConfigEntry<float> CharredEmberIntensity;
+        public static ConfigEntry<float> CharredEmberCoverage;
+        public static ConfigEntry<bool> CharredSmokeEnabled;
+        public static ConfigEntry<float> CharredSmokeSeconds;
         public static ConfigEntry<bool> FireShadowsEnabled;
         public static ConfigEntry<bool> HeatHazeEnabled;
         public static ConfigEntry<bool> BarkCharEnabled;
@@ -176,6 +180,9 @@ namespace FireFront.Config
 
         /// <summary>Bark charring is a per-renderer property block; cheap, survives the preset.</summary>
         public static bool EffectiveBarkCharEnabled => BarkCharEnabled.Value;
+
+        /// <summary>Post-fire smoke from charred wood: a low-spec machine skips it; everyone else follows the switch.</summary>
+        public static bool EffectiveCharredSmokeEnabled => !LowSpec && CharredSmokeEnabled.Value;
 
         // --- Watch The World Burn ------------------------------------------
         //
@@ -826,6 +833,37 @@ namespace FireFront.Config
                     "black. Cosmetic; timed from world time so a late-joining player sees the " +
                     "right stage.",
                     new AcceptableValueRange<float>(0f, 1800f)));
+
+            CharredEmberIntensity = config.Bind(
+                "Trees", "CharredEmberIntensity", 0.4f,
+                new ConfigDescription(
+                    "How hot the embers in charred wood glow. 1.0 is roughly the game's own " +
+                    "Ashlands tree glow; 0.4 keeps only the cores over the bloom threshold, so " +
+                    "the glow reads as coals in a crack rather than a lantern. 0 = no glow. " +
+                    "Cosmetic, live.",
+                    new AcceptableValueRange<float>(0f, 2f)));
+
+            CharredEmberCoverage = config.Bind(
+                "Trees", "CharredEmberCoverage", 0.2f,
+                new ConfigDescription(
+                    "Fraction of a charred trunk that carries live ember pockets (0-1). Real burnt " +
+                    "wood is black with a few glowing splits, not a lit lattice; 0.2 gives a few " +
+                    "hand-sized pockets per trunk. Changing it rebuilds the ember masks (a few ms). " +
+                    "Cosmetic, live.",
+                    new AcceptableValueRange<float>(0f, 1f)));
+
+            CharredSmokeEnabled = config.Bind(
+                "Trees", "CharredSmokeEnabled", true,
+                "Charred trees and fallen charred logs keep smoking for a while after the fire is " +
+                "out: thin grey wisps off the trunk, tapering to nothing. Off under the LowSpec " +
+                "preset. Cosmetic, live.");
+
+            CharredSmokeSeconds = config.Bind(
+                "Trees", "CharredSmokeSeconds", 90f,
+                new ConfigDescription(
+                    "How long (seconds, world time) charred wood smokes after it charred. The " +
+                    "wisps thin out over the last third. 0 = never.",
+                    new AcceptableValueRange<float>(0f, 900f)));
 
             GroundFirebreaksEnabled = config.Bind(
                 "Ground", "GroundFirebreaksEnabled", true,

@@ -119,11 +119,11 @@ namespace FireFront.Fire
 
         public void Setup(Bounds bounds, float burnDuration, Component target = null) => Setup(bounds, burnDuration, target, default);
 
-        public void Setup(Bounds bounds, float burnDuration, Component target, ZDOID id)
+        public void Setup(Bounds bounds, float burnDuration, Component target, ZDOID id, float initialAge = 0f)
         {
             _bounds = bounds;
             _burnDuration = Mathf.Max(1f, burnDuration);
-            _timeAlive = 0f;
+            _timeAlive = Mathf.Max(0f, initialAge); // a late joiner's rig starts as old as the fire is
             _target = target;
             _hadTarget = target != null;
             _id = id;
@@ -708,7 +708,7 @@ namespace FireFront.Fire
                 _nextBarkUpdate = Time.time + BarkUpdateInterval;
                 float pulse = 0.7f + 0.3f * Mathf.PerlinNoise(Time.time * 2.5f, _noiseSeed);
                 if (_smoulder) pulse *= 0.5f;
-                CharredTreeSkin.ApplyBurnChar(_barkRenderers, _progress, pulse);
+                CharredTreeSkin.ApplyBurnChar(_barkRenderers, _progress, pulse, CharredTextures.VariantFor(_id));
             }
         }
 

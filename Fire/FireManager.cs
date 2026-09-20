@@ -700,7 +700,7 @@ namespace FireFront.Fire
             if (routedRpc != null && !ReferenceEquals(routedRpc, _registeredRpcInstance))
             {
                 _registeredRpcInstance = routedRpc; // guarded by reference, so a reconnect's fresh instance re-registers
-                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest);
+                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest, HandleObjectFireSync);
 
                 // A fresh ZRoutedRpc means a fresh world, so everything this machine was drawing on
                 // behalf of the old one is stale. FireManager lives on the plugin's own GameObject
@@ -711,6 +711,8 @@ namespace FireFront.Fire
                 // again for the rest of the process, and the dictionary grew every session.
                 ResetRemoteMirror();
                 _wantGroundSnapshot = true; // asked for below, once the connection can carry it
+                _snapshotRequestsSent = 0;
+                _objectSnapshotReceived = false;
             }
 
             if (FireConfig.ExtinguishKey.Value.IsDown())
@@ -730,8 +732,18 @@ namespace FireFront.Fire
             if (_wantGroundSnapshot && ValheimBridge.CanReachServer())
             {
                 _wantGroundSnapshot = false;
+                _snapshotRequestsSent++;
+                _nextSnapshotRetry = Time.time + SnapshotRetrySeconds;
                 ValheimBridge.RequestGroundSnapshot();
-                FireLogger.Debug("[SYNC-DIAG] asked the server for the ground fire already burning.");
+                FireLogger.Debug($"[SYNC-DIAG] asked the server for the fire already burning (request {_snapshotRequestsSent}).");
+            }
+            else if (!_objectSnapshotReceived && _snapshotRequestsSent > 0 && _snapshotRequestsSent < SnapshotMaxRequests
+                     && Time.time >= _nextSnapshotRetry && ValheimBridge.CanReachServer())
+            {
+                // The request or the reply can be lost in the first seconds of a connection (the
+                // server answers only a connected peer, and "connected" lags the routed channel).
+                // The server rate-limits per sender, so a repeat costs nothing when the first landed.
+                _wantGroundSnapshot = true;
             }
 
             DrainRemoteVfxSpawnQueue(); // client-side VFX budget — must run before the server gate below
@@ -946,7 +958,21 @@ namespace FireFront.Fire
             pkg.Write(0); // no expiries in a snapshot: this IS the full set
 
             ValheimBridge.SendGroundFireSyncTo(sender, pkg);
-            FireLogger.Debug($"[SYNC-DIAG] sent a {_groundBurning.Count}-cell ground snapshot to peer {sender}.");
+
+            // The object fires too: ZDOID, how long each has burned (so the joiner's smoulder
+            // clock and any age-driven look start where the server's are), and whether it has
+            // already dropped to embers. ~17 bytes a fire; the burning cap keeps it to a few KB.
+            var opkg = new ZPackage();
+            opkg.Write(_burning.Count);
+            float tnow = Time.time;
+            foreach (KeyValuePair<ZDOID, BurningState> kv in _burning)
+            {
+                opkg.Write(kv.Key);
+                opkg.Write(Mathf.Max(0f, tnow - kv.Value.IgnitedAt));
+                opkg.Write(kv.Value.Smouldering);
+            }
+            ValheimBridge.SendObjectFireSyncTo(sender, opkg);
+            FireLogger.Debug($"[SYNC-DIAG] sent a {_groundBurning.Count}-cell ground snapshot and a {_burning.Count}-object snapshot to peer {sender}.");
 
             // Peer ids are per-session, so without this the table gains one entry per connection for
             // the life of the process. Swept here rather than on a timer because this is the only
@@ -1539,7 +1565,7 @@ namespace FireFront.Fire
                    $"treeregrowth {FireConfig.EffectiveTreeRegrowthEnabled} (after {FireConfig.TreeRegrowthSeconds.Value}s, pending {_pendingRegrowth.Count}), " +
                    $"treefire {FireConfig.TreeFireDamageEnabled.Value} (tick {FireConfig.TreeFireTickInterval.Value}s, kill at {(FireConfig.TreeFireKillFraction.Value * 100f):F0}%), " +
                    $"charred (collapse {FireConfig.TreeDestructionRate.Value:F0}% after {FireConfig.CharredCollapseDelaySeconds.Value}s, coal {FireConfig.CharredCoalMin.Value}-{FireConfig.CharredCoalMax.Value}, " +
-                   $"health {(FireConfig.CharredTreeHealthFraction.Value * 100f):F0}%, crumble {FireConfig.CharredLogCrumbleSeconds.Value}s, glow {FireConfig.CharredEmberGlowSeconds.Value}s; charred {_treesCharredCount}, collapsed {_treesCollapsedCount}), " +
+                   $"health {(FireConfig.CharredTreeHealthFraction.Value * 100f):F0}%, crumble {FireConfig.CharredLogCrumbleSeconds.Value}s, glow {FireConfig.CharredEmberGlowSeconds.Value}s x{FireConfig.CharredEmberIntensity.Value:F2} cover {FireConfig.CharredEmberCoverage.Value:F2}, smoke {FireConfig.EffectiveCharredSmokeEnabled} {FireConfig.CharredSmokeSeconds.Value}s; charred {_treesCharredCount}, collapsed {_treesCollapsedCount}), " +
                    $"firelook (shadows {FireConfig.EffectiveFireShadowsEnabled}, haze {FireConfig.EffectiveHeatHazeEnabled}, barkchar {FireConfig.EffectiveBarkCharEnabled}), " +
                    $"pendingignite {_pendingIgniteResolutions.Count}, " +
                    $"firebreaks {FireConfig.EffectiveGroundFirebreaksEnabled}, " +
@@ -2317,6 +2343,9 @@ namespace FireFront.Fire
             // Receipt trace — kept permanently, see HandleGroundFireSync.
             FireLogger.Debug($"[SYNC-DIAG] FireEvent arrived from {sender} (id={id}, started={started}, IsServer={ValheimBridge.IsServer()}).");
             if (ValheimBridge.IsServer()) return;
+            // ZRoutedRpc relays the sender id verbatim, so a modded client could address a fake
+            // event to Everybody and paint phantom fires on every screen. Only the server's count.
+            if (!ValheimBridge.IsFromServer(sender)) return;
 
             // No ComponentFromZdoid here: on a client that helper force-creates the object and
             // CLAIMS OWNERSHIP of it, which would pull a far-away tree's ownership (and the
@@ -2334,6 +2363,42 @@ namespace FireFront.Fire
                 RemoveRemoteVfxFor(id);
             }
         }
+
+        /// <summary>
+        /// Client side of the join-time object snapshot: the same bookkeeping a FireEvent does,
+        /// once per fire, plus the age so the smoulder clock is backdated when the rig is built.
+        /// Idempotent - a fire already known from a FireEvent is left exactly as it is.
+        /// </summary>
+        private void HandleObjectFireSync(long sender, ZPackage pkg)
+        {
+            FireLogger.Debug($"[SYNC-DIAG] ObjectFireSync arrived from {sender} (IsServer={ValheimBridge.IsServer()}).");
+            if (ValheimBridge.IsServer() || pkg == null) return;
+            if (!ValheimBridge.IsFromServer(sender)) return; // only the server paints fires on this client
+            _objectSnapshotReceived = true;
+            int count = pkg.ReadInt();
+            if (count < 0 || count > 4096) return;
+            int added = 0;
+            for (int i = 0; i < count; i++)
+            {
+                ZDOID id = pkg.ReadZDOID();
+                float age = pkg.ReadSingle();
+                bool smouldering = pkg.ReadBool();
+                if (id == ZDOID.None) continue;
+                if (!_remoteBurningIds.Add(id))
+                {
+                    continue; // heard its FireEvent already; its own clock stands
+                }
+                _remoteAgeAtSync[id] = age;
+                if (smouldering) _remoteSmoulderAtSync.Add(id);
+                EnqueueRemoteObjectVfx(id);
+                added++;
+            }
+            FireLogger.Debug($"[SYNC-DIAG] object snapshot from {sender}: {count} burning, {added} new to this client.");
+        }
+
+        /// <summary>Burn age the server reported for a fire this client learned of from a snapshot; consumed when its rig is built.</summary>
+        private readonly Dictionary<ZDOID, float> _remoteAgeAtSync = new Dictionary<ZDOID, float>();
+        private readonly HashSet<ZDOID> _remoteSmoulderAtSync = new HashSet<ZDOID>();
 
         private readonly List<ZDOID> _remoteObjectVfxQueue = new List<ZDOID>();
         private readonly HashSet<ZDOID> _remoteObjectVfxQueued = new HashSet<ZDOID>();
@@ -2399,6 +2464,9 @@ namespace FireFront.Fire
             bool wantVisual = FireConfig.UseProceduralVfx.Value || !string.IsNullOrEmpty(FireConfig.VfxPrefabName.Value);
             if (!wantVisual) return;
 
+            float age = 0f;
+            if (_remoteAgeAtSync.TryGetValue(id, out float synced)) { age = synced; _remoteAgeAtSync.Remove(id); }
+
             GameObject instance = null;
             if (FireConfig.UseProceduralVfx.Value)
             {
@@ -2414,8 +2482,11 @@ namespace FireFront.Fire
                 Bounds b = new Bounds(pos + Vector3.up * (h / 2f), new Vector3(r * 2, h, r * 2));
                 float duration = FireConfig.BurnDurationSeconds.Value;
 
+                // Backdated by the server's age when the fire arrived in a join-time snapshot: a
+                // structure's front climbs by time (trees read their ZDO health), so without this
+                // a fire that has burned ten minutes elsewhere would restart at the foot here.
                 var vfxController = instance.AddComponent<FireVFXController>();
-                vfxController.Setup(b, duration, target, id);
+                vfxController.Setup(b, duration, target, id, age);
             }
             else
             {
@@ -2426,7 +2497,12 @@ namespace FireFront.Fire
             if (instance != null)
             {
                 _remoteVfx[id] = instance;
-                _remoteVfxSpawnedAt[id] = Time.time; // this client's own smoulder clock
+                _remoteVfxSpawnedAt[id] = Time.time - age; // this client's own smoulder clock, same backdating
+                if (_remoteSmoulderAtSync.Remove(id))
+                {
+                    _remoteSmouldering.Add(id);
+                    try { ValheimBridge.DowngradeVfxToSmoulder(instance); } catch (System.Exception) { }
+                }
             }
         }
 
@@ -2436,6 +2512,8 @@ namespace FireFront.Fire
             // fire built for it a frame or two later and is never cleaned up.
             if (_remoteObjectVfxQueued.Remove(id)) _remoteObjectVfxQueue.Remove(id);
 
+            _remoteAgeAtSync.Remove(id);
+            _remoteSmoulderAtSync.Remove(id);
             if (_remoteVfx.TryGetValue(id, out GameObject instance))
             {
                 _remoteVfx.Remove(id);
@@ -3229,6 +3307,7 @@ namespace FireFront.Fire
             // nowhere": this line makes silent-drop diagnosable from one log.
             FireLogger.Debug($"[SYNC-DIAG] GroundFireSync arrived from {sender} (IsServer={ValheimBridge.IsServer()}).");
             if (ValheimBridge.IsServer()) return;
+            if (!ValheimBridge.IsFromServer(sender)) return; // same forgery guard as the object handlers
 
             int ignitedCount = pkg.ReadInt();
             int expiredCountPeek = 0; // logged after reading, just for the trace line below
@@ -3332,6 +3411,11 @@ namespace FireFront.Fire
         /// call when already empty, which is what happens on a first connect.
         /// </summary>
         private bool _wantGroundSnapshot;
+        private bool _objectSnapshotReceived;
+        private int _snapshotRequestsSent;
+        private float _nextSnapshotRetry;
+        private const float SnapshotRetrySeconds = 10f; // must exceed the server's 5 s per-sender cooldown or the retry is swallowed
+        private const int SnapshotMaxRequests = 3;
         private float _nextWarmthCheck;
         private readonly Dictionary<GroundCellKey, float> _remoteGroundCells = new Dictionary<GroundCellKey, float>();
 
@@ -3421,6 +3505,8 @@ namespace FireFront.Fire
             _remoteBurningIds.Clear();
             _remoteVfxSpawnedAt.Clear();
             _remoteSmouldering.Clear();
+            _remoteAgeAtSync.Clear();
+            _remoteSmoulderAtSync.Clear();
             _remoteObjectVfxQueue.Clear();
             _remoteObjectVfxQueued.Clear();
         }

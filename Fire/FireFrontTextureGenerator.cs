@@ -181,7 +181,6 @@ namespace FireFront.Fire
         private static Texture2D s_softGlow;
         private static Texture2D s_smoke;
         private static Texture2D s_flipbook;
-        private static Texture2D s_emberMask;
 
         /// <summary>sRGB colour sprite: mips on, trilinear, anisotropic, clamped edges.</summary>
         private static Texture2D NewColorTexture(int size, bool repeat = false)
@@ -311,65 +310,6 @@ namespace FireFront.Fire
             tex.SetPixels32(px);
             tex.Apply(true, true);
             s_smoke = tex;
-            return tex;
-        }
-
-        /// <summary>
-        /// The ember-crack mask a charred trunk glows through: Custom/Vegetation computes
-        /// emission as _EmissiveTex.rgb * _EmissiveTex.a * _EmissionColor, so the cracks live in
-        /// alpha and carry a warm colour in RGB. Tileable "alligator" char plates: a jittered
-        /// cell grid whose boundaries are the cracks, with a slow fbm so no two plates match.
-        /// Linear, tiles 4x over the trunk UVs via the material's own _MainTex_ST.
-        /// </summary>
-        public static Texture2D GetOrCreateEmberCrackMask()
-        {
-            if (s_emberMask != null) return s_emberMask;
-            const int size = 256;
-            const int cellsX = 6, cellsY = 10;
-            Texture2D tex = NewDataTexture(size, true);
-            var px = new Color32[size * size];
-
-            // Jittered cell centres on the torus so the pattern tiles.
-            var centres = new Vector2[cellsX * cellsY];
-            for (int cy = 0; cy < cellsY; cy++)
-            {
-                for (int cx = 0; cx < cellsX; cx++)
-                {
-                    float jx = Mathf.PerlinNoise(cx * 3.1f + 0.7f, cy * 2.3f + 1.9f) - 0.5f;
-                    float jy = Mathf.PerlinNoise(cx * 2.7f + 4.2f, cy * 3.7f + 0.3f) - 0.5f;
-                    centres[cy * cellsX + cx] = new Vector2((cx + 0.5f + jx * 0.6f) / cellsX, (cy + 0.5f + jy * 0.6f) / cellsY);
-                }
-            }
-
-            for (int y = 0; y < size; y++)
-            {
-                for (int x = 0; x < size; x++)
-                {
-                    float u = (x + 0.5f) / size, v = (y + 0.5f) / size;
-                    // Distance to nearest and second-nearest centre (toroidal): the crack is where they tie.
-                    float d1 = float.MaxValue, d2 = float.MaxValue;
-                    for (int i = 0; i < centres.Length; i++)
-                    {
-                        float dx = Mathf.Abs(u - centres[i].x); if (dx > 0.5f) dx = 1f - dx;
-                        float dy = Mathf.Abs(v - centres[i].y); if (dy > 0.5f) dy = 1f - dy;
-                        dx *= cellsX; dy *= cellsY;
-                        float d = Mathf.Sqrt(dx * dx + dy * dy);
-                        if (d < d1) { d2 = d1; d1 = d; }
-                        else if (d < d2) d2 = d;
-                    }
-                    float edge = d2 - d1;                                  // 0 on a crack, grows into the plate
-                    float crackWidth = 0.10f + 0.06f * Fbm(u * 9f, v * 9f, 2);
-                    float crack = 1f - Mathf.SmoothStep(0f, crackWidth, edge);
-                    float glow = crack * (0.55f + 0.45f * Fbm(u * 5f + 3f, v * 5f + 7f, 3));
-                    // A few plates glow faintly from inside too, so the trunk is not black between cracks.
-                    float plateGlow = Mathf.Clamp01(Fbm(u * 3f + 11f, v * 3f + 5f, 2) - 0.62f) * 1.2f;
-                    float a = Mathf.Clamp01(glow + plateGlow);
-                    px[y * size + x] = new Color32(255, (byte)(90 + 110 * a), (byte)(20 + 30 * a), (byte)(a * 255f));
-                }
-            }
-            tex.SetPixels32(px);
-            tex.Apply(true, true);
-            s_emberMask = tex;
             return tex;
         }
 

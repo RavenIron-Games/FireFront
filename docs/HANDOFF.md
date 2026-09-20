@@ -1,8 +1,54 @@
+# FireFront — 0.22.1 (2026-09-20): late-join fire sync, real charred wood, post-fire smoke
+
+**Resume point.** The `wubarrk` branch carries 0.22.1 on top of 0.22.0, compiling (0 errors)
+and booted headless on the real `l-1.0.15` Linux dedicated server (every patch applied, 0
+exceptions) but NOT yet run with a client. Read the 0.22.1 and 0.22.0 CHANGELOG entries first.
+
+**Headless boot check on this box (one command, ~40 s):** the Steam-installed Linux dedicated
+server plus `~/valheim-testbed/boot-check.sh` (libs-Tools' `DEDICATED-SERVER-TESTBED` lineage):
+
+```
+P=~/valheim-testbed/profiles/firefront; rm -rf $P; cp -r ~/valheim-testbed/base-profile $P
+mkdir -p $P/BepInEx/plugins/RavenIron-FireFront && cp bin/Release/net472/FireFront.dll $P/BepInEx/plugins/RavenIron-FireFront/
+~/valheim-testbed/boot-check.sh firefront 2530 420 'FireFront|FIRE|CHARRED'
+```
+
+Expect `BOOTED`, `Loading [FireFront 0.22.1]`, `All 11 FireFront RPCs registered` and an
+empty errors section. This proves load-time binding and Harmony patching only: the world
+clock stops on an empty server, and everything visual is client-side.
+
+**0.22.1 client checks, on top of the 0.22.0 list below:**
+
+- `firedebug` on, char a tree: expect `[CHARRED] charred albedo built from <bark texture>`
+  once per species and `[CHARRED] ember masks built: 4x512² at coverage 0.20` once. If the
+  first line is a `Warn` about reading the bark back, the tint look is in use (still fine,
+  just flatter). `firedumptex` then writes the PNGs under `BepInEx/config/FireFront-textures/`
+  — compare with `libs-Tools/CSharp/TexturePreview` output (same generator, same seed).
+- The charred trunk should be black plates with a few glowing pockets, not a lit lattice;
+  `fireset charredember 1` makes it the Ashlands strength, `fireset charredembercover 0.6`
+  spreads the pockets (masks rebuild in a few ms; watch for `ember masks built`).
+- Thin smoke off the trunk and off a fallen charred log for 90 s, thinning after 60 s;
+  `fireset charredsmokeseconds 0` stops new ones.
+- Late join: light a few things, connect a SECOND client afterwards; its log should show
+  `[SYNC-DIAG] object snapshot from <server>: N burning, N new to this client` and the fires
+  should be drawn (smouldering ones already as embers). Without a second machine, disconnect
+  and reconnect the same client mid-fire.
+
+**Shared tooling this release added to libs-Tools** (the user's standing rule: tools and
+methods live there): `SharedMedia/ProceduralTextures.cs` (the generator; FireFront's
+`Utils/ProceduralTextures.cs` is a byte-identical vendored copy — change both),
+`CSharp/TexturePreview/` (offline harness: `~/.dotnet/dotnet run -- --tex <textures> --out
+<dir>`), `UNITY-ASSET-TOOLS/` (the UnityPy scripts that read the bundles), `1.0/ASSET-DATA/`
+(extracted textures, shader source, material dumps, the 2026-09-20 research reports) and
+`RENDERING-AND-VEGETATION-SHADER-FACTS.md`.
+
+---
+
 # FireFront — 0.22.0 (2026-09-20): tree fire rework, charred trees, rebuilt VFX
 
-**Resume point.** The `wubarrk` branch carries 0.22.0, built and compiling (0 errors) but
-NOT yet run in-game or deployed. Read the 0.22.0 CHANGELOG entry first; it is the design
-record. Then do this, in order:
+**Resume point (superseded by 0.22.1 above; the test list still applies).** The `wubarrk`
+branch carries 0.22.0. Read the 0.22.0 CHANGELOG entry first; it is the design record. Then
+do this, in order:
 
 1. **Look at the fire.** Ignite a beech and a pine with `ignite`, `firedebug` on. Expect
    `[SHADER-DIAG] flame material cloned from fire_pit/flames (1)` (and ember/smoke/glow/haze
@@ -27,11 +73,11 @@ so the next session does not re-derive them: no burnt tree prefab exists; trees 
 fire-Immune; `RPC_Damage` damage text is unconditional; the server is not the tree's owner
 on a dedicated server; `Shader.Find` misses bundle shaders; normal maps are AG-packed.
 
-**Left out, deliberately:** a late-joining client still learns about object fires only
-through the `FireEvent` RPC (ground fire has a batched sync, object fire does not). The ZDOID
-rekey in 0.22.0 makes a burner that instantiates later pick up its fire, but only if the
-client has ALREADY heard the event. A `FireFront_Burning` flag in the burner's ZDO would close
-that, and would need the owner (not the server) to write it.
+**Left out in 0.22.0, closed in 0.22.1:** a late-joining client learned about object fires
+only through the `FireEvent` RPC. 0.22.1 answers the join-time snapshot request with the
+object list (`FireFront_ObjectFireSync`) rather than a ZDO flag: a server-written flag on a
+client-owned ZDO can be discarded by the DataRevision race (ITEMDROP-OWNERSHIP-AND-PICKUP-
+SYNC-FACTS.md §6) and structures have no owner-side tick to write it from.
 
 ---
 

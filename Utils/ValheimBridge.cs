@@ -3423,6 +3423,7 @@ namespace FireFront.Utils
         private const string RpcCommandRelay = "FireFront_CommandRelay";
         private const string RpcFireDamage = "FireFront_FireDamage";
         private const string RpcGroundSyncRequest = "FireFront_GroundSyncRequest";
+        private const string RpcObjectFireSync = "FireFront_ObjectFireSync";
 
         /// <summary>Client → server: run this whitelisted dev command there; replies stream back on the status-response channel.</summary>
         public static void SendCommandRelayToServer(string commandLine)
@@ -3713,10 +3714,12 @@ namespace FireFront.Utils
         }
 
         /// <summary>
-        /// Registers all four RPCs. Safe to call multiple times (ZRoutedRpc.Register
-        /// just overwrites the prior handler for that name) but callers should
-        /// still guard with a one-shot flag once ZRoutedRpc.instance exists —
-        /// it doesn't exist yet at plugin Awake(), same as ZNet.instance.
+        /// Registers every FireFront routed RPC. NOT safe to call twice on the same
+        /// ZRoutedRpc: its Register is a Dictionary.Add and throws on a duplicate name (it is
+        /// ZRpc.Register, the unrouted one, that removes-then-adds), and one throw inside the
+        /// block below leaves every later RPC unregistered on that instance. The caller keys
+        /// on the instance reference, which ZNet.Awake rebuilds per world. ZRoutedRpc.instance
+        /// doesn't exist yet at plugin Awake(), same as ZNet.instance.
         /// </summary>
         public static void RegisterFireRpcs(
             System.Action<long, ZDOID, long> onIgniteRequest,
@@ -3728,7 +3731,8 @@ namespace FireFront.Utils
             System.Action<long, string> onStatusResponse,
             System.Action<long, string> onCommandRelay,
             System.Action<long, float> onFireDamage,
-            System.Action<long> onGroundSyncRequest)
+            System.Action<long> onGroundSyncRequest,
+            System.Action<long, ZPackage> onObjectFireSync)
         {
             if (ZRoutedRpc.instance == null)
             {
@@ -3755,7 +3759,8 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.Register<string>(RpcCommandRelay, onCommandRelay);
                 ZRoutedRpc.instance.Register<float>(RpcFireDamage, onFireDamage);
                 ZRoutedRpc.instance.Register(RpcGroundSyncRequest, onGroundSyncRequest);
-                FireLogger.Info($"[IGNITE-TRACE] All 10 FireFront RPCs registered successfully (IsServer={IsServer()}).");
+                ZRoutedRpc.instance.Register<ZPackage>(RpcObjectFireSync, onObjectFireSync);
+                FireLogger.Info($"[IGNITE-TRACE] All 11 FireFront RPCs registered successfully (IsServer={IsServer()}).");
             }
             catch (System.Exception ex)
             {
@@ -3834,6 +3839,18 @@ namespace FireFront.Utils
             if (ZRoutedRpc.instance == null) return;
             try { ZRoutedRpc.instance.InvokeRoutedRPC(targetPeer, RpcGroundFireSync, pkg); }
             catch (System.Exception ex) { FireLogger.Debug($"SendGroundFireSyncTo threw: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Server -> ONE peer: every OBJECT fire alight right now (ZDOID, age, smouldering), the
+        /// answer to the same snapshot request as the ground set. Object fires are otherwise only
+        /// ever announced by a FireEvent at ignition, which a player who joins later never hears.
+        /// </summary>
+        public static void SendObjectFireSyncTo(long targetPeer, ZPackage pkg)
+        {
+            if (ZRoutedRpc.instance == null) return;
+            try { ZRoutedRpc.instance.InvokeRoutedRPC(targetPeer, RpcObjectFireSync, pkg); }
+            catch (System.Exception ex) { FireLogger.Debug($"SendObjectFireSyncTo threw: {ex.Message}"); }
         }
 
         public static void BroadcastGroundFireSync(ZPackage pkg)
