@@ -3273,7 +3273,7 @@ namespace FireFront.Fire
                     _remoteGroundCells.TryGetValue(key, out float scorchY))
                 {
                     ValheimBridge.SpawnScorchMark(CellCenter(key, scorchY),
-                        FireConfig.GroundCellSize.Value * 1.5f,
+                        FireConfig.GroundCellSize.Value,
                         FireConfig.ScorchMarkLifetimeSeconds.Value);
                 }
 
@@ -3497,8 +3497,7 @@ namespace FireFront.Fire
             // 1,875 invisible GameObjects per five minutes at stock settings. Clients now spawn
             // their own from the sync stream instead; see the expiry loop in HandleGroundFireSync.
             if (!FireConfig.EffectiveScorchMarksEnabled || ValheimBridge.IsDedicatedServer()) return;
-            float size = FireConfig.GroundCellSize.Value * 1.5f;
-            ValheimBridge.SpawnScorchMark(position, size, FireConfig.ScorchMarkLifetimeSeconds.Value);
+            ValheimBridge.SpawnScorchMark(position, FireConfig.GroundCellSize.Value, FireConfig.ScorchMarkLifetimeSeconds.Value);
         }
 
         // ---------------------------------------------------------------

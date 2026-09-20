@@ -2209,41 +2209,57 @@ namespace FireFront.Utils
         }
 
         private static Texture2D _cachedScorchTexture;
+        private const float ScorchDrawChance = 0.4f;
 
         /// <summary>Dark, soft-edged radial texture for burn scars — same approach as
         /// the fire particle texture, just dark instead of bright.</summary>
+        // A connected player saw these for the first time in 0.21.15, and the hillside came out
+        // as a grid: one 1.5 m disc per 1 m cell, mostly opaque, with a LIGHT seam wherever two
+        // soft rims overlapped. Two causes, both here.
+        //
+        //   * The texture was not premultiplied. Sprites/Default blends One OneMinusSrcAlpha,
+        //     so at the feathered rim, where alpha is near 0, it ADDED the full dirt colour to
+        //     the terrain instead of fading to nothing. That is the bright lattice.
+        //   * A near-opaque disc every metre on a metre grid has a period, and the eye locks
+        //     onto it. The blot below is warped off-circle, feathered wide and mottled inside,
+        //     and SpawnScorchMark draws fewer of them, bigger, jittered off the cell centre.
         private static Texture2D GetOrCreateScorchTexture()
         {
             if (_cachedScorchTexture != null) return _cachedScorchTexture;
 
-            const int size = 64;
-            var tex = new Texture2D(size, size, TextureFormat.ARGB32, false);
+            const int size = 96;
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, true)
+            {
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Bilinear,
+            };
             var center = new Vector2(size / 2f, size / 2f);
-            float maxDist = size / 2f;
-            const float noiseScale = 6f;
-            float noiseOffset = Random.Range(0f, 1000f);
+            float half = size / 2f;
+            float seed = Random.Range(0f, 1000f);
 
-            // Dark umber/brown dirt tones, not near-black — reads as burnt
-            // earth rather than a dark smudge. Perlin noise breaks up the
-            // color so it looks like mottled dirt, not a flat painted circle.
-            var dirtDark = new Color(0.11f, 0.07f, 0.04f);
-            var dirtLight = new Color(0.24f, 0.16f, 0.09f);
+            // Dark umber, not soot-grey: burnt earth. The mottle keeps it from reading as paint.
+            var dirtDark = new Color(0.10f, 0.065f, 0.035f);
+            var dirtLight = new Color(0.22f, 0.15f, 0.085f);
 
             for (int y = 0; y < size; y++)
             {
                 for (int x = 0; x < size; x++)
                 {
-                    float dist = Vector2.Distance(new Vector2(x + 0.5f, y + 0.5f), center);
-                    float edgeFalloff = Mathf.Clamp01(1f - dist / maxDist);
-                    edgeFalloff = Mathf.Pow(edgeFalloff, 0.6f); // wider fully-opaque middle, soft fade only near the rim
-
-                    float noise = Mathf.PerlinNoise(x / noiseScale + noiseOffset, y / noiseScale + noiseOffset);
-                    Color dirt = Color.Lerp(dirtDark, dirtLight, noise);
-
-                    tex.SetPixel(x, y, new Color(dirt.r, dirt.g, dirt.b, edgeFalloff));
+                    Vector2 d = new Vector2(x + 0.5f, y + 0.5f) - center;
+                    // The outline follows low-frequency noise sampled around a circle in noise
+                    // space, so it is continuous at the seam and no two angles agree on a radius.
+                    float ang = Mathf.Atan2(d.y, d.x);
+                    float warp = Mathf.PerlinNoise(Mathf.Cos(ang) * 1.5f + seed, Mathf.Sin(ang) * 1.5f + seed) - 0.5f;
+                    float radius = half * (0.72f + 0.56f * warp);          // ~0.58..0.86 of the quad
+                    float k = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(1f - d.magnitude / radius));
+                    float mottle = Mathf.PerlinNoise(x / 7f + seed, y / 7f + seed);
+                    k *= 0.65f * (0.6f + 0.4f * mottle);                     // peak ~0.65: the ground still shows through
+                    Color dirt = Color.Lerp(dirtDark, dirtLight, mottle);
+                    // PREMULTIPLIED for One OneMinusSrcAlpha: rgb carries its own alpha.
+                    tex.SetPixel(x, y, new Color(dirt.r * k, dirt.g * k, dirt.b * k, k));
                 }
             }
-            tex.Apply();
+            tex.Apply(true);
             _cachedScorchTexture = tex;
             return tex;
         }
@@ -2256,11 +2272,33 @@ namespace FireFront.Utils
         /// the VFX/damage zones there's no tracking dictionary or cleanup path
         /// needed on our side at all.
         /// </summary>
-        public static void SpawnScorchMark(Vector3 position, float size, float lifetimeSeconds)
+        /// <summary>
+        /// Leaves a burn scar on the ground for a cell that has finished burning. Draws for
+        /// roughly two cells in five, at two to three cell-widths across, so a burnt area reads
+        /// as one irregular scar rather than a tiling of the grid the simulation runs on. This
+        /// only ever runs where a camera is - a listen host, or a client drawing its own from
+        /// the sync stream - so the terrain collider is there to lay the mark on the slope.
+        /// </summary>
+        public static void SpawnScorchMark(Vector3 position, float cellSize, float lifetimeSeconds)
         {
+            if (Random.value > ScorchDrawChance) return;
+
+            float size = cellSize * Random.Range(2.2f, 3.2f);
+            position.x += Random.Range(-0.35f, 0.35f) * cellSize;
+            position.z += Random.Range(-0.35f, 0.35f) * cellSize;
+
+            // Lay it on the ground, not on the horizontal. The old quad was always flat and
+            // cut into any hill; on the test slope that was the second half of the grid look.
+            Vector3 normal = Vector3.up;
+            if (Physics.Raycast(position + Vector3.up * 3f, Vector3.down, out RaycastHit hit, 6f, TerrainLayerMask))
+            {
+                normal = hit.normal;
+                position.y = hit.point.y;
+            }
+
             var quad = new GameObject("FireFrontScorchMark");
-            quad.transform.position = position + Vector3.up * 0.03f; // avoid z-fighting with terrain
-            quad.transform.rotation = Quaternion.Euler(90f, Random.Range(0f, 360f), 0f);
+            quad.transform.position = position + normal * 0.03f; // avoid z-fighting with terrain
+            quad.transform.rotation = Quaternion.FromToRotation(Vector3.up, normal) * Quaternion.Euler(90f, Random.Range(0f, 360f), 0f);
             quad.transform.localScale = new Vector3(size, size, 1f);
 
             quad.AddComponent<MeshFilter>().sharedMesh = GetOrCreateQuadMesh();
