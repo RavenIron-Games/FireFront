@@ -24,6 +24,13 @@ clock stops on an empty server, and everything visual is client-side.
   first line is a `Warn` about reading the bark back, the tint look is in use (still fine,
   just flatter). `firedumptex` then writes the PNGs under `BepInEx/config/FireFront-textures/`
   — compare with `libs-Tools/CSharp/TexturePreview` output (same generator, same seed).
+- The whole-tree pink glow from NomadicWar's 17:01 run is fixed at the mask (premultiplied,
+  alpha 255, always bound, atlas needles excluded, distance fade) - if any trunk still glows
+  end to end, `firedumptex` and look at `FireFront_EmberMask_0.png`: it must be BLACK between
+  the pockets. Burning pines must show embers on the bark only, never the canopy.
+- Scorch marks: `[SCORCH] mark 1..5` lines with `terrain-hit=True` and `shader=Custom/Particle
+  (Unlit) blend=2/0`; on the ground, soft dark blots with no grid. If `blend=n/a` the
+  alpha-disc fallback is in use (no ember donor found).
 - The charred trunk should be black plates with a few glowing pockets, not a lit lattice;
   `fireset charredember 1` makes it the Ashlands strength, `fireset charredembercover 0.6`
   spreads the pockets (masks rebuild in a few ms; watch for `ember masks built`).

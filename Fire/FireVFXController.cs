@@ -708,6 +708,7 @@ namespace FireFront.Fire
                 _nextBarkUpdate = Time.time + BarkUpdateInterval;
                 float pulse = 0.7f + 0.3f * Mathf.PerlinNoise(Time.time * 2.5f, _noiseSeed);
                 if (_smoulder) pulse *= 0.5f;
+                if (_far) pulse *= 0.3f; // past the mask's last mip the glow averages over the whole trunk; the flames carry the fire from there
                 CharredTreeSkin.ApplyBurnChar(_barkSlots, _progress, pulse, CharredTextures.VariantFor(_id));
             }
         }

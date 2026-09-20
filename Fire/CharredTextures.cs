@@ -37,6 +37,9 @@ namespace FireFront.Fire
         private static Texture2D[] s_emberMasks;
         private static readonly List<Texture2D> s_retiredMasks = new List<Texture2D>();
         private static float s_maskCoverage = -1f;
+        /// <summary>Per-atlas mask sets (pine, fir): the standard masks confined to the atlas' opaque bark block, so needle cards never light during a live burn.</summary>
+        private static readonly Dictionary<Texture, Texture2D[]> s_atlasMasks = new Dictionary<Texture, Texture2D[]>();
+        private static readonly Dictionary<Texture, float[]> s_atlasRegions = new Dictionary<Texture, float[]>();
         private static readonly Dictionary<Texture, Texture2D> s_albedos = new Dictionary<Texture, Texture2D>();
         private static readonly Dictionary<Texture, Texture2D> s_normals = new Dictionary<Texture, Texture2D>();
         private static Texture2D s_heightOnlyNormal;
@@ -89,6 +92,58 @@ namespace FireFront.Fire
             }
             int i = variant % Variants; if (i < 0) i += Variants;
             return s_emberMasks[i];
+        }
+
+        /// <summary>
+        /// Ember mask for a material whose _MainTex is a trunk+foliage atlas (Pine, Fir): the
+        /// standard mask multiplied by the atlas' opaque bark block, found by eroding its alpha
+        /// (needle cards are cut-outs full of holes and erode away; the bark rectangle survives).
+        /// Falls back to the plain mask if the atlas cannot be read back.
+        /// </summary>
+        public static Texture2D EmberMaskForAtlas(Texture atlas, int variant)
+        {
+            Texture2D plain = EmberMask(variant); // also rebuilds the base set on a coverage change
+            if (atlas == null || !FireVFXController.GraphicsAvailable) return plain;
+            int i = variant % Variants; if (i < 0) i += Variants;
+            if (s_atlasMasks.TryGetValue(atlas, out Texture2D[] set) && set != null && set[i] != null && set[Variants] == s_emberMasks[0]) return set[i];
+            float[] region = TrunkRegionFor(atlas);
+            if (region == null) return plain;
+            EnsureFields();
+            float coverage = Mathf.Clamp01(FireConfig.CharredEmberCoverage.Value);
+            var built = new Texture2D[Variants + 1];
+            for (int v = 0; v < Variants; v++)
+            {
+                float[] pocket = ProceduralTextures.PocketField(Size, Size, coverage, Seed + 100 + v * 17);
+                Color32[] px = ProceduralTextures.EmberMask(Size, Size, s_crack, pocket, Seed + v * 17, region: region);
+                built[v] = MakeTexture(px, Size, Size, linear: true, name: "FireFront_EmberMask_" + atlas.name + "_" + v);
+            }
+            built[Variants] = s_emberMasks[0]; // records which base set this was built against (coverage changes rebuild it)
+            if (set != null) s_retiredMasks.AddRange(set);
+            s_atlasMasks[atlas] = built;
+            FireLogger.Debug($"[CHARRED] atlas ember masks built for {atlas.name}");
+            return built[i];
+        }
+
+        /// <summary>Trunk-only region of an atlas texture (1 on the opaque bark block), or null if it cannot be read.</summary>
+        private static float[] TrunkRegionFor(Texture atlas)
+        {
+            if (s_atlasRegions.TryGetValue(atlas, out float[] cached)) return cached;
+            float[] region = null;
+            try
+            {
+                Color32[] src = ReadableCopy(atlas, linear: false, out int w, out int h);
+                if (w != Size || h != Size) src = ProceduralTextures.Resample(src, w, h, Size, Size);
+                region = ProceduralTextures.OpaqueBlockMask(src, Size, Size, Size / 48);
+                int on = 0; for (int k = 0; k < region.Length; k++) if (region[k] > 0f) on++;
+                FireLogger.Debug($"[CHARRED] trunk region of {atlas.name}: {(100f * on / region.Length):F1}% of the atlas is solid bark");
+                if (on == 0) region = null; // nothing solid: leave the plain mask rather than a black one
+            }
+            catch (System.Exception ex)
+            {
+                FireLogger.Debug($"[CHARRED] trunk region of {atlas.name} failed ({ex.Message}); plain mask used.");
+            }
+            s_atlasRegions[atlas] = region;
+            return region;
         }
 
         /// <summary>
@@ -265,6 +320,12 @@ namespace FireFront.Fire
         /// <summary>Plugin unload: everything here is ours to free.</summary>
         public static void ReleaseAll()
         {
+            foreach (KeyValuePair<Texture, Texture2D[]> kv in s_atlasMasks)
+            {
+                if (kv.Value == null) continue;
+                for (int i = 0; i < Variants; i++) if (kv.Value[i] != null) Object.Destroy(kv.Value[i]);
+            }
+            s_atlasMasks.Clear(); s_atlasRegions.Clear();
             ReleaseMasks();
             foreach (KeyValuePair<Texture, Texture2D> kv in s_albedos) if (kv.Value != null) Object.Destroy(kv.Value);
             foreach (KeyValuePair<Texture, Texture2D> kv in s_normals) if (kv.Value != null) Object.Destroy(kv.Value);

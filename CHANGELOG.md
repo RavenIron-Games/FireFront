@@ -41,6 +41,31 @@
   the same stage), full for two thirds of it and tapering to nothing; the same Lux-lit vanilla
   smoke material the fire uses, at a hundredth of the rate, drifting with the real wind. Off
   under LowSpec, `CharredSmokeEnabled` otherwise, capped at 40 smoking objects world-wide.
+- **The whole-tree glow from the first in-game run (NomadicWar, PR #3, 2026-09-20) is closed
+  at the root.** Trunks rendered as pink-white rods root to crown, canopies flat pink, distant
+  LOD trunks neon. The mask kept bright orange in RGB everywhere with the pattern only in
+  alpha; Custom/Vegetation does multiply by alpha (checked in BOTH the forward and the
+  deferred GLSL: `u_xlat2.xyz = u_xlat2.www * u_xlat2.xyz`), but Standard's `_EmissionMap`
+  does not, and mip levels average RGB and alpha separately, so at LOD distance a sparse mask
+  became "mean alpha × bright orange" over the whole surface. The mask is now PREMULTIPLIED
+  with alpha 255: black between embers in every pass, every shader and every mip. Also: a mask
+  is always bound (`Texture2D.blackTexture` when the generator could not run - an unbound
+  slot is Unity's default WHITE, and 0.22.0 drove `_EmissionColor` into exactly that);
+  atlas species (Pine, Fir) get masks confined to the bark block during a live burn, found by
+  eroding the atlas alpha and keeping the largest solid component, so needle cards never
+  light; the charred glow fades to a third past 30-90 m and the live-burn embers drop to 30 %
+  when the rig is far, so a distant snag is black, not a lamp.
+- **The scorch grid is gone.** Rows of dark squares across burnt hillsides: one near-opaque
+  1.5 m umber disc per 1 m cell, feathered rims overlapping LIGHTER than the discs (a
+  lattice), horizontal quads cutting into slopes, a palette lighter than a Black Forest floor
+  so the tiles read both ways, on `Sprites/Default`. Now a multiply-blended soot blot
+  (vanilla's `Custom/Particle (Unlit)` from the ember donor, `Blend DstColor Zero`, soft
+  particles and fog off, queue 2950) that darkens whatever is lit - grass, sun, shadow and
+  the fire's own light survive, and two blots overlapping only get darker - laid on the
+  terrain's own normal by raycast, about two blots in five cells at 1.6-2.2x the cell,
+  jittered, with a noise-warped outline and pale ash flecks. The first five placements log
+  `[SCORCH]` (position, terrain hit, shader, blend) so "no marks" is diagnosable as absent vs
+  invisible. The 0.21.x alpha disc remains the fallback when no donor material exists.
 - **Only the server may paint fire on a client.** `ZRoutedRpc` relays the sender id verbatim,
   and the two cosmetic handlers (`FireEvent`, `GroundFireSync`) accepted it from anyone, so a
   modded client could address a forged event to Everybody and put phantom fires on every

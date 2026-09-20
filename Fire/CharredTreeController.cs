@@ -90,7 +90,16 @@ namespace FireFront.Fire
         {
             if (_nview == null || !_nview.IsValid()) return Color.black;
             long at = _nview.GetZDO().GetLong(CharredTreeLifecycle.CharredAtHash, CharredTreeLifecycle.NowTicks);
-            return CharredTreeSkin.EmberAt(CharredTreeLifecycle.SecondsSince(at), FireConfig.CharredEmberGlowSeconds.Value, _noiseSeed);
+            Color c = CharredTreeSkin.EmberAt(CharredTreeLifecycle.SecondsSince(at), FireConfig.CharredEmberGlowSeconds.Value, _noiseSeed);
+            // Distance: the mask averages toward its mean past the last mip, and a mean glow on a
+            // whole trunk is the neon rod the first in-game run saw. Full to 30 m, a third at 90 m.
+            Camera cam = global::Utils.GetMainCamera();
+            if (cam != null)
+            {
+                float d = Vector3.Distance(cam.transform.position, transform.position);
+                c *= Mathf.Lerp(1f, 0.3f, Mathf.Clamp01((d - 30f) / 60f));
+            }
+            return c;
         }
 
         private void Update()

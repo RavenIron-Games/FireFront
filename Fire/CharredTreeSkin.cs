@@ -239,8 +239,10 @@ namespace FireFront.Fire
                 }
 
                 // Ember cracks. A null _EmissiveTex binds Unity's default WHITE texture and the
-                // whole tree would glow uniformly, so the mask is always assigned.
-                if (c.HasProperty(P_EmissiveTex) && s_emberMask != null) c.SetTexture(P_EmissiveTex, s_emberMask);
+                // whole tree would glow uniformly, so a mask is ALWAYS assigned - black when the
+                // generator could not run - and the emission colour stays black until the
+                // property block says otherwise.
+                if (c.HasProperty(P_EmissiveTex)) c.SetTexture(P_EmissiveTex, s_emberMask != null ? s_emberMask : Texture2D.blackTexture);
                 c.SetColor(P_EmissionColor, Color.black); // per-tree value comes from the property block
 
                 // Dead wood does not sway like a live crown.
@@ -253,10 +255,10 @@ namespace FireFront.Fire
                 ApplyCharSurface(c, src.HasProperty(P_MainTex) ? src.GetTexture(P_MainTex) : null,
                                  src.HasProperty(P_BumpMap) ? src.GetTexture(P_BumpMap) : null, new Color(0.09f, 0.08f, 0.075f, 1f));
                 if (c.HasProperty(P_Glossiness)) c.SetFloat(P_Glossiness, 0.08f);
-                if (c.HasProperty(P_EmissionMap) && s_emberMask != null)
+                if (c.HasProperty(P_EmissionMap))
                 {
                     c.EnableKeyword("_EMISSION");
-                    c.SetTexture(P_EmissionMap, s_emberMask);
+                    c.SetTexture(P_EmissionMap, s_emberMask != null ? s_emberMask : Texture2D.blackTexture);
                     c.SetColor(P_EmissionColor, Color.black);
                 }
             }
@@ -322,6 +324,7 @@ namespace FireFront.Fire
             {
                 try { mask = CharredTextures.EmberMask(emberVariant); } catch (System.Exception) { }
             }
+            if (mask == null) ember = Color.black; // never drive a colour through an unbound (white) slot
             for (int i = 0; i < renderers.Count; i++)
             {
                 Renderer r = renderers[i];
@@ -367,7 +370,12 @@ namespace FireFront.Fire
             public bool Vegetation;
             public bool Foliage;
             public Color BaseTint;
+            /// <summary>The trunk+foliage atlas of a Pine/Fir material, so its live-burn embers stay on the bark half; null for every other material.</summary>
+            public Texture Atlas;
         }
+
+        /// <summary>Atlas species: one Custom/Vegetation material carries trunk AND needles, and its needle cards must never emit.</summary>
+        private static bool IsAtlasMaterial(Material m) => m != null && (m.name == "PineTree_01" || m.name == "Pine_tree");
 
         /// <summary>
         /// Live-burn bark char: darkens the trunk and lights ember cracks in proportion to
@@ -409,8 +417,15 @@ namespace FireFront.Fire
                     s_mpb.SetColor(P_Color, new Color(tint.r * barkTint.r, tint.g * barkTint.g, tint.b * barkTint.b, tint.a));
                     if (s.Vegetation && mask != null)
                     {
-                        s_mpb.SetTexture(P_EmissiveTex, mask);
-                        s_mpb.SetColor(P_EmissionColor, ember);
+                        Texture2D slotMask = mask;
+                        if (s.Atlas != null)
+                        {
+                            try { slotMask = CharredTextures.EmberMaskForAtlas(s.Atlas, emberVariant); } catch (System.Exception) { slotMask = null; }
+                        }
+                        // A slot that could not get a mask gets NO emission: the alternative is
+                        // the whole atlas - needles included - lit through the default white.
+                        s_mpb.SetTexture(P_EmissiveTex, slotMask != null ? slotMask : Texture2D.blackTexture);
+                        s_mpb.SetColor(P_EmissionColor, slotMask != null ? ember : Color.black);
                     }
                 }
                 s.Renderer.SetPropertyBlock(s_mpb, s.Slot);
@@ -453,6 +468,7 @@ namespace FireFront.Fire
                         Vegetation = vegetation,
                         Foliage = vegetation && IsFoliage(m),
                         BaseTint = m.HasProperty(P_Color) ? m.GetColor(P_Color) : Color.white,
+                        Atlas = vegetation && IsAtlasMaterial(m) && m.HasProperty(P_MainTex) ? m.GetTexture(P_MainTex) : null,
                     });
                 }
             }

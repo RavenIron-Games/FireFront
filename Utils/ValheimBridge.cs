@@ -2249,19 +2249,44 @@ namespace FireFront.Utils
         }
 
         /// <summary>
-        /// Spawns a flat, dark decal on the ground — a burn scar left behind
-        /// after ground fire passes through or gets extinguished. Purely
-        /// cosmetic and completely fire-and-forget: self-destructs after
-        /// lifetimeSeconds via Unity's own delayed Destroy overload, so unlike
-        /// the VFX/damage zones there's no tracking dictionary or cleanup path
-        /// needed on our side at all.
+        /// Leaves a burn scar on the ground where a cell went out. Purely cosmetic and
+        /// fire-and-forget (self-destructs via Unity's delayed Destroy). Since 0.22.1 it is a
+        /// multiply-blended soot blot laid on the terrain's own normal, not an umber disc:
+        /// the first client run showed the old one as rows of dark squares - one near-opaque
+        /// 1.5 m disc per 1 m cell, feathered rims overlapping LIGHTER than the discs (a
+        /// lattice), horizontal quads cutting into slopes, and a palette lighter than a Black
+        /// Forest floor, so the tiles read both ways. Now: roughly two blots in five cells,
+        /// 1.6-2.2x the cell, jittered, each a noise-warped blot that DARKENS what is lit
+        /// (Blend DstColor Zero) so it shows on any floor, in any light, and never lightens an
+        /// overlap. The first few placements are logged (position, terrain hit, shader) so
+        /// "no marks" is diagnosable as absent vs invisible.
         /// </summary>
         public static void SpawnScorchMark(Vector3 position, float size, float lifetimeSeconds)
         {
+            // Thin the field deterministically by cell, so both peers that draw this cell (and
+            // a re-ignition of it) make the same choice.
+            int cx = Mathf.FloorToInt(position.x), cz = Mathf.FloorToInt(position.z);
+            float pick = SharedMedia.ProceduralTextures.Hash(cx, cz, 7);
+            if (pick > 0.42f) return;
+            float jx = (SharedMedia.ProceduralTextures.Hash(cx, cz, 11) - 0.5f) * 0.8f;
+            float jz = (SharedMedia.ProceduralTextures.Hash(cx, cz, 13) - 0.5f) * 0.8f;
+            float scale = size * (1.6f + 0.6f * SharedMedia.ProceduralTextures.Hash(cx, cz, 17));
+            Vector3 pos = new Vector3(position.x + jx, position.y, position.z + jz);
+
+            // Sit on the real ground, tilted to it: the client has the terrain collider (the
+            // headless server does not, which is why the spawn moved client-side in 0.21.15).
+            Vector3 normal = Vector3.up;
+            bool hit = false;
+            if (Physics.Raycast(pos + Vector3.up * 3f, Vector3.down, out RaycastHit rh, 8f, TerrainLayerMask))
+            {
+                pos = rh.point; normal = rh.normal; hit = true;
+            }
+            pos += normal * 0.04f; // off the surface, along its normal, not straight up
+
             var quad = new GameObject("FireFrontScorchMark");
-            quad.transform.position = position + Vector3.up * 0.03f; // avoid z-fighting with terrain
-            quad.transform.rotation = Quaternion.Euler(90f, Random.Range(0f, 360f), 0f);
-            quad.transform.localScale = new Vector3(size, size, 1f);
+            quad.transform.position = pos;
+            quad.transform.rotation = Quaternion.FromToRotation(Vector3.up, normal) * Quaternion.Euler(90f, Random.Range(0f, 360f), 0f);
+            quad.transform.localScale = new Vector3(scale, scale, 1f);
 
             quad.AddComponent<MeshFilter>().sharedMesh = GetOrCreateQuadMesh();
             MeshRenderer renderer = quad.AddComponent<MeshRenderer>();
@@ -2271,8 +2296,16 @@ namespace FireFront.Utils
             Material shared = GetOrCreateScorchMaterial();
             if (shared != null) renderer.sharedMaterial = shared;
 
+            if (_scorchLogged < 5)
+            {
+                _scorchLogged++;
+                FireLogger.Info($"[SCORCH] mark {_scorchLogged}: at {pos.x:F1},{pos.y:F1},{pos.z:F1} size {scale:F1} terrain-hit={hit} normal-tilt={Vector3.Angle(Vector3.up, normal):F0}deg shader={(shared != null && shared.shader != null ? shared.shader.name : "none")} blend={(shared != null && shared.HasProperty("_SrcBlend") ? shared.GetFloat("_SrcBlend") + "/" + shared.GetFloat("_DstBlend") : "n/a")}");
+            }
+
             Object.Destroy(quad, lifetimeSeconds);
         }
+
+        private static int _scorchLogged;
 
         private static Mesh _cachedQuadMesh;
         private static Material _cachedScorchMaterial;
@@ -2306,16 +2339,46 @@ namespace FireFront.Utils
             return mesh;
         }
 
-        /// <summary>Shared scorch material — every mark renders from this one instance.</summary>
+        /// <summary>
+        /// Shared scorch material - every mark renders from this one instance. Preferred: the
+        /// multiply-blended vanilla particle shader with a generated soot blot. Fallback (no
+        /// donor): the 0.21.x alpha-blended umber disc on whatever particle shader resolves.
+        /// </summary>
         private static Material GetOrCreateScorchMaterial()
         {
             if (_cachedScorchMaterial != null) return _cachedScorchMaterial;
+
+            Material multiply = null;
+            try { multiply = FireFrontTextureGenerator.GetOrCreateScorchMultiplyMaterial(GetOrCreateSootTexture()); }
+            catch (System.Exception ex) { FireLogger.Debug($"[SCORCH] multiply material failed ({ex.Message}); alpha fallback."); }
+            if (multiply != null) { _cachedScorchMaterial = multiply; return multiply; }
 
             Shader shader = FindUsableParticleShader();
             if (shader == null) return null;
 
             _cachedScorchMaterial = new Material(shader) { mainTexture = GetOrCreateScorchTexture() };
             return _cachedScorchMaterial;
+        }
+
+        private static Texture2D _cachedSootTexture;
+
+        /// <summary>The multiply-decal blot: white = untouched ground, ~0.3 at the heart, alpha 255 throughout.</summary>
+        private static Texture2D GetOrCreateSootTexture()
+        {
+            if (_cachedSootTexture != null) return _cachedSootTexture;
+            const int size = 256;
+            Color32[] px = SharedMedia.ProceduralTextures.SootBlot(size, 20260920);
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, true, false)
+            {
+                name = "FireFront_soot",
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Trilinear,
+                anisoLevel = 8,
+            };
+            tex.SetPixels32(px);
+            tex.Apply(true, true);
+            _cachedSootTexture = tex;
+            return tex;
         }
 
         private static Texture2D _cachedSoftParticleTexture;

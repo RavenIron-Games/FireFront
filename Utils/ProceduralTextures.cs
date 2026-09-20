@@ -291,13 +291,25 @@ namespace SharedMedia
         }
 
         /// <summary>
-        /// Ember mask for Custom/Vegetation's _EmissiveTex (shader: rgb * a * _EmissionColor) and
-        /// Standard's _EmissionMap. Glow lives only inside <paramref name="pocket"/>: along the fissures
-        /// there, plus sparse pin-point embers on the plates (vanilla's own Ashlands tree mask is a field
-        /// of such points). Nothing glows outside a pocket, so most of the trunk stays black.
-        /// rgb runs deep orange → pale yellow with intensity so the hottest cores read white-hot under bloom.
+        /// Ember mask for Custom/Vegetation's _EmissiveTex and Standard's _EmissionMap. Glow lives
+        /// only inside <paramref name="pocket"/>: along the fissures there, plus sparse pin-point
+        /// embers on the plates (vanilla's own Ashlands tree mask is a field of such points).
+        /// Nothing glows outside a pocket, so most of the trunk stays black. rgb runs deep
+        /// orange → pale yellow with intensity so the hottest cores read white-hot under bloom.
+        /// <paramref name="region"/> (optional, w*h, 0..1) confines the glow further — an atlas
+        /// species' trunk half, so needle cards never light.
         /// </summary>
-        public static Color32[] EmberMask(int w, int h, CrackField cf, float[] pocket, int seed, float dotDensity = 0.25f, float crackGlow = 1f, float glowWidth = 0.30f)
+        /// <remarks>
+        /// PREMULTIPLIED, alpha = 255. The first FireFront mask kept bright orange in rgb
+        /// everywhere and the pattern only in alpha; in game every trunk glowed root to crown.
+        /// Custom/Vegetation does multiply by .a in both its forward and deferred passes, but
+        /// (a) Standard's _EmissionMap ignores alpha entirely, and (b) mip levels average rgb
+        /// and alpha SEPARATELY, so at LOD distance a sparse mask becomes "average alpha × bright
+        /// orange" over the whole surface — a neon rod. Baking the pattern into rgb is right in
+        /// every pass, every shader and every mip; alpha 255 keeps the forward/deferred a-multiply
+        /// a no-op instead of a second, squaring falloff.
+        /// </remarks>
+        public static Color32[] EmberMask(int w, int h, CrackField cf, float[] pocket, int seed, float dotDensity = 0.25f, float crackGlow = 1f, float glowWidth = 0.30f, float[] region = null)
         {
             var dst = new Color32[w * h];
             int dotsX = 40, dotsY = 40;
@@ -326,13 +338,14 @@ namespace SharedMedia
 
                     float glow = Mathf.Clamp01(fissure + dot * 0.75f);
                     float a = glow * pk * pk;   // pk² : pockets feather to nothing well before their edge
+                    if (region != null) a *= region[i];
 
-                    // Hue: deep orange at the edges, yellow-white in the core.
+                    // Hue: deep orange at the edges, yellow-white in the core; premultiplied (see remarks).
                     float core = a * a;
-                    float r = 1f;
-                    float g = 0.28f + 0.50f * core;
-                    float b = 0.04f + 0.30f * core;
-                    dst[i] = new Color32(ToByte(r), ToByte(g), ToByte(b), ToByte(a));
+                    float r = 1f * a;
+                    float g = (0.28f + 0.50f * core) * a;
+                    float b = (0.04f + 0.30f * core) * a;
+                    dst[i] = new Color32(ToByte(r), ToByte(g), ToByte(b), 255);
                 }
             }
             return dst;
@@ -426,6 +439,127 @@ namespace SharedMedia
                     r += emission[i].r / 255f * ea; g += emission[i].g / 255f * ea; b += emission[i].b / 255f * ea;
                 }
                 dst[i] = new Color32(ToByte(r), ToByte(g), ToByte(b), 255);
+            }
+            return dst;
+        }
+
+        /// <summary>
+        /// 1 where <paramref name="src"/> is solidly opaque for at least <paramref name="erode"/>
+        /// texels in every direction, else 0. On a tree atlas the bark is a solid rectangle and
+        /// the needle/leaf cards are cut-outs riddled with holes, so eroding by ~2 % of the width
+        /// leaves the bark and erases every card — a data-driven "trunk only" region with no
+        /// per-species UV rule. Separable min filter, O(w*h*erode).
+        /// </summary>
+        public static float[] OpaqueBlockMask(Color32[] src, int w, int h, int erode, byte opaque = 250, float keepFractionOfLargest = 0.4f)
+        {
+            float[] m = ErodedOpaque(src, w, h, erode, opaque);
+            // Dense foliage cards keep a solid core that survives the erosion; the bark block is
+            // the big one. Keep only components comparable to the largest.
+            return keepFractionOfLargest > 0f ? KeepLargestComponents(m, w, h, keepFractionOfLargest) : m;
+        }
+
+        private static float[] ErodedOpaque(Color32[] src, int w, int h, int erode, byte opaque)
+        {
+            var a = new float[w * h];
+            for (int i = 0; i < a.Length; i++) a[i] = src[i].a >= opaque ? 1f : 0f;
+            if (erode <= 0) return a;
+            var tmp = new float[w * h];
+            for (int y = 0; y < h; y++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    float m = 1f;
+                    for (int k = -erode; k <= erode; k++)
+                    {
+                        int xx = x + k;
+                        if (xx < 0 || xx >= w) { m = 0f; break; }   // atlas edges are not wrap-safe: treat outside as transparent
+                        if (a[y * w + xx] < 1f) { m = 0f; break; }
+                    }
+                    tmp[y * w + x] = m;
+                }
+            }
+            for (int x = 0; x < w; x++)
+            {
+                for (int y = 0; y < h; y++)
+                {
+                    float m = 1f;
+                    for (int k = -erode; k <= erode; k++)
+                    {
+                        int yy = y + k;
+                        if (yy < 0 || yy >= h) { m = 0f; break; }
+                        if (tmp[yy * w + x] < 1f) { m = 0f; break; }
+                    }
+                    a[y * w + x] = m;
+                }
+            }
+            return a;
+        }
+
+        /// <summary>
+        /// Keeps the 4-connected components of a 0/1 mask whose area is at least
+        /// <paramref name="fractionOfLargest"/> of the largest component; everything smaller is cleared.
+        /// </summary>
+        public static float[] KeepLargestComponents(float[] mask, int w, int h, float fractionOfLargest)
+        {
+            var label = new int[w * h];
+            var areas = new List<int> { 0 }; // label 0 = background
+            var stack = new Stack<int>();
+            for (int i = 0; i < mask.Length; i++)
+            {
+                if (mask[i] <= 0f || label[i] != 0) continue;
+                int id = areas.Count; areas.Add(0);
+                stack.Push(i); label[i] = id;
+                while (stack.Count > 0)
+                {
+                    int j = stack.Pop(); areas[id]++;
+                    int x = j % w, y = j / w;
+                    if (x > 0 && mask[j - 1] > 0f && label[j - 1] == 0) { label[j - 1] = id; stack.Push(j - 1); }
+                    if (x < w - 1 && mask[j + 1] > 0f && label[j + 1] == 0) { label[j + 1] = id; stack.Push(j + 1); }
+                    if (y > 0 && mask[j - w] > 0f && label[j - w] == 0) { label[j - w] = id; stack.Push(j - w); }
+                    if (y < h - 1 && mask[j + w] > 0f && label[j + w] == 0) { label[j + w] = id; stack.Push(j + w); }
+                }
+            }
+            int largest = 0;
+            for (int k = 1; k < areas.Count; k++) if (areas[k] > largest) largest = areas[k];
+            var outp = new float[w * h];
+            if (largest == 0) return outp;
+            for (int i = 0; i < mask.Length; i++) outp[i] = label[i] != 0 && areas[label[i]] >= largest * fractionOfLargest ? 1f : 0f;
+            return outp;
+        }
+
+        /// <summary>
+        /// A soot blot for a MULTIPLY-blended ground decal (Blend DstColor Zero): white where the
+        /// ground is untouched, down to <paramref name="sootTone"/> at the heart, alpha 255
+        /// throughout so no alpha convention can square it away. Noise-warped outline and a
+        /// wide feather so a field of them never reads as discs; a few pale flecks where ash
+        /// would lie (they only lighten back toward untouched — multiply cannot brighten).
+        /// Clamp-wrapped, not tileable.
+        /// </summary>
+        public static Color32[] SootBlot(int size, int seed, float sootTone = 0.30f, float feather = 0.45f)
+        {
+            var dst = new Color32[size * size];
+            for (int y = 0; y < size; y++)
+            {
+                float v = (y + 0.5f) / size;
+                for (int x = 0; x < size; x++)
+                {
+                    float u = (x + 0.5f) / size;
+                    float dx = u - 0.5f, dy = v - 0.5f;
+                    // Warp the radius so the outline wanders; two octaves is enough for a blot.
+                    float ang = (float)Math.Atan2(dy, dx);
+                    float wob = 0.78f + 0.22f * Fbm(0.5f + 0.5f * (float)Math.Cos(ang), 0.5f + 0.5f * (float)Math.Sin(ang), 3, 3, 2, seed);
+                    float r = (float)Math.Sqrt(dx * dx + dy * dy) * 2f / wob;   // 0 centre, ~1 rim
+                    float body = 1f - Smooth(1f - feather, 1f, r);
+                    // Uneven interior: sooty patches, not a flat stain.
+                    float grain = 0.75f + 0.25f * Fbm(u, v, 6, 6, 3, seed + 7);
+                    float dark = body * grain;
+                    float tone = 1f - (1f - sootTone) * dark;
+                    // Ash flecks: small pale spots that lift the tone back up a little.
+                    float fleck = Smooth(0.74f, 0.92f, Fbm(u, v, 14, 14, 3, seed + 19, 0.55f)) * body * 0.5f;
+                    tone = tone + (0.85f - tone) * fleck * Mathf.Clamp01(0.85f - tone > 0f ? 1f : 0f);
+                    // Slightly warm soot (brown-black), sRGB.
+                    dst[y * size + x] = new Color32(ToByte(tone), ToByte(tone * 0.96f + 0.04f * (1f - dark)), ToByte(tone * 0.92f + 0.08f * (1f - dark)), 255);
+                }
             }
             return dst;
         }

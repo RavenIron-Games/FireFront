@@ -124,6 +124,34 @@ namespace FireFront.Fire
             return GetOrCreateFireMaterial(GenerateSoftFireGlow(), true);
         }
 
+        /// <summary>
+        /// The ground scorch decal: vanilla's unlit particle material (the ember donor's
+        /// "Custom/Particle (Unlit)") re-blended to MULTIPLY (Blend DstColor Zero), so the mark
+        /// darkens whatever is already lit on the terrain - grass detail, sun, shadow and the
+        /// fire's own light survive - instead of painting an umber disc over it. Its own clone,
+        /// never the ember material (that one is additive and shared by every spark system).
+        /// Null when no donor exists; the caller then keeps the alpha-blended fallback.
+        /// </summary>
+        public static Material GetOrCreateScorchMultiplyMaterial(Texture2D soot)
+        {
+            if (s_cloneCache.TryGetValue("scorch", out Material cached) && cached != null) return cached;
+            Material ember = CloneDonor(EmberDonors, "ember");
+            if (ember == null || ember.shader == null || ember.shader.name != "Custom/Particle (Unlit)") return null;
+            Material m = new Material(ember) { name = "FireFront_scorch" };
+            m.SetTexture("_MainTex", soot);
+            m.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.DstColor);
+            m.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.Zero);
+            if (m.HasProperty("_Cull")) m.SetFloat("_Cull", 0f);          // a decal on a slope is seen from either side of its own plane
+            if (m.HasProperty("_SoftParticles")) m.SetFloat("_SoftParticles", 0f); // soft particles fade by depth difference: a decal 3 cm off the ground would vanish
+            m.DisableKeyword("SOFTPARTICLES_ON");
+            if (m.HasProperty("_CameraFadingEnabled")) m.SetFloat("_CameraFadingEnabled", 0f);
+            if (m.HasProperty("_FejdFog")) m.SetFloat("_FejdFog", 0f);   // fog on a multiply pass lightens the mark toward fog colour
+            m.renderQueue = 2950; // after every opaque and alpha-tested thing on the ground, before the game's transparent effects
+            s_cloneCache["scorch"] = m;
+            FireLogger.Info($"[SHADER-DIAG] scorch decal material: \"{m.shader.name}\" from the ember donor, blend DstColor/Zero, queue {m.renderQueue}.");
+            return m;
+        }
+
         public static Material GetOrCreateSmokeMaterial()
         {
             Material m = CloneDonor(SmokeDonors, "smoke");
