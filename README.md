@@ -104,6 +104,8 @@ Diagnostic-only: `firelistprefabs`, `firecheckprefab`, `firepurgevfx`, `firegrou
 
 Everything is in `BepInEx/config/com.raveniron.firefront.cfg` and everything is live-tunable with `fireset`, no restart required. The config file migrates itself between versions: when a default changes, a value you never touched follows it, and a value you chose is kept and named in the log.
 
+Every key is written to both the server's file and each client's, but most are read on one side only, and two presets (`lowspec`, `burntheworld`) silently override keys that still read true. [docs/CONFIG-KEY-MAP.md](docs/CONFIG-KEY-MAP.md) says, for all 81 keys, which side reads it and what overrides it.
+
 `fireset` keys:
 
 | Area | Keys |

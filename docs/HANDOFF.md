@@ -108,8 +108,8 @@ blot for the overlap of their lifetimes (pre-existing; the multiply material squ
 and the quad's spin is `Random.Range`, the one property peers do not agree on (radially
 symmetric blot, invisible); `ScorchMarkKept` keys on each machine's own `GroundCellSize`, so
 two clients with different values draw different keep sets (the same key already sizes
-their decals differently; the real fix is a server-to-client config broadcast, see the key
-map), a runtime `GroundCellSize` change re-rolls queued cells, and the `IsDedicatedServer`
+their decals differently; the real fix is a server-to-client config broadcast, see
+`docs/CONFIG-KEY-MAP.md`), a runtime `GroundCellSize` change re-rolls queued cells, and the `IsDedicatedServer`
 gate fails open if its reflection misses (pre-existing, every visual path shares it). Same
 hole exists on `main` since 0.21.15 (the remote-mirror path); `DrainRemoteVfxSpawnQueue` has
 no zone gate either and spawns ground VFX at any synced cell world-wide, capped only by
@@ -496,8 +496,11 @@ Test: `fireset dirtpaint true` (server setting; the command forwards from a clie
 `fireset scorchmarks false` on the client to see the dirt alone, light a ground fire, walk it.
 Expect on the client: `[IGNITE-TRACE] All 11 FireFront RPCs registered`, then nothing about
 paint unless a cell could not be laid (`Paint flush:` Debug lines). Expect on the server:
-`Paint assign:` Debug lines only for zones no player was in or next to. Not yet run in play as
-of this note.
+`Paint assign:` Debug lines only for zones no player was in or next to. (On the merged branch
+the boot line says `All 12`.) **Run in play 2026-09-20 evening** on the merged build (wubarrk
+`de4ca34`, dedicated test rig): the owner turned it on and reported it works - the first real
+dirt under a fire on a dedicated server. Earlier that day, on the pre-merge build, every flush
+dropped, which is the old server-side path and was expected.
 
 ## 0.21.10 (2026-09-19): the three left open by 0.21.9
 
