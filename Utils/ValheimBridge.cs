@@ -1967,6 +1967,65 @@ namespace FireFront.Utils
             return result is float f ? f : (float?)null;
         }
 
+        // --- Vanilla light helpers: LightFlicker, LightLod ---
+        // Both components expose their tunables as public fields, which is exactly how these
+        // two got missed: the ONE field on each that matters for driving the light at runtime
+        // is private. LightFlicker captures m_baseIntensity in Awake and multiplies it into the
+        // Light every update, so a flickering light's brightness can only be changed through
+        // it. LightLod captures m_baseRange the same way and ramps the Light's range back up to
+        // it every second. Both are `private float` in the shipping assembly (ilspycmd,
+        // 2026-09-20) and public only in the publicized reference; direct writes compiled clean
+        // and threw FieldAccessException on every frame of every fire, on every client.
+        //
+        // The flicker base is written per frame per burning object, so it is a Harmony
+        // FieldRef (one delegate, then a plain field store) rather than FieldInfo.SetValue,
+        // which boxes a float per call.
+        private static readonly HarmonyLib.AccessTools.FieldRef<LightFlicker, float> FlickerBaseIntensityRef =
+            ResolveFlickerBaseIntensityRef();
+        private static readonly FieldInfo LightLodBaseRangeField = typeof(LightLod).GetField("m_baseRange", AnyInstance);
+        private static bool _flickerRefFailureLogged;
+
+        private static HarmonyLib.AccessTools.FieldRef<LightFlicker, float> ResolveFlickerBaseIntensityRef()
+        {
+            try { return HarmonyLib.AccessTools.FieldRefAccess<LightFlicker, float>("m_baseIntensity"); }
+            catch (System.Exception) { return null; }
+        }
+
+        /// <summary>
+        /// Sets the base brightness LightFlicker multiplies into its Light. Returns false if the
+        /// field could not be resolved, so the caller can write Light.intensity instead and at
+        /// least have a light - LightFlicker will then hold it at its own captured base.
+        /// </summary>
+        public static bool TrySetFlickerBaseIntensity(LightFlicker flicker, float value)
+        {
+            if (flicker == null) return false;
+            if (FlickerBaseIntensityRef == null)
+            {
+                if (!_flickerRefFailureLogged)
+                {
+                    _flickerRefFailureLogged = true;
+                    FireLogger.Warn("LightFlicker.m_baseIntensity could not be resolved, so fire lights flicker at a " +
+                                    "fixed brightness instead of swelling with the burn. Everything else is unaffected.");
+                }
+                return false;
+            }
+            FlickerBaseIntensityRef(flicker) = value;
+            return true;
+        }
+
+        /// <summary>
+        /// Sets the range LightLod ramps its Light back up to. Returns false if unresolved.
+        /// Set Light.range as well: lowering the base does NOT lower a range that is already at
+        /// full, because LightLod's ramp-up only runs while range is below the base and its
+        /// ramp-down only runs beyond m_lightDistance. Inside 40 m, the base alone changes nothing.
+        /// </summary>
+        public static bool TrySetLightLodBaseRange(LightLod lod, float range)
+        {
+            if (lod == null || LightLodBaseRangeField == null) return false;
+            LightLodBaseRangeField.SetValue(lod, range);
+            return true;
+        }
+
         // --- Player feedback messages ---
         private static readonly MethodInfo PlayerMessageMethod =
             // 1.0.7 appended `bool log = false`, which changes the signature even though it

@@ -150,6 +150,10 @@ namespace FireFront.Fire
         public static float ApplyTickToZdo(ZDO zdo, float damage, float max)
         {
             float cur = HealthOf(zdo, max);
+            // Behind the prefixes' own check, for the direct path too: a NaN here would pass
+            // the floor clamp below (`NaN < x` is false) and be written into a replicated, saved
+            // float. The tree would then be neither alive nor dead, on every peer, forever.
+            if (float.IsNaN(damage) || float.IsInfinity(damage)) return cur;
             float next = cur - damage;
             if (next < DeadHealth) next = DeadHealth;
             zdo.Set(ZDOVars.s_health, next);

@@ -30,7 +30,7 @@ namespace FireFront.Patches
     public static class TreeBaseRpcDamagePatch
     {
         [HarmonyPrefix]
-        public static bool Prefix(TreeBase __instance, HitData hit)
+        public static bool Prefix(TreeBase __instance, long sender, HitData hit)
         {
             if (hit == null) return true;
             ZNetView nv = __instance.GetComponent<ZNetView>();
@@ -38,10 +38,19 @@ namespace FireFront.Patches
             // 1. Unseen fire tick.
             if (hit.m_statusEffectHash == CharredTreeLifecycle.TickMarker)
             {
+                // The same two guards as HandleFireDamage, for the same reasons. The sender
+                // check is a filter, not an authenticator - ZRoutedRpc never stamps the real
+                // sender - but it stops ordinary client traffic. The finite check is the one
+                // that matters: this writes ZDOVars.s_health, which replicates to every peer
+                // and is SAVED with the world, and `NaN < floor` is false so the clamp in
+                // ApplyTickToZdo would wave a NaN straight through.
+                if (!ValheimBridge.IsFromServer(sender)) return false;
                 if (nv == null || !nv.IsValid() || !nv.IsOwner()) return false; // vanilla's own owner gate
+                float damage = hit.m_damage.m_fire;
+                if (float.IsNaN(damage) || float.IsInfinity(damage) || damage <= 0f) return false;
                 float max = __instance.m_health;
-                float next = CharredTreeLifecycle.ApplyTickToZdo(nv.GetZDO(), hit.m_damage.m_fire, max);
-                FireLogger.Debug($"[TREE-HP] {ValheimBridge.NameOf(__instance)}: -{hit.m_damage.m_fire:F2} -> {next:F1}/{max:F0} (owner-side tick)");
+                float next = CharredTreeLifecycle.ApplyTickToZdo(nv.GetZDO(), damage, max);
+                FireLogger.Debug($"[TREE-HP] {ValheimBridge.NameOf(__instance)}: -{damage:F2} -> {next:F1}/{max:F0} (owner-side tick)");
                 return false;
             }
 
