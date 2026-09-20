@@ -40,6 +40,8 @@ namespace FireFront.Config
         public static ConfigEntry<bool> FireHurtsEnabled;
         public static ConfigEntry<bool> FireHurtsPlayerOnly;
         public static ConfigEntry<float> FireHurtsObjectRadius;
+        public static ConfigEntry<bool> FireKeepsYouWarm;
+        public static ConfigEntry<float> FireWarmthRadius;
         public static ConfigEntry<float> FireDamagePerTick;
         public static ConfigEntry<float> FireDamageTickInterval;
         public static ConfigEntry<KeyboardShortcut> ExtinguishKey;
@@ -107,6 +109,14 @@ namespace FireFront.Config
         private const int LowSpecGroundVfxMaxConcurrent = 10;
         private const int LowSpecGroundDamageMaxConcurrent = 20;
         private const float LowSpecSpreadCheckInterval = 2f;
+
+        /// <summary>
+        /// The ceiling on FireDamagePerTick, and - the reason it is a named constant - the clamp a
+        /// client applies to a fire-damage RPC before handing it to vanilla. It has to be the
+        /// setting's own maximum rather than this machine's configured value, or a client whose
+        /// FireDamagePerTick is lower than the server's would quietly shrug off legitimate damage.
+        /// </summary>
+        public const float MaxFireDamagePerTick = 50f;
         private const float LowSpecMaxFlameHeight = 12f;
         private const int LowSpecTallFireMaxConcurrent = 4;
 
@@ -122,8 +132,13 @@ namespace FireFront.Config
             : Apocalypse ? Mathf.Max(GroundMaxConcurrent.Value, BurnGroundMaxConcurrent)
             : GroundMaxConcurrent.Value;
 
+        // Apocalypse raises the number of cells that can burn to BurnGroundMaxConcurrent, so the
+        // visual cap has to come with it or the preset recreates, at 200-vs-500, precisely the
+        // 30-vs-50 mismatch that made two cells in five burn invisibly before 0.21.9.
         public static int EffectiveGroundVfxMaxConcurrent =>
-            LowSpec ? Mathf.Min(GroundVfxMaxConcurrent.Value, LowSpecGroundVfxMaxConcurrent) : GroundVfxMaxConcurrent.Value;
+            LowSpec ? Mathf.Min(GroundVfxMaxConcurrent.Value, LowSpecGroundVfxMaxConcurrent)
+            : Apocalypse ? Mathf.Max(GroundVfxMaxConcurrent.Value, BurnGroundMaxConcurrent)
+            : GroundVfxMaxConcurrent.Value;
 
         public static int EffectiveGroundDamageMaxConcurrent =>
             LowSpec ? Mathf.Min(GroundDamageMaxConcurrent.Value, LowSpecGroundDamageMaxConcurrent) : GroundDamageMaxConcurrent.Value;
@@ -479,7 +494,12 @@ namespace FireFront.Config
             GroundSpreadRadius = config.Bind(
                 "Ground", "GroundSpreadRadius", 4f,
                 new ConfigDescription(
-                    "Max distance (meters) a burning ground cell or object can ignite nearby ground cells.",
+                    "Max distance (meters) for object<->ground ignition: how far a burning tree, log " +
+                    "or piece seeds ground cells around itself, and how far a burning ground cell " +
+                    "reaches out to ignite nearby objects. It does NOT set the ground-to-ground crawl " +
+                    "distance - a burning cell only ever lights its 8 immediate neighbours - so raising " +
+                    "this does not make a grass front advance faster. That pace is one GroundCellSize " +
+                    "per SpreadCheckInterval, throttled by GroundMaxConcurrent.",
                     new AcceptableValueRange<float>(1f, 20f)));
 
             GroundBurnDurationSeconds = config.Bind(
@@ -504,13 +524,17 @@ namespace FireFront.Config
                     new AcceptableValueRange<int>(1, 50)));
 
             GroundVfxMaxConcurrent = config.Bind(
-                "Ground", "GroundVfxMaxConcurrent", 30,
+                "Ground", "GroundVfxMaxConcurrent", 200,
                 new ConfigDescription(
-                    "Max ground-fire cells that get an actual PARTICLE VISUAL at once. Ground fire " +
-                    "can have up to GroundMaxConcurrent (200) cells burning logically; rendering " +
-                    "that many particle effects simultaneously would be a real performance cost. " +
-                    "Does NOT limit damage zones — see GroundDamageMaxConcurrent for that.",
-                    new AcceptableValueRange<int>(0, 200)));
+                    "Max ground-fire cells that get an actual PARTICLE VISUAL at once. Raised from 30 " +
+                    "to 200 in 0.21.9: GroundMaxConcurrent defaults to 50, so the old value left " +
+                    "roughly two cells in five burning, damaging and INVISIBLE at stock settings — " +
+                    "a tester's log showed 'ground 50/50' against 'vfxcap 30' on every heartbeat. " +
+                    "A cell that cannot be drawn now waits and is drawn as soon as another finishes, " +
+                    "so this is a genuine ceiling rather than a race nobody could see losing. " +
+                    "Drop it if a huge fire costs you frames; the LowSpec preset clamps it to 10 " +
+                    "whatever this says. Does NOT limit damage zones — see GroundDamageMaxConcurrent.",
+                    new AcceptableValueRange<int>(0, 2000)));
 
             GroundDamageMaxConcurrent = config.Bind(
                 "Damage", "GroundDamageMaxConcurrent", 50,
@@ -527,15 +551,23 @@ namespace FireFront.Config
 
             FireHurtsEnabled = config.Bind(
                 "Damage", "FireHurtsEnabled", true,
-                "Standing in fire (object or ground) actually deals damage, via vanilla's own " +
-                "burn-check system (EffectArea/Type.Burning) — the same mechanism real campfires " +
-                "use. Independent of visuals: still works even if VfxPrefabName/UseProceduralVfx " +
-                "are both off, so turning off effects for performance doesn't silently disable this.");
+                "Standing in fire (object or ground) actually deals damage. Finding you is this " +
+                "mod's own job - players are located from their ZDO positions and burned on their " +
+                "own machine, creatures by a proximity poll wherever real physics exists. The damage " +
+                "itself is vanilla's: the real Burning status effect, the same one a campfire " +
+                "applies. (Vanilla's own EffectArea/Type.Burning was tried first and never fired " +
+                "once; FireBurnZone's history comment records why.) Independent of visuals: still " +
+                "works even if VfxPrefabName/UseProceduralVfx are both off, so turning off effects " +
+                "for performance doesn't silently disable this.");
 
             FireHurtsPlayerOnly = config.Bind(
                 "Damage", "FireHurtsPlayerOnly", false,
                 "If true, only players take damage from fire — creatures/mobs are unaffected. " +
-                "Default false: fire hurts anything standing in it, players and mobs alike.");
+                "Default false: fire hurts anything standing in it, players and mobs alike. " +
+                "Creature damage needs real physics to find them, which exists in single-player and " +
+                "in a listen host's own view but NOT on a dedicated server, where there are ZDOs and " +
+                "no colliders - so mobs do not burn there whatever this is set to. Players burn " +
+                "everywhere; they have their own path and do not depend on this.");
 
             FireHurtsObjectRadius = config.Bind(
                 "Damage", "FireHurtsObjectRadius", 2f,
@@ -544,11 +576,26 @@ namespace FireFront.Config
                     "Ground-fire damage zones use half of GroundCellSize instead — no separate setting.",
                     new AcceptableValueRange<float>(0.5f, 10f)));
 
+            FireKeepsYouWarm = config.Bind(
+                "Fire", "FireKeepsYouWarm", true,
+                "Standing near burning ground or a burning object keeps you warm, the same way a " +
+                "campfire does - it holds off Cold and Freezing while you are beside it. On by " +
+                "default because the alternative is shivering with hypothermia in the middle of a " +
+                "forest fire. Uses vanilla's own near-a-fire check, so shelter and frost resistance " +
+                "still behave normally.");
+
+            FireWarmthRadius = config.Bind(
+                "Fire", "FireWarmthRadius", 8f,
+                new ConfigDescription(
+                    "How close a fire has to be to keep you warm. Larger than the damage radius on " +
+                    "purpose: a wildfire should be felt from further away than it burns.",
+                    new AcceptableValueRange<float>(1f, 64f)));
+
             FireDamagePerTick = config.Bind(
                 "Damage", "FireDamagePerTick", 5f,
                 new ConfigDescription(
                     "Fire damage applied per tick to anything standing in a fire zone (see FireDamageTickInterval).",
-                    new AcceptableValueRange<float>(0.5f, 50f)));
+                    new AcceptableValueRange<float>(0.5f, MaxFireDamagePerTick)));
 
             FireDamageTickInterval = config.Bind(
                 "Damage", "FireDamageTickInterval", 1f,

@@ -47,7 +47,7 @@ namespace FireFront.Commands
                 args => FireDebug(args));
 
             new Terminal.ConsoleCommand("fireset",
-                "FireFront: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|enabled> <value>",
+                "FireFront: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|enabled> <value>",
                 args => FireSet(args));
 
             new Terminal.ConsoleCommand("firelistprefabs",
@@ -90,14 +90,45 @@ namespace FireFront.Commands
 
         private static void Ignite(Terminal.ConsoleEventArgs args)
         {
-            if (!RequireAdmin(args)) return;
+            // Relayed form "ignite <zdoUserId> <zdoId>". ignite is the one gated
+            // command that cannot be relayed as typed: it picks its target by
+            // raycasting the crosshair, and a headless server has no crosshair.
+            // So the CLIENT raycasts, then relays the resolved ZDOID here, where
+            // ExecuteRelayed has already authorized the sender against the
+            // server's own adminlist. That is the real, unspoofable check — the
+            // typist's local admin flag is not trusted, and on a dedicated
+            // server it is not even set for genuine admins: live 2026-09-19,
+            // clearfires (relayed) worked while ignite answered "Admin only."
+            // for a player who was in adminlist.txt in all three id forms.
+            if (ValheimBridge.IsServer() && args.Length >= 3)
+            {
+                if (!long.TryParse(args[1], out long zUser) || !uint.TryParse(args[2], out uint zId))
+                {
+                    Say(args, $"Couldn't parse ZDOID: '{args[1]} {args[2]}'.");
+                    return;
+                }
 
+                Component relayed = ValheimBridge.ComponentFromZdoid(new ZDOID(zUser, zId));
+                if (relayed == null) { Say(args, "That target no longer exists on the server."); return; }
+                if (!ValheimBridge.IsBurnable(relayed)) { Say(args, $"Not burnable: {ValheimBridge.NameOf(relayed)}"); return; }
+
+                FireManager.Instance.TryIgnite(relayed);
+                Say(args, FireManager.Instance.IsBurning(relayed)
+                    ? $"Ignited: {ValheimBridge.NameOf(relayed)}"
+                    : $"Queued or dropped (cap full): {ValheimBridge.NameOf(relayed)}");
+                return;
+            }
+
+            // Typed locally: only this machine has a crosshair, so the raycast
+            // happens here whichever side we are on.
             Component target = ValheimBridge.RaycastBurnable();
             if (target == null) { Say(args, "No burnable target under crosshair."); return; }
             if (!ValheimBridge.IsBurnable(target)) { Say(args, $"Not burnable: {ValheimBridge.NameOf(target)}"); return; }
 
             if (ValheimBridge.IsServer())
             {
+                if (!RequireAdmin(args)) return;
+
                 FireManager.Instance.TryIgnite(target);
                 Say(args, FireManager.Instance.IsBurning(target)
                     ? $"Ignited: {ValheimBridge.NameOf(target)}"
@@ -109,14 +140,13 @@ namespace FireFront.Commands
                 // _burning dict — but Update()'s simulation loop only runs on the
                 // server now, so that fire would ignite visually and then never
                 // expire, while its StartBurning broadcast tells every other peer
-                // a fire started that the server has no record of. Route through
-                // the same RPC real ignition already uses instead.
+                // a fire started that the server has no record of. Relay the
+                // resolved target instead and let the server ignite it.
                 ZDOID? id = ValheimBridge.ZDOIDOf(target);
                 if (id.HasValue)
                 {
-                    // The typist is the igniter — commands run where they are typed.
-                    ValheimBridge.SendIgniteRequestToServer(id.Value, ValheimBridge.LocalPlayerId());
-                    Say(args, $"Sent ignite request to server: {ValheimBridge.NameOf(target)}");
+                    Say(args, "FireFront: sent to server — replies appear as [server] lines. (ignite)");
+                    ValheimBridge.SendCommandRelayToServer($"ignite {id.Value.UserID} {id.Value.ID}");
                 }
                 else
                 {
@@ -255,7 +285,7 @@ namespace FireFront.Commands
         {
             if (args.Length < 3)
             {
-                Say(args, "Usage: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|enabled> <value>");
+                Say(args, "Usage: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|enabled> <value>");
                 return;
             }
 
@@ -393,6 +423,16 @@ namespace FireFront.Commands
                     break;
                 case "firehurtsradius":
                     if (float.TryParse(raw, out float fhr)) { FireConfig.FireHurtsObjectRadius.Value = fhr; Ok(args, key, FireConfig.FireHurtsObjectRadius.Value); }
+                    else Bad(args, raw);
+                    break;
+
+                case "firewarmth":
+                    if (bool.TryParse(raw, out bool fw)) { FireConfig.FireKeepsYouWarm.Value = fw; Ok(args, key, fw); }
+                    else Bad(args, raw);
+                    break;
+
+                case "firewarmthradius":
+                    if (float.TryParse(raw, out float fwr)) { FireConfig.FireWarmthRadius.Value = fwr; Ok(args, key, FireConfig.FireWarmthRadius.Value); }
                     else Bad(args, raw);
                     break;
                 case "firedamage":
@@ -565,6 +605,22 @@ namespace FireFront.Commands
                     break;
                 case "charredglow":
                     if (float.TryParse(raw, out float cgl)) { FireConfig.CharredEmberGlowSeconds.Value = cgl; Ok(args, key, FireConfig.CharredEmberGlowSeconds.Value); }
+                    else Bad(args, raw);
+                    break;
+                // These three are read by the simulation but were reachable from no route at all,
+                // which FireConfig's own "every value is live-settable" doc comment promised was
+                // impossible. maxkills echoes the read-back value, not the token: its bind clamps
+                // to 1..50, so the raw number would report a value the entry does not hold.
+                case "waterblocks":
+                    if (bool.TryParse(raw, out bool wbs)) { FireConfig.GroundWaterBlocksSpreadEnabled.Value = wbs; Ok(args, key, wbs); }
+                    else Bad(args, raw);
+                    break;
+                case "maxkills":
+                    if (int.TryParse(raw, out int mkc)) { FireConfig.MaxKillsPerCycle.Value = mkc; Ok(args, key, FireConfig.MaxKillsPerCycle.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "firesmoke":
+                    if (bool.TryParse(raw, out bool fsm)) { FireConfig.FireSmokeEnabled.Value = fsm; Ok(args, key, fsm); }
                     else Bad(args, raw);
                     break;
                 default:
@@ -779,6 +835,7 @@ namespace FireFront.Commands
                 { "firetreeregrow", FireTreeRegrow },
                 { "firetreeregrowlist", FireTreeRegrowList },
                 { "fireweather", FireWeather },
+                { "ignite", Ignite },
             };
 
         // When non-null, Say() writes here instead of the local console —
@@ -898,6 +955,8 @@ namespace FireFront.Commands
                 { "firehurts", FireConfig.FireHurtsEnabled },
                 { "firehurtsplayeronly", FireConfig.FireHurtsPlayerOnly },
                 { "firehurtsradius", FireConfig.FireHurtsObjectRadius },
+                { "firewarmth", FireConfig.FireKeepsYouWarm },
+                { "firewarmthradius", FireConfig.FireWarmthRadius },
                 { "firedamage", FireConfig.FireDamagePerTick },
                 { "firetickinterval", FireConfig.FireDamageTickInterval },
                 { "extinguishradius", FireConfig.ExtinguishGroundRadius },
@@ -942,6 +1001,9 @@ namespace FireFront.Commands
                 { "charredhealth", FireConfig.CharredTreeHealthFraction },
                 { "charredcrumble", FireConfig.CharredLogCrumbleSeconds },
                 { "charredglow", FireConfig.CharredEmberGlowSeconds },
+                { "waterblocks", FireConfig.GroundWaterBlocksSpreadEnabled },
+                { "maxkills", FireConfig.MaxKillsPerCycle },
+                { "firesmoke", FireConfig.FireSmokeEnabled },
                 { "enabled", FireConfig.Enabled },
             };
             return _settable;

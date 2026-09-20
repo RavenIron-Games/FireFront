@@ -95,6 +95,29 @@ namespace FireFront.Tests
             var absent = ConfigLedger.Plan(Snapshot("[Visuals]", "MaxFlameHeight = 30"), 0);
             Check("Plan: a file without the key plans nothing for it", absent.ResetToDefault.Count == 0 && absent.Kept.Count == 0);
 
+            // --- Plan: the 0.21.9 ground-visual cap -------------------------------------------
+            // A stored 30 is the mod's OWN old default, not a decision: at GroundMaxConcurrent 50
+            // it left two cells in five burning invisibly, which is the bug 0.21.9 fixes. Without
+            // this rebase the fix reaches only people with no config file yet.
+            var darkCap = ConfigLedger.Plan(Snapshot("[Ground]", "GroundVfxMaxConcurrent = 30"), 0);
+            Check("Plan: the old ground-visual cap of 30 moves", darkCap.ResetToDefault.Contains("Ground::GroundVfxMaxConcurrent"));
+
+            var chosenCap = ConfigLedger.Plan(Snapshot("[Ground]", "GroundVfxMaxConcurrent = 45"), 0);
+            Check("Plan: a cap someone actually chose is kept",
+                chosenCap.ResetToDefault.Count == 0 && chosenCap.Kept.Count == 1 && chosenCap.Kept[0].Value == "45");
+
+            // The near miss again, in the new slot: '300' starts with '30'.
+            var capNearMiss = ConfigLedger.Plan(Snapshot("[Ground]", "GroundVfxMaxConcurrent = 300"), 0);
+            Check("Plan: '300' is not '30' in the cap slot either",
+                capNearMiss.ResetToDefault.Count == 0 && capNearMiss.Kept.Count == 1);
+
+            // A file already at version 1 still gets the version-2 step, and ONLY that step.
+            var fromV1 = ConfigLedger.Plan(Snapshot("[Visuals]", "SmoulderAfterFraction = 0.45",
+                                                   "[Ground]", "GroundVfxMaxConcurrent = 30"), 1);
+            Check("Plan: from version 1, the cap moves but the already-applied 0.45 step does not",
+                fromV1.ResetToDefault.Contains("Ground::GroundVfxMaxConcurrent") &&
+                !fromV1.ResetToDefault.Contains("Visuals::SmoulderAfterFraction"));
+
             // --- Plan: the 0.18.7 rename ----------------------------------------------------------
             var orphan = ConfigLedger.Plan(Snapshot("[Debug]", "VerboseLogging = true", "DebugLogging = false"), 0);
             Check("Plan: the orphan VerboseLogging is retired", orphan.Retired.Contains("Debug::VerboseLogging"));

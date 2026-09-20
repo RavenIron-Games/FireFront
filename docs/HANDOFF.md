@@ -221,6 +221,110 @@ either, and withholding would re-run the migration on every boot forever. `fires
 `LastSummary`, which is written from the plan's INTENT before anything runs, so refusals have
 to be folded back into it or the one line an admin reads is confidently wrong.
 
+## 0.21.10 (2026-09-19): the three left open by 0.21.9
+
+1. **Join snapshot.** `FireFront_GroundSyncRequest`, a tenth RPC. The CLIENT asks, off the same
+   `ZRoutedRpc` reference guard that drives `ResetRemoteMirror`, once `CanReachServer()` is true -
+   the RPC instance exists several seconds before there is a server peer to address, same wait the
+   config sync already uses. The server replies to that ONE peer in the ordinary delta format with
+   an empty expiry list, so it lands in the existing `HandleGroundFireSync` and there is no second
+   parser to disagree. Rate-limited per peer (5s): a routed RPC's sender is read off the wire and
+   can be forged, so a peer that asks constantly is throttled rather than trusted.
+2. **`IsDedicatedServer()`** - reflected `ZNet.IsDedicated()`, which the shipping SERVER assembly
+   compiles to `return true`. Gates `wantVisual` in the two SERVER-side spawn paths only
+   (`SpawnGroundVfxFor`, `SpawnVfxFor`). NOT `SpawnRemoteVfxOnly` - that is the client's own path
+   and the test is false there anyway. A listen host is not dedicated and keeps its visuals.
+3. **Restored cells** are added to `_groundVfxDark` instead of being skipped, so the 0.21.9 upgrade
+   pass builds their ground object a few per cycle rather than fifty in the restore frame. That
+   pass is no longer visual-only: it now refuses to touch a cell unless it can actually change
+   something for it, or a cell waiting on a full visual budget would be rebuilt every cycle.
+
+**Watch for:** the heartbeat's `[lit N, waiting M]` is the fastest read on all of this. On a
+DEDICATED server `lit` should now be 0 always, and `waiting` should drain to 0 rather than sitting
+at the cell count. On a listen host `lit` should track the burning cell count.
+
+## 0.21.9 (2026-09-19): the drawn ground fire was never the same fire as the simulated one
+
+Four divergences, all found after the owner said "the visual spread is different to the cells
+burning" and then confirmed ALL FOUR directions at once - less flame than fire, flame without
+fire, flame in the wrong place, and a front that spreads differently. That combination is the
+tell: no single bug does all four. **There is no reconciliation anywhere in this path** - the
+client is fed deltas and never corrected - so every error is permanent until the cell dies.
+
+1. **`GroundVfxMaxConcurrent` defaulted to 30 against `GroundMaxConcurrent` 50**, so two cells in
+   five burned invisibly, and a cell that lost that race at ignition was never revisited -
+   `SpawnGroundVfxFor` is called once and returns early on `ContainsKey` ever after. Now 200, with
+   `UpgradeDarkGroundCells` handing visuals to waiting cells as headroom frees. **This was sitting
+   in a tester's log from 2026-08-30**: `ground 50/50` and `vfxcap 30` on the same line, every
+   heartbeat, unread for three weeks. The heartbeat now prints `[lit N, waiting M]`.
+2. **`FlushGroundFireSync` sat below the `_nextCycle` gate**, so its 1s interval quantized up to
+   the next spread-cycle boundary: a real cadence of 1.5s at defaults, up to 10s if an admin slows
+   the spread cycle. **This is the second subsystem that gate has swallowed** - `DamagePlayersInFire`
+   had the identical bug earlier the same day. Check for a third before putting anything below it.
+3. **`ValheimBridge.GetGroundHeight` is a no-op on a dedicated server** and always has been. Its
+   raycast needs terrain colliders, which do not exist headless, and its `ZoneSystem` fallback is
+   the same raycast wrapped - so it returns its own input `y`. Every ground cell therefore stores
+   the Y of whatever object seeded the fire and carries it unchanged across the whole spread, and
+   the client drew it verbatim. The client now re-samples its own terrain and keeps the wire value
+   only as the fallback. 14,518 "found nothing" lines and zero successes in one session's log.
+4. **`_remoteGroundVfx` was never cleared on logout.** FireManager lives on the plugin GameObject
+   and survives the scene change; the VFX it spawned do not. The dictionary kept keys pointing at
+   destroyed objects, `ContainsKey` refused to redraw them, and it compounded every session.
+   `ResetRemoteMirror` runs off the existing `ZRoutedRpc` reference guard.
+
+**Still open, deliberately not done:**
+- **No join/reconnect snapshot.** A player who connects mid-fire never learns about cells that lit
+  before they arrived. Restored-from-persistence cells ARE broadcast (FireManager.cs:1252), so a
+  server restart is covered; a late join is not. The fix is a full `_groundBurning` send on peer-
+  ready, and it is the last place the client is not reconciled.
+- **Restored cells never get a `FireBurnZone`** - the restore path writes `_groundBurning` directly
+  and skips `SpawnGroundVfxFor`. Players are unaffected since 0.21.8 (server-side ZDO damage), but
+  creatures on a listen host walk through restored fire unharmed. Adding them to `_groundVfxDark`
+  would let the new upgrade pass drain them a few per cycle.
+- **A dedicated server builds particle systems nobody can see.** `lit 37` in a headless heartbeat
+  is 37 real ParticleSystems on a machine with no camera. Suspect for the tester's unexamined
+  "fire prods physics hard" report.
+
+## 0.21.8 (2026-09-19): fire damage to players does NOT come from physics
+
+`Fire/FireBurnZone.cs` polls `Physics.OverlapSphere`. **On a dedicated server that never finds a
+player**, because there is no Character instance or collider where players are, only ZDOs — so
+fire never hurt anyone there from 0.1 to 0.21.7, silently, while working on a listen host. The
+zone's own staged diagnostics are what proved it: with DebugLogging on, `OverlapSphereNonAlloc
+found` fired 4 times (trees, `viewblock`) and `resolved a real Character` fired **0** times.
+
+Players are now found by `ValheimBridge.CollectPlayerTargets` and burned by `FireFront_FireDamage`,
+a routed RPC the OWNING machine acts on, because vanilla's `SE_Burning` needs a live Character.
+`FireBurnZone` skips players entirely so a listen host is not burned twice, and is no longer even
+attached when PlayerOnly is set.
+
+**`ZNet.m_peers` is `private readonly` in the shipping assembly and must be reflected.** Reading it
+directly compiled fine and threw `FieldAccessException` once per cycle on the real server, which
+also killed every step *after* it in the fire tick. I had checked a decompile — of the publicized
+copy, which rewrites everything to public. Decompile
+`FireFrontTestServer\valheim_server_Data\Managed\assembly_valheim.dll`, never `libs\` or
+`publicized_assemblies\`; they differ by size alone (2560000 vs 2561536 on 1.0.12). `ZNetPeer.m_uid`,
+`m_characterID`, `m_playerName` and `IsReady()` genuinely are public.
+
+**`ValheimBridge.IsFromServer` is a filter, not an authenticator, and no new code should treat it as
+one.** `ZRoutedRpc.RoutedRPCData.Deserialize` reads `m_senderPeerID` off the wire and `RouteRPC`
+re-serializes it verbatim — the server never stamps the real sender — so a modded client can forge
+it and address the result to `Everybody`. What actually protects `FireFront_FireDamage` is the clamp
+in `HandleFireDamage`: reject non-finite and non-positive, cap at `FireConfig.MaxFireDamagePerTick`.
+The cap is the setting's *maximum*, not this machine's value, so a client configured lower than the
+server still takes full legitimate damage. Two Opus reviewers disagreed outright on this; the
+decompiled body settled it.
+
+`IsStandingInFire` must keep its Y band. `GroundCellKey` is (x,z) only, so a bare `ContainsKey` makes
+every burning cell an infinite vertical column. The damage pass also runs *above* the `_nextCycle`
+gate, on its own clock, and backs off rather than latching off after a failure — both were real
+defects in the first cut, and both fail in the same silent direction as the bug this release fixes.
+
+**This is the third instance of one trap** (spread 0.17.4, regrowth 0.21.5, player damage 0.21.8).
+**Anything that reaches for physics, colliders or instances on the server is wrong by default** —
+see [[dedicated-server-is-headless-at-origin]]. Grep for `Physics.` and `FindObjectsOfType` before
+assuming a feature works on a dedicated server just because it works when you host.
+
 ## 0.21.7 (2026-09-18): the config sync, and why it had no admin gate
 
 **Do not add a client-side admin gate to the config sync.** 0.21.6 did, and the feature was a
