@@ -46,9 +46,22 @@ methods live there): `SharedMedia/ProceduralTextures.cs` (the generator; FireFro
 
 # FireFront — 0.22.0 (2026-09-20): tree fire rework, charred trees, rebuilt VFX
 
-**Resume point (superseded by 0.22.1 above; the test list still applies).** The `wubarrk`
-branch carries 0.22.0. Read the 0.22.0 CHANGELOG entry first; it is the design record. Then
-do this, in order:
+**Reviewed 2026-09-20, before any run - two blockers fixed in place.** `LightFlicker.m_baseIntensity`
+(written every frame per burner from `UpdateLight`) and `LightLod.m_baseRange` (from `SetSmoulder`)
+are both `private float` in the shipping assembly and public only in the publicized reference.
+Both writes compiled clean and would have thrown `FieldAccessException` on the first fire on every
+client - and because Mono aborts JIT of the whole method, the first one also killed `UpdateLight`
+before the light could track the front AND escaped `Update()` before the bark-char block, so the
+bark blackening would never have shown. Same trap as `ZNet.m_peers`. Both now go through
+`ValheimBridge.TrySetFlickerBaseIntensity` / `TrySetLightLodBaseRange`; the smoulder path also
+writes `Light.range` directly (lowering the base alone does nothing inside 40 m) and sheds the
+soft shadow via the public `m_shadowLod`. Also in the same commit: the two tick prefixes bind
+`sender`, filter on `IsFromServer` and reject non-finite damage, matching `HandleFireDamage`;
+`ApplyBurnChar` classifies its material slots once at collect time instead of allocating a
+`Material[]` per renderer at 5 Hz per burner. Still NOT run in-game. Step 1 below stands.
+
+**Resume point (superseded by 0.22.1 above; the test list still applies).** Read the 0.22.0
+CHANGELOG entry first; it is the design record. Then do this, in order:
 
 1. **Look at the fire.** Ignite a beech and a pine with `ignite`, `firedebug` on. Expect
    `[SHADER-DIAG] flame material cloned from fire_pit/flames (1)` (and ember/smoke/glow/haze

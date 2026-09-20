@@ -76,7 +76,7 @@ namespace FireFront.Fire
         private LightLod _lightLod;
         private float _baseLightIntensity = 2.2f;
         private float _baseLightRange = 10f;
-        private List<Renderer> _barkRenderers;
+        private CharredTreeSkin.CharSlot[] _barkSlots;
         private float _nextBarkUpdate;
         private float _nextDistanceCheck;
         private bool _far;
@@ -302,7 +302,7 @@ namespace FireFront.Fire
 
             if (FireConfig.EffectiveBarkCharEnabled && _target != null && (_kind == BurnKind.Tree || _kind == BurnKind.Log))
             {
-                _barkRenderers = CharredTreeSkin.CollectMeshRenderers(_target.gameObject);
+                _barkSlots = CharredTreeSkin.CollectCharSlots(_target.gameObject);
             }
 
             PositionEmitters();
@@ -703,12 +703,12 @@ namespace FireFront.Fire
             UpdateRates();
             UpdateLight(windVel);
 
-            if (_barkRenderers != null && Time.time >= _nextBarkUpdate)
+            if (_barkSlots != null && Time.time >= _nextBarkUpdate)
             {
                 _nextBarkUpdate = Time.time + BarkUpdateInterval;
                 float pulse = 0.7f + 0.3f * Mathf.PerlinNoise(Time.time * 2.5f, _noiseSeed);
                 if (_smoulder) pulse *= 0.5f;
-                CharredTreeSkin.ApplyBurnChar(_barkRenderers, _progress, pulse, CharredTextures.VariantFor(_id));
+                CharredTreeSkin.ApplyBurnChar(_barkSlots, _progress, pulse, CharredTextures.VariantFor(_id));
             }
         }
 
@@ -780,9 +780,11 @@ namespace FireFront.Fire
             float swell = _smoulder ? 0.45f : Mathf.Lerp(0.8f, 1.15f, Mathf.Sin(_progress * Mathf.PI));
             float target = _baseLightIntensity * swell;
             // LightFlicker rewrites intensity from its captured base every update; nudging the
-            // base through the component keeps the two from fighting.
-            if (_flicker != null) _flicker.m_baseIntensity = target;
-            else _light.intensity = target;
+            // base through the component keeps the two from fighting. That base is a PRIVATE
+            // field in the shipping assembly - it only looks public through the publicized
+            // reference - so the write goes through the bridge. False means the field could not
+            // be resolved; a plain intensity write is then the best available.
+            if (!ValheimBridge.TrySetFlickerBaseIntensity(_flicker, target)) _light.intensity = target;
         }
 
         private void UpdateDistanceLod()
@@ -823,10 +825,22 @@ namespace FireFront.Fire
             if (_light != null)
             {
                 _light.color = new Color(1f, 0.35f, 0.10f);
-                // LightLod fades the range back up to ITS captured base every second, so the
-                // reduction has to go through that base rather than the Light directly.
-                if (_lightLod != null) _lightLod.m_baseRange = _baseLightRange * 0.6f;
-                else _light.range = _baseLightRange * 0.6f;
+                float range = _baseLightRange * 0.6f;
+                // LightLod ramps the range back up to ITS captured base every second, so the base
+                // has to drop - through the bridge, because it is private at runtime. But the base
+                // ALONE changes nothing while the player is inside m_lightDistance: LightLod's
+                // ramp-up only runs while range < base, and its ramp-down only runs beyond that
+                // distance. Both writes, or the light keeps its full range indefinitely.
+                ValheimBridge.TrySetLightLodBaseRange(_lightLod, range);
+                _light.range = range;
+                // Embers do not cast a soft shadow, and a shadow-casting point light is the single
+                // most expensive thing a fire draws. m_shadowLod is public and short-circuits
+                // LightLod's whole shadow block; without it LightLod restores Soft within a second
+                // inside m_shadowDistance. Shedding it also frees a slot in the player's global
+                // shadowed-point-light budget for a fire that is still actually burning.
+                if (_lightLod != null) _lightLod.m_shadowLod = false;
+                _light.shadows = LightShadows.None;
+                _light.shadowStrength = 0f;
             }
             if (_embers != null) { var e = _embers.emission; e.rateOverTime = 2f; }
             UpdateRates();
@@ -834,10 +848,10 @@ namespace FireFront.Fire
 
         private void OnDestroy()
         {
-            if (_barkRenderers != null)
+            if (_barkSlots != null)
             {
-                try { CharredTreeSkin.ClearBurnChar(_barkRenderers); } catch (System.Exception) { }
-                _barkRenderers = null;
+                try { CharredTreeSkin.ClearBurnChar(_barkSlots); } catch (System.Exception) { }
+                _barkSlots = null;
             }
             s_tall.Remove(this);
         }

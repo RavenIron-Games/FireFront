@@ -354,13 +354,30 @@ namespace FireFront.Fire
         }
 
         /// <summary>
+        /// One material slot the live-burn char tints, classified ONCE when the burner is
+        /// collected. Nothing here changes while a tree burns - the shader, the foliage test and
+        /// the base tint are all material state - so re-deciding them five times a second per
+        /// burner was pure allocation: a fresh Material[] from sharedMaterials per renderer per
+        /// tick, plus the strings behind the shader-name and foliage checks.
+        /// </summary>
+        public struct CharSlot
+        {
+            public Renderer Renderer;
+            public int Slot;
+            public bool Vegetation;
+            public bool Foliage;
+            public Color BaseTint;
+        }
+
+        /// <summary>
         /// Live-burn bark char: darkens the trunk and lights ember cracks in proportion to
         /// how far the fire has climbed, through property blocks so the vanilla materials are
-        /// untouched and <see cref="ClearBurnChar"/> restores the tree exactly.
+        /// untouched and <see cref="ClearBurnChar"/> restores the tree exactly. Allocation-free
+        /// per call; everything per-slot was decided in <see cref="CollectCharSlots"/>.
         /// </summary>
-        public static void ApplyBurnChar(List<Renderer> renderers, float progress, float emberPulse, int emberVariant = 0)
+        public static void ApplyBurnChar(CharSlot[] slots, float progress, float emberPulse, int emberVariant = 0)
         {
-            if (renderers == null) return;
+            if (slots == null) return;
             EnsureDonors();
             float p = Mathf.Clamp01(progress);
             // Bark darkens from untouched to CharTint as the front climbs; leaves only start
@@ -376,61 +393,70 @@ namespace FireFront.Fire
                 try { mask = CharredTextures.EmberMask(emberVariant); } catch (System.Exception) { }
             }
 
-            for (int i = 0; i < renderers.Count; i++)
+            for (int i = 0; i < slots.Length; i++)
             {
-                Renderer r = renderers[i];
-                if (r == null) continue;
-                Material[] mats = r.sharedMaterials;
+                CharSlot s = slots[i];
+                if (s.Renderer == null) continue;
+                s_mpb.Clear();
+                if (s.Foliage)
+                {
+                    s_mpb.SetColor(P_Color, leafTint);
+                }
+                else
+                {
+                    // _Color multiplies the albedo; keep alpha 1 or the cutoff discards bark.
+                    Color tint = s.BaseTint;
+                    s_mpb.SetColor(P_Color, new Color(tint.r * barkTint.r, tint.g * barkTint.g, tint.b * barkTint.b, tint.a));
+                    if (s.Vegetation && mask != null)
+                    {
+                        s_mpb.SetTexture(P_EmissiveTex, mask);
+                        s_mpb.SetColor(P_EmissionColor, ember);
+                    }
+                }
+                s.Renderer.SetPropertyBlock(s_mpb, s.Slot);
+            }
+        }
+
+        /// <summary>Removes every live-burn block: the tree looks exactly as vanilla drew it.</summary>
+        public static void ClearBurnChar(CharSlot[] slots)
+        {
+            if (slots == null) return;
+            for (int i = 0; i < slots.Length; i++)
+            {
+                if (slots[i].Renderer == null) continue;
+                slots[i].Renderer.SetPropertyBlock(null, slots[i].Slot);
+            }
+        }
+
+        /// <summary>
+        /// Every material slot on a burner's mesh renderers that the live-burn char may tint,
+        /// classified now so the per-tick pass allocates nothing. Skips particle emitters.
+        /// </summary>
+        public static CharSlot[] CollectCharSlots(GameObject root)
+        {
+            var list = new List<CharSlot>();
+            if (root == null) return list.ToArray();
+            Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                if (!(renderers[i] is MeshRenderer)) continue;
+                Material[] mats = renderers[i].sharedMaterials; // once, here - not per tick
                 for (int j = 0; j < mats.Length; j++)
                 {
                     Material m = mats[j];
                     if (m == null) continue;
                     bool vegetation = m.shader != null && m.shader.name == VegetationShader;
-                    s_mpb.Clear();
-                    if (vegetation && IsFoliage(m))
+                    list.Add(new CharSlot
                     {
-                        s_mpb.SetColor(P_Color, leafTint);
-                    }
-                    else
-                    {
-                        // _Color multiplies the albedo; keep alpha 1 or the cutoff discards bark.
-                        Color tint = m.HasProperty(P_Color) ? m.GetColor(P_Color) : Color.white;
-                        s_mpb.SetColor(P_Color, new Color(tint.r * barkTint.r, tint.g * barkTint.g, tint.b * barkTint.b, tint.a));
-                        if (vegetation && mask != null)
-                        {
-                            s_mpb.SetTexture(P_EmissiveTex, mask);
-                            s_mpb.SetColor(P_EmissionColor, ember);
-                        }
-                    }
-                    r.SetPropertyBlock(s_mpb, j);
+                        Renderer = renderers[i],
+                        Slot = j,
+                        Vegetation = vegetation,
+                        Foliage = vegetation && IsFoliage(m),
+                        BaseTint = m.HasProperty(P_Color) ? m.GetColor(P_Color) : Color.white,
+                    });
                 }
             }
-        }
-
-        /// <summary>Removes every live-burn block: the tree looks exactly as vanilla drew it.</summary>
-        public static void ClearBurnChar(List<Renderer> renderers)
-        {
-            if (renderers == null) return;
-            for (int i = 0; i < renderers.Count; i++)
-            {
-                Renderer r = renderers[i];
-                if (r == null) continue;
-                Material[] mats = r.sharedMaterials;
-                for (int j = 0; j < mats.Length; j++) r.SetPropertyBlock(null, j);
-            }
-        }
-
-        /// <summary>Mesh renderers of a burner that the live-burn char may tint. Skips particle emitters.</summary>
-        public static List<Renderer> CollectMeshRenderers(GameObject root)
-        {
-            var list = new List<Renderer>();
-            if (root == null) return list;
-            Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
-            for (int i = 0; i < renderers.Length; i++)
-            {
-                if (renderers[i] is MeshRenderer) list.Add(renderers[i]);
-            }
-            return list;
+            return list.ToArray();
         }
 
         /// <summary>
