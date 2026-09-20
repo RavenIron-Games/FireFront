@@ -897,44 +897,89 @@ namespace FireFront.Utils
             return cleared || cultivated;
         }
 
-        // --- Terrain painting (real vanilla dirt, via the same system the Cultivator uses) ---
-        // GENUINELY HIGHER RISK than anything else in this file: TerrainComp is
-        // networked (m_nview) AND writes to persistent per-zone terrain data
-        // that gets saved to disk, unlike every VFX/damage system here which is
-        // purely runtime. Test-world only until proven safe over real use.
-        private static readonly MethodInfo TerrainCompFindMethod =
-            typeof(TerrainComp).GetMethod("FindTerrainCompiler", AnyStatic, null, new[] { typeof(Vector3) }, null);
-        // 1.0.7 restructured this: (worldPos, radius, paintType, heightCheck, apply) became
-        // (worldPos, rot, TerrainOp.Settings). The five loose arguments are fields on the
-        // settings object now, and the trailing `apply` — which used to make the method call
-        // Save() and Poke() for you — is gone. We already call Save() ourselves right after
-        // the batch, so nothing is lost. See the invoke site for the field-by-field mapping.
+        // --- Terrain painting (real vanilla dirt, via the same system the Hoe uses) ---
+        // TerrainComp is networked (m_nview) AND writes per-zone terrain data that is SAVED WITH
+        // THE WORLD, unlike every VFX and damage system in this file, which is runtime only. That
+        // is why UseVanillaDirtPaint is opt-in. Six facts, read from the shipping 1.0.15 assembly
+        // on 2026-09-20. The publicized copy in libs\ has the same method bodies; what it gets
+        // wrong is visibility, which is why the private/public list at the end came from the
+        // shipping DLL and not from what compiles.
+        //
+        //   1. FindTerrainCompiler and Heightmap.FindHeightmap scan static lists of LOADED
+        //      INSTANCES. A dedicated server keeps real zones only around its own reference
+        //      position, which never leaves world origin; everywhere a player actually is it makes
+        //      ghost zones (ZoneSystem.CreateGhostZones instantiates a zone only to generate it and
+        //      destroys it in the same call). So where a fire burns, every lookup here returns
+        //      null on a server, and until 0.21.16 this feature queued every burnt cell there,
+        //      found nothing, and dropped the lot at Debug level. Paint is laid by a machine with
+        //      the terrain loaded: a listen host, or a client.
+        //   2. A zone nobody has ever hoed has NO compiler. Vanilla's TerrainOp.Awake goes through
+        //      Heightmap.GetAndCreateTerrainCompiler, which instantiates one; FindTerrainCompiler
+        //      alone returns null for pristine forest, which is most of what burns. But creating
+        //      one is only safe when NO compiler ZDO exists for the zone anywhere: TerrainComp.Awake
+        //      destroys the OTHER compiler it finds, through ZNetScene, on every machine that has
+        //      one instantiated - so a duplicate created because the real one's ZDO had not been
+        //      instantiated here yet destroys the real one, and every hoe mark in it, for everyone.
+        //      Two peers creating one in the same second destroy each other's, on repeat. Hence:
+        //      exactly one painter per cell, elected by the server, which alone sees every peer
+        //      and every compiler ZDO, and a per-cell "may create" flag the server sets only when
+        //      it sees no compiler ZDO in that zone (FireManager.AssignPendingPaint). The painter
+        //      creates only with that flag, and only once ZNetScene.IsAreaReady says every ZDO in
+        //      the zone is instantiated here.
+        //   3. TerrainComp.Save returns early unless m_nview.IsOwner(), and it republishes this
+        //      machine's whole picture of the zone - heights included. ZDOMan keeps whichever
+        //      revision lands first, so two writers from one base revision lose one of them for
+        //      good, and the loser never notices (its own revision counter already matches). So
+        //      this NEVER takes a compiler from a live owner; the server elects the owner instead,
+        //      and releases an owner that is gone or out of reach (ReleaseNearbyZDOS only looks
+        //      around a peer's CURRENT position, so a compiler left behind by a teleport is held
+        //      for good otherwise). An unowned compiler is claimed only for a zone the server
+        //      elected this machine for - vanilla's own Awake claims an unowned one the same way.
+        //      A disc that spills into the next zone is painted there only if that compiler is
+        //      already ours: its own elected painter may be claiming it this very second.
+        //   4. Save writes the ZDO and does NOT regenerate the heightmap. Vanilla's DoOperation is
+        //      Save(paintOnly) + m_hmap.Poke(1, paintOnly) + ClutterSystem.ResetGrass. Other peers
+        //      regenerate on their own (CheckLoad sees the ZDO's DataRevision move); the painter's
+        //      own revision is already current, so without the Poke it never saw what it painted.
+        //   5. InternalDoOperation stamps m_operations++, m_lastOpPoint and m_lastOpRadius after
+        //      every op, Save serialises them, and CheckLoad on every OTHER peer resets grass over
+        //      that point and radius when m_operations advanced by exactly one - otherwise it
+        //      rebuilds the whole zone's clutter. Calling PaintCleared directly skips the stamp,
+        //      so the batch stamps one op covering itself - and takes the stamp back when
+        //      Save(paintOnly) short-circuits on an unchanged mask, or the counter drifts ahead of
+        //      the ZDO and every later batch lands in the whole-zone branch.
+        //   6. PaintCleared reads each vertex's current colour through getMask, which returns the
+        //      heightmap's last-BAKED texture unless a late-update regenerate is pending
+        //      (m_doLateUpdate == 1), in which case it reads the compiler's own accumulating mask.
+        //      Vanilla pokes after every op, so the next op sees the last; a batch has to poke
+        //      BEFORE painting or its second disc overwrites its first from stale pixels.
+        //
+        // PaintCleared's signature: 1.0.7 folded (worldPos, radius, paintType, heightCheck, apply)
+        // into (worldPos, rot, TerrainOp.Settings), and the trailing `apply` that used to call
+        // Save/Poke for you is gone - the batch does both itself. m_hmap, m_nview, m_operations,
+        // m_lastOpPoint, m_lastOpRadius, PaintCleared and Save are private in the shipping
+        // assembly; FindTerrainCompiler, FindHeightmap, GetAndCreateTerrainCompiler, IsOwner,
+        // HasOwner, ClaimOwnership, Poke and ResetGrass are public and called directly.
         private static readonly MethodInfo TerrainCompPaintClearedMethod =
             typeof(TerrainComp).GetMethod("PaintCleared", AnyInstance, null,
                 new[] { typeof(Vector3), typeof(Vector3), typeof(TerrainOp.Settings) }, null);
         private static readonly FieldInfo TerrainCompNviewField =
             typeof(TerrainComp).GetField("m_nview", AnyInstance);
-        private static readonly MethodInfo TerrainCompIsOwnerMethod =
-            typeof(TerrainComp).GetMethod("IsOwner", AnyInstance, null, System.Type.EmptyTypes, null);
+        private static readonly FieldInfo TerrainCompHmapField =
+            typeof(TerrainComp).GetField("m_hmap", AnyInstance);
+        private static readonly FieldInfo TerrainCompOperationsField =
+            typeof(TerrainComp).GetField("m_operations", AnyInstance);
+        private static readonly FieldInfo TerrainCompLastOpPointField =
+            typeof(TerrainComp).GetField("m_lastOpPoint", AnyInstance);
+        private static readonly FieldInfo TerrainCompLastOpRadiusField =
+            typeof(TerrainComp).GetField("m_lastOpRadius", AnyInstance);
         private static readonly MethodInfo TerrainCompSaveMethod =
-            // 1.0.7: Save() -> Save(bool paintOnly = false). A default argument still changes
-            // the signature, so an EmptyTypes lookup no longer matches. false is the old
-            // behaviour: a full save, not the paint-only fast path.
+            // Save(bool paintOnly = false): a default argument still changes the signature, so an
+            // EmptyTypes lookup does not match.
             typeof(TerrainComp).GetMethod("Save", AnyInstance, null, new[] { typeof(bool) }, null);
+        private static bool _paintReflectionFailureLogged;
+        private static readonly List<Heightmap> _paintHeightmapScratch = new List<Heightmap>(4);
 
-        /// <summary>
-        /// Paints real bare dirt at a world position via vanilla's own terrain
-        /// system (PaintType.Dirt through TerrainComp.PaintCleared) — the same
-        /// mechanism the Cultivator tool uses. Unlike the procedural scorch
-        /// decal, this should correctly suppress grass/clutter too, since it's
-        /// genuinely part of the terrain rather than an overlay. FindTerrainCompiler
-        /// is assumed static (its whole purpose is finding the right per-zone
-        /// instance for a position, which only makes sense as a static lookup);
-        /// if that assumption is wrong this silently no-ops rather than guessing
-        /// further. heightCheck is passed false (paint regardless of local slope,
-        /// we're not trying to level anything) — a genuine guess, worth
-        /// revisiting if the result looks wrong.
-        /// </summary>
         // --- Real prefab-based terrain paint (confirmed via firecheckprefab: the
         // 'cultivate' piece carries ZNetView, Piece, TerrainModifier — the actual
         // prefab the Cultivator tool places). Spawning the real, already-correctly-
@@ -1289,86 +1334,126 @@ namespace FireFront.Utils
             nv.Destroy();
         }
 
-        public static bool TryPaintScorchedDirt(Vector3 worldPos, float radius)
+        public struct PaintJob
         {
-            return TryPaintScorchedDirtBatch(new List<Vector3> { worldPos }, radius) > 0;
+            public Vector3 Position;
+            /// <summary>Set by the server only when it sees NO compiler ZDO for the zone (fact 2).</summary>
+            public bool MayCreate;
+        }
+
+        private sealed class ZoneBatch
+        {
+            public readonly List<Vector3> Positions = new List<Vector3>();
+            /// <summary>True when at least one job's OWN zone is this one: the server elected us for it.</summary>
+            public bool Assigned;
         }
 
         /// <summary>
-        /// Batched real-dirt painting with proper persistence. Groups positions by
-        /// their zone's TerrainComp, applies PaintCleared per position, then calls
-        /// Save() ONCE per comp — vanilla's own flow (DoOperation) always follows
-        /// paint methods with Save(), which commits the paint data to the ZDO;
-        /// that ZDO write is what makes the paint survive a reload AND propagate
-        /// to other clients (they pick it up via CheckLoad). Direct PaintCleared
-        /// without Save() only modifies the local in-memory heightmap: looks fine
-        /// solo, silently lost on reload, never seen by other peers. Returns the
-        /// number of positions successfully painted.
+        /// Lays real dirt for every job whose zone is loaded here, one zone at a time, and only
+        /// into compilers this machine owns, or that nobody owns in a zone the server elected this
+        /// machine for. The caller is that ONE painter (FireManager.AssignPendingPaint). Per zone:
+        /// Poke first so the discs accumulate (fact 6), PaintCleared per position, vanilla's op
+        /// bookkeeping (fact 5), ONE Save (fact 4), one grass reset. Returns the number of paint
+        /// operations laid; jobs the painter cannot take - zone not loaded here, compiler not
+        /// instantiated here yet, or owned by someone else - are dropped. The decal already covers
+        /// the look, and a mark that cannot be laid is not worth a retry queue.
         /// </summary>
-        public static int TryPaintScorchedDirtBatch(List<Vector3> positions, float radius)
+        public static int TryPaintScorchedDirtBatch(List<PaintJob> jobs, float radius)
         {
-            if (positions == null || positions.Count == 0) return 0;
-            if (TerrainCompFindMethod == null)
+            if (jobs == null || jobs.Count == 0) return 0;
+            if (TerrainCompPaintClearedMethod == null || TerrainCompNviewField == null ||
+                TerrainCompHmapField == null || TerrainCompSaveMethod == null ||
+                TerrainCompOperationsField == null || TerrainCompLastOpPointField == null ||
+                TerrainCompLastOpRadiusField == null)
             {
-                FireLogger.Debug("TryPaintScorchedDirtBatch: FindTerrainCompiler reflection lookup returned null " +
-                                  "(confirmed static via metadata, so likely a parameter-type mismatch on 'pos').");
-                return 0;
-            }
-            if (TerrainCompPaintClearedMethod == null)
-            {
-                FireLogger.Debug("TryPaintScorchedDirtBatch: PaintCleared reflection lookup returned null " +
-                                  "(confirmed instance method with 5 params via metadata — likely a type " +
-                                  "mismatch on heightCheck/apply, or paintType isn't TerrainModifier.PaintType).");
+                if (!_paintReflectionFailureLogged)
+                {
+                    _paintReflectionFailureLogged = true;
+                    FireLogger.Warn("UseVanillaDirtPaint is on, but a TerrainComp member this build reflects " +
+                                    "(PaintCleared / Save / m_nview / m_hmap / m_operations / m_lastOpPoint / " +
+                                    "m_lastOpRadius) is missing from this game version. No dirt will be painted; " +
+                                    "the scorch decal still draws.");
+                }
                 return 0;
             }
 
-            // Group positions by TerrainComp so each zone's comp gets painted in
-            // one pass and saved exactly once, instead of a find+paint+save round
-            // trip per burned cell.
-            var byComp = new Dictionary<object, List<Vector3>>();
-            foreach (Vector3 pos in positions)
+            // One pass per zone: the expensive part - serialising ~4,200 vertices into the ZDO -
+            // happens once per zone. A disc that crosses a zone line is painted into the
+            // neighbouring compiler too, as vanilla's TerrainOp.Awake does for every heightmap in
+            // the op's radius; the neighbour is never CREATED and never CLAIMED from here (facts 2
+            // and 3) - only painted if it is already ours.
+            var byComp = new Dictionary<TerrainComp, ZoneBatch>();
+            int unloaded = 0, notReady = 0;
+            ZNetScene scene = ZNetScene.instance;
+            foreach (PaintJob job in jobs)
             {
-                object comp;
-                try
-                {
-                    comp = TerrainCompFindMethod.Invoke(null, new object[] { pos });
-                }
-                catch (System.Exception ex)
-                {
-                    FireLogger.Debug($"TryPaintScorchedDirtBatch: FindTerrainCompiler threw: {ex.InnerException?.Message ?? ex.Message}");
-                    continue;
-                }
-                if (comp == null) continue; // no TerrainComp exists for this zone yet
+                Vector3 pos = job.Position;
+                Heightmap own = Heightmap.FindHeightmap(pos);
+                if (own == null) { unloaded++; continue; }
 
-                if (!byComp.TryGetValue(comp, out List<Vector3> list))
+                // Fact 2: create only on the server's word, and only once every ZDO of the zone
+                // has an instance here - a compiler ZDO that exists but is not instantiated yet is
+                // exactly the case where a local create becomes a duplicate.
+                TerrainComp comp = TerrainComp.FindTerrainCompiler(own.transform.position);
+                if (comp == null && job.MayCreate && scene != null && scene.IsAreaReady(pos))
                 {
-                    list = new List<Vector3>();
-                    byComp[comp] = list;
+                    try
+                    {
+                        comp = own.GetAndCreateTerrainCompiler();
+                    }
+                    catch (System.Exception ex)
+                    {
+                        FireLogger.Debug($"TryPaintScorchedDirtBatch: GetAndCreateTerrainCompiler threw at {pos:F0}: {ex.Message}");
+                        continue;
+                    }
                 }
-                list.Add(pos);
+                if (comp == null) { notReady++; continue; }
+                AddPaintPosition(byComp, comp, pos, assigned: true);
+
+                _paintHeightmapScratch.Clear();
+                Heightmap.FindHeightmap(pos, radius, _paintHeightmapScratch);
+                for (int i = 0; i < _paintHeightmapScratch.Count; i++)
+                {
+                    Heightmap other = _paintHeightmapScratch[i];
+                    if (other == null || other == own) continue;
+                    TerrainComp neighbour = TerrainComp.FindTerrainCompiler(other.transform.position);
+                    if (neighbour != null && neighbour != comp) AddPaintPosition(byComp, neighbour, pos, assigned: false);
+                }
             }
 
             int painted = 0;
-            foreach (KeyValuePair<object, List<Vector3>> kv in byComp)
+            int notOurs = 0;
+            foreach (KeyValuePair<TerrainComp, ZoneBatch> kv in byComp)
             {
-                object comp = kv.Key;
-
-                ZNetView nv = TerrainCompNviewField?.GetValue(comp) as ZNetView;
-                if (nv != null && !nv.IsValid())
+                TerrainComp comp = kv.Key;
+                ZoneBatch batch = kv.Value;
+                ZNetView nv = TerrainCompNviewField.GetValue(comp) as ZNetView;
+                if (nv == null || !nv.IsValid())
                 {
-                    FireLogger.Debug("TryPaintScorchedDirtBatch: found TerrainComp but its ZNetView is invalid, skipping its batch.");
+                    FireLogger.Debug("TryPaintScorchedDirtBatch: compiler has no valid ZNetView, skipping its zone.");
                     continue;
                 }
-
-                bool isOwner = TerrainCompIsOwnerMethod != null && (bool)TerrainCompIsOwnerMethod.Invoke(comp, null);
-                if (!isOwner && nv != null && !nv.IsOwner())
+                // Fact 3: never take a compiler from a live owner, and never claim one we were
+                // only spilled into. Unowned and ours to paint: claimed.
+                if (!nv.IsOwner())
                 {
+                    if (nv.HasOwner() || !batch.Assigned) { notOurs += batch.Positions.Count; continue; }
                     nv.ClaimOwnership();
                 }
+                Heightmap hmap = TerrainCompHmapField.GetValue(comp) as Heightmap;
+                if (hmap == null) continue;
 
-                // Built once per TerrainComp rather than per splat: radius is constant for the
-                // whole batch and PaintCleared only reads this object.
-                var scorchPaintSettings = new TerrainOp.Settings
+                // Fact 6: request the regenerate BEFORE painting, so every disc in this batch reads
+                // the compiler's accumulating mask rather than the last-baked texture. Still one
+                // regenerate, on the next LateUpdate, texture only.
+                hmap.Poke(1, true);
+
+                // Built once per zone: the radius is constant for the batch and PaintCleared only
+                // reads it. Defaults left alone on purpose: m_halfOffset true is the half-vertex
+                // shift every hoe op gets, m_paintExp 0.1 is the Hoe's own near-hard edge, and
+                // m_centerMultiplicationFactor 0 skips the mask-multiply branch. rot is zero:
+                // m_rotation is off, so a round splat has no orientation to give it.
+                var settings = new TerrainOp.Settings
                 {
                     m_paintCleared = true,
                     m_paintType = TerrainModifier.PaintType.Dirt,
@@ -1377,46 +1462,155 @@ namespace FireFront.Utils
                 };
 
                 int paintedOnComp = 0;
-                foreach (Vector3 pos in kv.Value)
+                Vector3 centroid = Vector3.zero;
+                foreach (Vector3 pos in batch.Positions)
                 {
                     try
                     {
-                        // Field-by-field from the pre-1.0.7 call (pos, radius, Dirt, false, true):
-                        //   m_paintRadius      <- radius
-                        //   m_paintType        <- Dirt
-                        //   m_paintHeightCheck <- false
-                        //   apply:true         -> no equivalent; the Save() below IS that.
-                        // Defaults left alone on purpose: m_halfOffset stays true because the
-                        // old method ALWAYS shifted worldPos by -0.5 on x and z (it was
-                        // unconditional in the 0.2x body), and m_centerMultiplicationFactor
-                        // stays 0, which is the branch that skips mask multiplication — the old
-                        // method had no such concept. rot is Vector3.zero: m_rotation is off,
-                        // so a round dirt splat has no orientation to give it.
-                        TerrainCompPaintClearedMethod.Invoke(comp, new object[] { pos, Vector3.zero, scorchPaintSettings });
+                        TerrainCompPaintClearedMethod.Invoke(comp, new object[] { pos, Vector3.zero, settings });
                         paintedOnComp++;
+                        centroid += pos;
                     }
                     catch (System.Exception ex)
                     {
                         FireLogger.Debug($"TryPaintScorchedDirtBatch: PaintCleared threw: {ex.InnerException?.Message ?? ex.Message}");
                     }
                 }
+                if (paintedOnComp == 0) continue;
+                painted += paintedOnComp;
 
-                if (paintedOnComp > 0)
+                // Fact 5: one op covering the batch - its centroid, and the farthest disc's reach.
+                centroid /= paintedOnComp;
+                float reach = 0f;
+                foreach (Vector3 pos in batch.Positions)
+                    reach = Mathf.Max(reach, Vector3.Distance(pos, centroid) + radius);
+                try
                 {
-                    painted += paintedOnComp;
-                    try
-                    {
-                        TerrainCompSaveMethod?.Invoke(comp, new object[] { false });
-                    }
-                    catch (System.Exception ex)
-                    {
-                        FireLogger.Debug($"TryPaintScorchedDirtBatch: Save threw (paint applied locally but may not persist/sync): {ex.InnerException?.Message ?? ex.Message}");
-                    }
+                    TerrainCompOperationsField.SetValue(comp, (int)TerrainCompOperationsField.GetValue(comp) + 1);
+                    TerrainCompLastOpPointField.SetValue(comp, centroid);
+                    TerrainCompLastOpRadiusField.SetValue(comp, reach);
                 }
+                catch (System.Exception ex)
+                {
+                    FireLogger.Debug($"TryPaintScorchedDirtBatch: op bookkeeping threw: {ex.Message}");
+                }
+
+                // Fact 4: paintOnly=true, so Save short-circuits on an unchanged mask hash. When it
+                // does (every disc landed on ground that was already dirt) nothing was published,
+                // so the stamp above must not stand either, and there is no grass to reset.
+                uint before = nv.GetZDO().DataRevision;
+                try
+                {
+                    TerrainCompSaveMethod.Invoke(comp, new object[] { true });
+                }
+                catch (System.Exception ex)
+                {
+                    FireLogger.Debug($"TryPaintScorchedDirtBatch: Save threw (painted locally, not persisted or synced): {ex.InnerException?.Message ?? ex.Message}");
+                }
+                if (nv.GetZDO().DataRevision == before)
+                {
+                    try { TerrainCompOperationsField.SetValue(comp, (int)TerrainCompOperationsField.GetValue(comp) - 1); }
+                    catch (System.Exception) { }
+                    continue;
+                }
+                if (ClutterSystem.instance != null) ClutterSystem.instance.ResetGrass(centroid, reach);
             }
 
+            if (unloaded > 0 || notReady > 0 || notOurs > 0)
+                FireLogger.Debug($"TryPaintScorchedDirtBatch: {painted} laid; dropped {unloaded} with no heightmap loaded here, " +
+                                 $"{notReady} whose compiler is not instantiated here yet (or may not be created), " +
+                                 $"{notOurs} in a zone whose compiler is not ours to write.");
             return painted;
         }
+
+        private static void AddPaintPosition(Dictionary<TerrainComp, ZoneBatch> byComp, TerrainComp comp, Vector3 pos, bool assigned)
+        {
+            if (!byComp.TryGetValue(comp, out ZoneBatch batch))
+            {
+                batch = new ZoneBatch();
+                byComp[comp] = batch;
+            }
+            batch.Positions.Add(pos);
+            if (assigned) batch.Assigned = true;
+        }
+
+        // --- Dirt-paint election (server side) ---
+        private static readonly int TerrainCompilerPrefabHash = "_TerrainCompiler".GetStableHashCode();
+        private static readonly List<ZDO> _compilerScanScratch = new List<ZDO>(64);
+
+        public struct PaintCandidate
+        {
+            public long PeerId;
+            public Vector3 Position;
+        }
+
+        /// <summary>
+        /// The zone's terrain compiler ZDO, or null when the zone has none anywhere - a headless
+        /// server has every ZDO even though it has no instance. A zero ring walks exactly one
+        /// sector. The ZDO's owner is the only machine that can publish a write to it.
+        /// </summary>
+        public static ZDO FindTerrainCompilerZdo(Vector3 pos)
+        {
+            ZDOMan man = ZDOMan.instance;
+            if (man == null || ZdoManFindSectorObjectsMethod == null) return null;
+            _compilerScanScratch.Clear();
+            try
+            {
+                ZdoManFindSectorObjectsMethod.Invoke(man,
+                    new object[] { ZoneSystem.GetZone(pos), new SimulationDistance(0, 0, true), _compilerScanScratch, null });
+            }
+            catch (System.Exception ex)
+            {
+                FireLogger.Debug($"FindTerrainCompilerZdo: FindSectorObjects threw: {ex.InnerException?.Message ?? ex.Message}");
+                return null;
+            }
+            for (int i = 0; i < _compilerScanScratch.Count; i++)
+            {
+                ZDO zdo = _compilerScanScratch[i];
+                if (zdo != null && zdo.GetPrefab() == TerrainCompilerPrefabHash) return zdo;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Server side: drops a ZDO's owner to nobody. Only ever called for an owner that is gone
+        /// or out of reach of the zone. Vanilla's ReleaseNearbyZDOS does the same the moment a
+        /// peer's active area covers the ZDO, but it only scans around each peer's CURRENT
+        /// position, so a compiler an owner teleported away from is otherwise held for good.
+        /// </summary>
+        public static void ReleaseZdoOwner(ZDO zdo)
+        {
+            if (zdo == null) return;
+            try { zdo.SetOwner(0L); }
+            catch (System.Exception ex) { FireLogger.Debug($"ReleaseZdoOwner threw: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Every machine that could lay terrain paint right now: each ready peer at its reference
+        /// position, plus this machine itself when it is a listen host. A dedicated server has no
+        /// terrain where fires burn and is never a candidate. Peer ids are session ids, the same
+        /// currency ZDO ownership and routed-RPC targets use.
+        /// </summary>
+        public static void CollectPaintCandidates(List<PaintCandidate> into)
+        {
+            into.Clear();
+            ZNet net = ZNet.instance;
+            if (net == null) return;
+            List<ZNetPeer> peers = net.GetPeers();
+            if (peers != null)
+            {
+                for (int i = 0; i < peers.Count; i++)
+                {
+                    ZNetPeer peer = peers[i];
+                    if (peer == null || !peer.IsReady()) continue;
+                    into.Add(new PaintCandidate { PeerId = peer.m_uid, Position = peer.GetRefPos() });
+                }
+            }
+            if (!IsDedicatedServer())
+                into.Add(new PaintCandidate { PeerId = LocalSessionId(), Position = net.GetReferencePosition() });
+        }
+
+        public static long LocalSessionId() => ZDOMan.GetSessionID();
 
         // --- Terrain height ---
         private static readonly MethodInfo ZoneSystemGetGroundHeightMethod =
@@ -3537,6 +3731,7 @@ namespace FireFront.Utils
             return 0L;
         }
         private const string RpcFireEvent = "FireFront_FireEvent";
+        private const string RpcPaintAssign = "FireFront_PaintAssign";
         private const string RpcGroundFireSync = "FireFront_GroundFireSync";
         private const string RpcExtinguishRequest = "FireFront_ExtinguishRequest";
         private const string RpcConfigSet = "FireFront_ConfigSet";
@@ -3854,6 +4049,7 @@ namespace FireFront.Utils
             System.Action<long, string> onCommandRelay,
             System.Action<long, float> onFireDamage,
             System.Action<long> onGroundSyncRequest,
+            System.Action<long, ZPackage> onPaintAssign,
             System.Action<long, ZPackage> onObjectFireSync)
         {
             if (ZRoutedRpc.instance == null)
@@ -3881,8 +4077,9 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.Register<string>(RpcCommandRelay, onCommandRelay);
                 ZRoutedRpc.instance.Register<float>(RpcFireDamage, onFireDamage);
                 ZRoutedRpc.instance.Register(RpcGroundSyncRequest, onGroundSyncRequest);
+                ZRoutedRpc.instance.Register<ZPackage>(RpcPaintAssign, onPaintAssign);
                 ZRoutedRpc.instance.Register<ZPackage>(RpcObjectFireSync, onObjectFireSync);
-                FireLogger.Info($"[IGNITE-TRACE] All 11 FireFront RPCs registered successfully (IsServer={IsServer()}).");
+                FireLogger.Info($"[IGNITE-TRACE] All 12 FireFront RPCs registered successfully (IsServer={IsServer()}).");
             }
             catch (System.Exception ex)
             {
@@ -3973,6 +4170,14 @@ namespace FireFront.Utils
             if (ZRoutedRpc.instance == null) return;
             try { ZRoutedRpc.instance.InvokeRoutedRPC(targetPeer, RpcObjectFireSync, pkg); }
             catch (System.Exception ex) { FireLogger.Debug($"SendObjectFireSyncTo threw: {ex.Message}"); }
+        }
+
+        /// <summary>Server -> ONE peer: "lay real dirt on these cells" (see FireManager.AssignPendingPaint).</summary>
+        public static void SendPaintAssignTo(long targetPeer, ZPackage pkg)
+        {
+            if (ZRoutedRpc.instance == null) return;
+            try { ZRoutedRpc.instance.InvokeRoutedRPC(targetPeer, RpcPaintAssign, pkg); }
+            catch (System.Exception ex) { FireLogger.Debug($"SendPaintAssignTo threw: {ex.Message}"); }
         }
 
         public static void BroadcastGroundFireSync(ZPackage pkg)

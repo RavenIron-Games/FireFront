@@ -155,22 +155,40 @@ namespace FireFront.Fire
         // Pruned each cycle in ExpireGroundTimers alongside the existing sweeps.
         private readonly Dictionary<GroundCellKey, float> _groundExhausted = new Dictionary<GroundCellKey, float>();
 
-        // Cells that have already been really painted (UseVanillaDirtPaint) at
-        // least once. Real terrain paint is permanent/persisted-to-disk, so
-        // repainting an already-dirt cell is both redundant and, since exhaustion
-        // became time-bounded, a genuine leak: a sustained fire can reignite the
-        // same cell repeatedly, and each burnout used to spawn a NEW permanent
-        // ZNetView-backed piece on top of the last one at the same spot. Painted
-        // once, never repainted — deliberately NOT cleared on fire-death (unlike
-        // _groundExhausted), since the real paint itself never went away either.
+        // Cells handed to a painter at least once (UseVanillaDirtPaint) - the number `firestatus`
+        // reports as paintedcells. A counter, not a gate: a cell that burns again after its fuel
+        // regrows is handed out again, and repainting ground that is already dirt is a no-op that
+        // costs one PaintCleared. Gating on it would make a cell whose painter could not reach it
+        // unpaintable for the life of the session. Not cleared on fire-death; the dirt is not.
         private readonly HashSet<GroundCellKey> _groundPainted = new HashSet<GroundCellKey>();
 
-        // Burned-cell positions waiting for the next batched real-dirt paint flush.
-        // Painting per-burnout was a find+paint+save round trip per cell; batching
-        // once per second groups cells by zone TerrainComp and saves once per comp.
-        private readonly List<Vector3> _pendingPaint = new List<Vector3>();
+        // Positions THIS machine has been told to paint, and the disc radius that came with them.
+        // Fed by AssignPendingPaint when a listen host elects itself, by HandlePaintAssign on a
+        // client. Flushed by FlushPendingPaint once a second, grouped by zone, one Save per zone.
+        private readonly List<ValheimBridge.PaintJob> _pendingPaint = new List<ValheimBridge.PaintJob>();
+        private float _pendingPaintRadius = 2f;
         private float _nextPaintFlush;
         private const float PaintFlushInterval = 1f;
+
+        // Server side: burnt cells waiting to be handed to exactly ONE painter each, and which peer
+        // was last elected for each zone (the guard against two peers creating a zone's compiler
+        // in the same second). See AssignPendingPaint.
+        private readonly List<(GroundCellKey key, float y)> _paintAssignPending = new List<(GroundCellKey, float)>();
+        private readonly Dictionary<Vector2s, (long peer, float until)> _zonePainter = new Dictionary<Vector2s, (long, float)>();
+        private readonly List<ValheimBridge.PaintCandidate> _paintCandidates = new List<ValheimBridge.PaintCandidate>();
+        private readonly Dictionary<long, List<ValheimBridge.PaintJob>> _paintAssignByPeer = new Dictionary<long, List<ValheimBridge.PaintJob>>();
+        private readonly Dictionary<Vector2s, List<(GroundCellKey key, float y)>> _paintAssignByZone = new Dictionary<Vector2s, List<(GroundCellKey, float)>>();
+        private readonly List<Vector2s> _zonePainterSweep = new List<Vector2s>();
+        private float _nextPaintAssign;
+        private const float PaintAssignInterval = 1f;
+        private const float PaintAssignStickySeconds = 15f;
+        // "In reach" of a zone with a compiler: standing in it or in one next to it. Every
+        // simulation-distance setting keeps that heightmap loaded; a metre radius does not (a
+        // zone's diagonal is 89 m). CREATING a compiler needs more: ZNetScene.IsAreaReady looks
+        // at the 3x3 around the zone, which at the lowest simulation distance is only certain to
+        // be instantiated for the zone the painter stands in. So a pristine zone is reach 0.
+        private const int PaintAssignZoneReach = 1;
+        private const int PaintCreateZoneReach = 0;
 
         // TTL cache for IsClearedOrCultivated terrain lookups, keyed by ground
         // cell. The firebreak line check samples terrain at half-cell steps along
@@ -700,7 +718,7 @@ namespace FireFront.Fire
             if (routedRpc != null && !ReferenceEquals(routedRpc, _registeredRpcInstance))
             {
                 _registeredRpcInstance = routedRpc; // guarded by reference, so a reconnect's fresh instance re-registers
-                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest, HandleObjectFireSync);
+                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest, HandlePaintAssign, HandleObjectFireSync);
 
                 // A fresh ZRoutedRpc means a fresh world, so everything this machine was drawing on
                 // behalf of the old one is stale. FireManager lives on the plugin's own GameObject
@@ -750,6 +768,8 @@ namespace FireFront.Fire
             DrainRemoteObjectVfxQueue(); // same, for object fire — see EnqueueRemoteObjectVfx
             ProcessRemoteSmouldering(); // client-side: the server is headless, THIS is what a player sees
             PruneOrphanedRemoteVfx();   // same: nothing else can reach a stranded effect
+            FlushPendingPaint();        // same: real dirt is laid by the machine that has the terrain, and a
+                                        // dedicated server has none where fires burn - see AssignPendingPaint.
 
             // Everything below this point is the actual fire simulation, and it
             // must only ever run on the server. Ignition already only populates
@@ -790,6 +810,7 @@ namespace FireFront.Fire
             // visuals fell that far behind too. This is the second time the same gate has swallowed
             // a subsystem's own clock; check for a third before adding anything below it.
             FlushGroundFireSync();
+            AssignPendingPaint();
 
             if (Time.time < _nextCycle) return;
             _nextCycle = Time.time + FireConfig.EffectiveSpreadCheckInterval;
@@ -804,7 +825,6 @@ namespace FireFront.Fire
             UpgradeDarkGroundCells(); // straight after the expiry that frees the slots
             ProcessTreeRegrowth();
             ProcessPendingIgniteResolutions();
-            FlushPendingPaint();
             PruneFirebreakCache();
             AdoptOrphanedFires();
             PruneDeadEvents();
@@ -3241,10 +3261,11 @@ namespace FireFront.Fire
         }
 
         /// <summary>
-        /// Flushes queued burned-cell positions to the batched real-dirt painter
-        /// once per PaintFlushInterval. On total failure (e.g. no TerrainComp in
-        /// the zone yet) the positions are dropped rather than retried forever —
-        /// the procedural decal already covered the visual, real paint is a bonus.
+        /// Flushes the cells this machine was elected to paint to the batched real-dirt painter
+        /// once per PaintFlushInterval. Runs on every machine, above the server gate: a listen
+        /// host feeds it from AssignPendingPaint, a client from HandlePaintAssign, and on a
+        /// dedicated server it is always empty. What the painter cannot reach is dropped rather
+        /// than retried - the decal already covers the look.
         /// </summary>
         private void FlushPendingPaint()
         {
@@ -3252,13 +3273,189 @@ namespace FireFront.Fire
             if (Time.time < _nextPaintFlush) return;
             _nextPaintFlush = Time.time + PaintFlushInterval;
 
-            int painted = ValheimBridge.TryPaintScorchedDirtBatch(_pendingPaint, FireConfig.DirtPaintRadius.Value);
-            if (painted < _pendingPaint.Count)
+            int laid = ValheimBridge.TryPaintScorchedDirtBatch(_pendingPaint, _pendingPaintRadius);
+            if (laid < _pendingPaint.Count)
             {
-                FireLogger.Debug($"Paint flush: {painted}/{_pendingPaint.Count} positions painted " +
-                                  "(rest had no TerrainComp or threw; dropped, decal already covers them).");
+                FireLogger.Debug($"Paint flush: {laid} paint ops laid for {_pendingPaint.Count} cells " +
+                                  "(the rest had no heightmap loaded here, or a compiler someone else owns; dropped).");
             }
             _pendingPaint.Clear();
+        }
+
+        /// <summary>
+        /// Server side, once a second: hands every burnt cell to exactly ONE painter, decided per
+        /// ZONE, because what has to be unique is the writer of a zone's compiler ZDO: only its
+        /// OWNER can publish a write, and a zone nobody has touched has no compiler until someone
+        /// creates one, while creating one when another exists anywhere destroys the other with
+        /// every hoe mark in it (TerrainComp.Awake). The server is the one machine that sees every
+        /// peer and every compiler ZDO, so it decides both who paints and whether they may create.
+        /// Per zone with burnt cells: the compiler's owner if it is connected and in reach (an
+        /// owner that is not - a peer that left or teleported away, or this server after a world
+        /// load - is released first; ReleaseNearbyZDOS only looks around a peer's CURRENT position,
+        /// so a compiler left behind by a teleport is otherwise held for good); else whoever was
+        /// elected for the zone in the last few seconds and is still in reach (the window between
+        /// a painter creating the compiler and its ZDO reaching us - not re-armed while it supplies
+        /// the painter, so a painter that cannot reach the zone is replaced when it expires); else
+        /// the nearest candidate in reach, who becomes the zone's painter for that window. "In
+        /// reach" is the zone or one next to it for a zone that has a compiler, and the zone
+        /// itself for one that has none (see PaintCreateZoneReach). A listen host is a candidate
+        /// like any peer and queues for itself. Zones no candidate can reach are dropped: the
+        /// decal covers them.
+        /// </summary>
+        private void AssignPendingPaint()
+        {
+            if (_paintAssignPending.Count == 0) return;
+            if (Time.time < _nextPaintAssign) return;
+            _nextPaintAssign = Time.time + PaintAssignInterval;
+            float now = Time.time;
+
+            ValheimBridge.CollectPaintCandidates(_paintCandidates);
+            if (_paintCandidates.Count == 0) { _paintAssignPending.Clear(); return; }
+            long self = ValheimBridge.IsDedicatedServer() ? 0L : ValheimBridge.LocalSessionId();
+
+            _paintAssignByZone.Clear();
+            foreach ((GroundCellKey key, float y) in _paintAssignPending)
+            {
+                Vector2s zone = ZoneSystem.GetZone(CellCenter(key, y));
+                if (!_paintAssignByZone.TryGetValue(zone, out List<(GroundCellKey key, float y)> cells))
+                {
+                    cells = new List<(GroundCellKey, float)>();
+                    _paintAssignByZone[zone] = cells;
+                }
+                cells.Add((key, y));
+            }
+            _paintAssignPending.Clear();
+
+            _paintAssignByPeer.Clear();
+            int droppedZones = 0;
+            foreach (KeyValuePair<Vector2s, List<(GroundCellKey key, float y)>> zoneCells in _paintAssignByZone)
+            {
+                Vector2s zone = zoneCells.Key;
+                Vector3 zoneCentre = ZoneSystem.GetZonePos(zone);
+
+                ZDO compiler = ValheimBridge.FindTerrainCompilerZdo(zoneCentre);
+                bool mayCreate = compiler == null;
+                int reach = mayCreate ? PaintCreateZoneReach : PaintAssignZoneReach;
+                long owner = compiler != null ? compiler.GetOwner() : 0L;
+                if (owner != 0L && !CandidateInReach(owner, zone, reach))
+                {
+                    ValheimBridge.ReleaseZdoOwner(compiler);
+                    owner = 0L;
+                }
+
+                long painter = 0L;
+                if (owner != 0L)
+                {
+                    painter = owner;
+                }
+                else if (_zonePainter.TryGetValue(zone, out (long peer, float until) sticky) && sticky.until > now && CandidateInReach(sticky.peer, zone, reach))
+                {
+                    painter = sticky.peer;
+                }
+                else
+                {
+                    float best = float.MaxValue;
+                    for (int i = 0; i < _paintCandidates.Count; i++)
+                    {
+                        if (!InPaintReach(_paintCandidates[i].Position, zone, reach)) continue;
+                        Vector3 d = _paintCandidates[i].Position - zoneCentre;
+                        d.y = 0f;
+                        float sq = d.sqrMagnitude;
+                        if (sq < best) { best = sq; painter = _paintCandidates[i].PeerId; }
+                    }
+                    if (painter != 0L) _zonePainter[zone] = (painter, now + PaintAssignStickySeconds);
+                }
+                if (painter == 0L) { droppedZones++; continue; }
+
+                if (!_paintAssignByPeer.TryGetValue(painter, out List<ValheimBridge.PaintJob> jobs))
+                {
+                    jobs = new List<ValheimBridge.PaintJob>();
+                    _paintAssignByPeer[painter] = jobs;
+                }
+                foreach ((GroundCellKey key, float y) in zoneCells.Value)
+                {
+                    _groundPainted.Add(key);
+                    jobs.Add(new ValheimBridge.PaintJob { Position = CellCenter(key, y), MayCreate = mayCreate });
+                }
+            }
+
+            foreach (KeyValuePair<long, List<ValheimBridge.PaintJob>> kv in _paintAssignByPeer)
+            {
+                if (kv.Key == self)
+                {
+                    _pendingPaintRadius = FireConfig.DirtPaintRadius.Value;
+                    _pendingPaint.AddRange(kv.Value);
+                    continue;
+                }
+                // World positions, not cell indices: the painter's idea of GroundCellSize is its
+                // own config, and permanent dirt at the wrong coordinates is not a mistake to allow.
+                var pkg = new ZPackage();
+                pkg.Write(FireConfig.DirtPaintRadius.Value);
+                pkg.Write(kv.Value.Count);
+                foreach (ValheimBridge.PaintJob job in kv.Value)
+                {
+                    pkg.Write(job.Position);
+                    pkg.Write(job.MayCreate);
+                }
+                ValheimBridge.SendPaintAssignTo(kv.Key, pkg);
+            }
+            if (droppedZones > 0)
+                FireLogger.Debug($"Paint assign: {droppedZones} zone(s) of burnt cells had no player in reach to paint them (in the zone if it has never been hoed, in or next to it otherwise); dropped.");
+
+            // Zones are per fire, not per session; sweep the expired ones now and then.
+            if (_zonePainter.Count > 256)
+            {
+                _zonePainterSweep.Clear();
+                foreach (KeyValuePair<Vector2s, (long peer, float until)> kv in _zonePainter)
+                    if (kv.Value.until <= now) _zonePainterSweep.Add(kv.Key);
+                for (int i = 0; i < _zonePainterSweep.Count; i++) _zonePainter.Remove(_zonePainterSweep[i]);
+            }
+        }
+
+        private bool CandidateInReach(long peerId, Vector2s zone, int reach)
+            => TryGetPaintCandidatePosition(peerId, out Vector3 position) && InPaintReach(position, zone, reach);
+
+        private bool TryGetPaintCandidatePosition(long peerId, out Vector3 position)
+        {
+            for (int i = 0; i < _paintCandidates.Count; i++)
+            {
+                if (_paintCandidates[i].PeerId != peerId) continue;
+                position = _paintCandidates[i].Position;
+                return true;
+            }
+            position = Vector3.zero;
+            return false;
+        }
+
+        private static bool InPaintReach(Vector3 candidate, Vector2s zone, int reach)
+        {
+            Vector2s cz = ZoneSystem.GetZone(candidate);
+            return Mathf.Abs(cz.x - zone.x) <= reach && Mathf.Abs(cz.y - zone.y) <= reach;
+        }
+
+        /// <summary>
+        /// Client side: the server elected this machine to lay real dirt for these cells - it owns
+        /// their zone's terrain compiler, or is the nearest player to a zone nobody has touched,
+        /// in which case the job says it may create one. Queued for FlushPendingPaint. The radius
+        /// travels with the cells so the server's setting governs the look for everyone.
+        /// IsFromServer is a filter, not an authenticator (see HandleFireDamage); the count cap and
+        /// the radius clamp bound one message, nothing bounds how many arrive.
+        /// </summary>
+        private void HandlePaintAssign(long sender, ZPackage pkg)
+        {
+            if (!ValheimBridge.IsFromServer(sender)) return;
+            float radius = pkg.ReadSingle();
+            int count = pkg.ReadInt();
+            if (float.IsNaN(radius) || float.IsInfinity(radius) || radius <= 0f || count < 0 || count > 4096) return;
+            _pendingPaintRadius = Mathf.Clamp(radius, 0.5f, 8f);
+            for (int i = 0; i < count; i++)
+            {
+                Vector3 pos = pkg.ReadVector3();
+                bool mayCreate = pkg.ReadBool();
+                if (float.IsNaN(pos.x) || float.IsNaN(pos.y) || float.IsNaN(pos.z) ||
+                    float.IsInfinity(pos.x) || float.IsInfinity(pos.y) || float.IsInfinity(pos.z)) continue;
+                _pendingPaint.Add(new ValheimBridge.PaintJob { Position = pos, MayCreate = mayCreate });
+            }
         }
 
         /// <summary>
@@ -3497,6 +3694,8 @@ namespace FireFront.Fire
             _remoteGroundCells.Clear();
             _remoteVfxSpawnQueue.Clear();
             _remoteVfxQueuedKeys.Clear();
+            // Paint assignments from a world we have left would land on the wrong ground.
+            _pendingPaint.Clear();
 
             // The object half too: a world we have left must not leave fires, ids or clocks
             // behind, or those objects could never be drawn again after a reconnect.
@@ -3562,20 +3761,17 @@ namespace FireFront.Fire
         {
             Vector3 position = CellCenter(key, y);
 
-            if (FireConfig.UseVanillaDirtPaint.Value && !_groundPainted.Contains(key))
-            {
-                // Queue for the next batched flush (see FlushPendingPaint) rather
-                // than painting immediately: paints are grouped by zone TerrainComp
-                // and committed with one Save() per comp per flush. Marked painted
-                // now so a reigniting neighbor can't double-queue the same cell
-                // before the flush fires. Deliberately falls through to the decal
-                // below: it gives instant visual feedback and covers the case where
-                // the batched paint later fails (no TerrainComp in zone) — and it
-                // self-expires via ScorchMarkLifetimeSeconds, so there's no
-                // double-visual buildup once the real paint lands.
-                _pendingPaint.Add(position);
-                _groundPainted.Add(key);
-            }
+            // Real dirt needs real terrain and exactly one writer per zone. A dedicated server has
+            // no terrain where fires burn (it keeps real zones only around world origin; every
+            // heightmap lookup returns null anywhere a player is, which is why this feature never
+            // painted anything on one until 0.21.16), and letting every client paint what it sees
+            // makes them create duplicate compilers and take each other's ownership, both of which
+            // lose paint - or worse, a zone's real hoe work. So the server ELECTS one painter per
+            // cell and tells it - see AssignPendingPaint; a listen host is a candidate like any
+            // peer. Falls through to the decal on purpose: instant feedback, and a fallback if no
+            // painter can reach the cell; the decal expires on its own, so nothing builds up.
+            if (FireConfig.UseVanillaDirtPaint.Value)
+                _paintAssignPending.Add((key, y));
 
             // A scorch mark is a bare mesh with no ZNetView, so it has never replicated to
             // anyone - the machine running the simulation was the only one that ever saw one.

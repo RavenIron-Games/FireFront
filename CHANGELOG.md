@@ -183,6 +183,24 @@
   assemblies (none existed on disk and `assembly_publicizer.dll` has no runtimeconfig);
   `~/.dotnet/dotnet build`, 0 errors.
 
+## 0.21.16
+
+- **Real dirt where the ground burned, if you want it.** The `UseVanillaDirtPaint` option has been
+  in the config for a long time and has never once worked on a dedicated server: the server tried
+  to paint terrain it does not have, found nothing, and threw every patch away. The server now
+  hands each burnt patch to one player's game - whoever holds that piece of ground, or the nearest
+  player to it - and that game lays the dirt through the same terrain paint the Hoe uses: it
+  follows the slope, joins up across cells, keeps the grass off, is seen by everyone and is saved
+  with the world. It is permanent, like a hoe mark, which is why it stays off by default. Turn it
+  on with `fireset dirtpaint true` (a server setting; the command forwards), and `fireset
+  scorchmarks false` to see it without the decal on top. Where it had worked before, in a hosted
+  game, the painter never refreshed the terrain either, so the host saw its own dirt only after a
+  reload, and it could not paint any zone nobody had ever hoed - which is most forest. Both fixed.
+- **The README stopped promising something a dedicated server mostly cannot do.** Dirt paths and
+  tilled ground are firebreaks in a hosted game; on a dedicated server they are only near the
+  world's centre, because that is the only ground the server itself keeps loaded, and everywhere
+  else only water is. The wording now says so. The fix is its own release.
+
 ## 0.21.15
 
 - **Burnt ground leaves a scar you can actually see.** On a dedicated server it never did. The
