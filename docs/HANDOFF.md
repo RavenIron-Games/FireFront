@@ -1,3 +1,40 @@
+# FireFront — 0.22.0 (2026-09-20): tree fire rework, charred trees, rebuilt VFX
+
+**Resume point.** The `wubarrk` branch carries 0.22.0, built and compiling (0 errors) but
+NOT yet run in-game or deployed. Read the 0.22.0 CHANGELOG entry first; it is the design
+record. Then do this, in order:
+
+1. **Look at the fire.** Ignite a beech and a pine with `ignite`, `firedebug` on. Expect
+   `[SHADER-DIAG] flame material cloned from fire_pit/flames (1)` (and ember/smoke/glow/haze
+   lines) once, then `[TREE-HP]` lines every 2 s with the health dropping, and the front
+   climbing the trunk on the same schedule. If the flames are white or invisible, the first
+   suspect is `FireFrontTextureGenerator.FlameMaterialIsGradientMapped()` and the custom
+   vertex streams - log `renderer.activeVertexStreamsCount` and the material's shader name.
+2. **Watch a tree die.** At the health floor the tree should swap for a black one with the
+   same silhouette minus leaves (`[CHARRED] ... replaced by charred twin ... fate=`), then 3 s
+   later either fall (`sfx_tree_fall`, crash on landing, coal at the foot, log crumbles 20 s
+   later) or stay. Chop a standing one: damage text shows, it falls the same way, coal only.
+3. **Dedicated server.** The same, on the test server with a client attached. The ticks route
+   to the CLIENT (`routed to owner <id>` in the server log, `owner-side tick` in the client
+   log). The charred swap happens ZDO-only on the server; the client must see the swap.
+   Watch for `ReleaseNearbyZDOS` ownership ping-pong in the tick log lines.
+4. **Config on existing installs**: nothing was renamed or re-defaulted, so no ledger rung
+   was added. `TreeDestructionRate` gained a range and `fireset treedestruction`.
+
+Facts established this session live in the CHANGELOG and in three memory notes
+(`valheim-rendering-facts`, `valheim-tree-lifecycle-facts`, `firefront-no-burnt-tree-prefabs`)
+so the next session does not re-derive them: no burnt tree prefab exists; trees are
+fire-Immune; `RPC_Damage` damage text is unconditional; the server is not the tree's owner
+on a dedicated server; `Shader.Find` misses bundle shaders; normal maps are AG-packed.
+
+**Left out, deliberately:** a late-joining client still learns about object fires only
+through the `FireEvent` RPC (ground fire has a batched sync, object fire does not). The ZDOID
+rekey in 0.22.0 makes a burner that instantiates later pick up its fire, but only if the
+client has ALREADY heard the event. A `FireFront_Burning` flag in the burner's ZDO would close
+that, and would need the owner (not the server) to write it.
+
+---
+
 # FireFront — addendum from the Ragnarok's Wrath session, 2026-09-18
 
 **Scope note: this section is NARROW on purpose.** It was written by a session working in

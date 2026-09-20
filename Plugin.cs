@@ -12,7 +12,7 @@ namespace FireFront
     {
         public const string GUID = "com.raveniron.firefront";
         public const string NAME = "FireFront";
-        public const string VERSION = "0.21.7";
+        public const string VERSION = "0.22.0";
 
         public static Plugin Instance { get; private set; }
 
@@ -57,6 +57,7 @@ namespace FireFront
         private void OnDestroy()
         {
             _harmony?.UnpatchSelf();
+            CharredTreeSkin.ReleaseAll();
         }
     }
 }

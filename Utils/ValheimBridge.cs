@@ -361,6 +361,7 @@ namespace FireFront.Utils
                 if (zdo == null) continue;
                 if (!kinds.TryGetValue(zdo.GetPrefab(), out bool isTreeOrLog)) continue;
                 if (isTreeOrLog && !includeTreesAndLogs) continue;
+                if (isTreeOrLog && FireFront.Fire.CharredTreeLifecycle.IsCharred(zdo)) continue; // spent fuel
                 if (!isTreeOrLog && !includePlayerBuildings && zdo.GetLong(CreatorZdoHash, 0L) != 0L) continue;
 
                 Vector3 pos = zdo.GetPosition();
@@ -381,6 +382,24 @@ namespace FireFront.Utils
         /// recreate — this is the only reliable way to tell them apart.
         /// </summary>
         public static bool ZdoExists(ZDOID id) => ZDOMan.instance?.GetZDO(id) != null;
+
+        /// <summary>
+        /// The burnable Component of a ZDOID's LOCAL instance, or null — never creates one and
+        /// never touches ownership, unlike <see cref="ComponentFromZdoid"/>. This is the lookup
+        /// for anything cosmetic on a client: a fire drawn on a tree must not steal the tree.
+        /// </summary>
+        public static Component InstanceComponentOf(ZDOID id)
+        {
+            ZNetScene scene = ZNetScene.instance;
+            if (scene == null || id == ZDOID.None) return null;
+            GameObject go = scene.FindInstance(id);
+            if (go == null) return null;
+            Component c = go.GetComponent<WearNTear>();
+            if (c != null) return c;
+            c = go.GetComponent<TreeBase>();
+            if (c != null) return c;
+            return go.GetComponent<TreeLog>();
+        }
 
         public static Component ComponentFromZdoid(ZDOID id)
         {
@@ -475,7 +494,10 @@ namespace FireFront.Utils
                     return BurnableField != null && (bool)BurnableField.GetValue(target);
                 case BurnKind.Tree:
                 case BurnKind.Log:
-                    return FireFront.Config.FireConfig.BurnTreesAndLogs.Value;
+                    if (!FireFront.Config.FireConfig.BurnTreesAndLogs.Value) return false;
+                    // Charred wood is spent fuel: a burned snag or a fallen charred trunk never
+                    // catches again, however hard the fire around it burns.
+                    return !FireFront.Fire.CharredTreeLifecycle.IsCharred(target.GetComponent<ZNetView>());
                 default:
                     return false;
             }
@@ -539,6 +561,11 @@ namespace FireFront.Utils
                     break;
 
                 case BurnKind.Tree:
+                    // 0.22.0: the fire no longer kills trees through here — a burned tree is
+                    // charred in place (CharredTreeLifecycle) and never felled with real wood.
+                    // This branch remains for the dev commands and the last-resort path when
+                    // charring throws, and still does what it did: vanilla felling.
+                    //
                     // 0.2.3 used ZNetScene.Destroy(gameObject) here directly, which
                     // does NOT properly deregister the object from ZNetScene's
                     // internal near/distant tracking lists — it left a dangling
@@ -2741,6 +2768,16 @@ namespace FireFront.Utils
         public static void DowngradeVfxToSmoulder(GameObject vfx)
         {
             if (vfx == null) return;
+
+            // 0.22.0: the object-fire rig is a FireVFXController, which downgrades itself
+            // (front, band, embers, haze, glow, light). The generic pass below is kept for
+            // the ground-cell and prefab rigs, which have no controller.
+            FireFront.Fire.FireVFXController controller = vfx.GetComponent<FireFront.Fire.FireVFXController>();
+            if (controller != null)
+            {
+                controller.SetSmoulder();
+                return;
+            }
 
             // The light is SHRUNK, not destroyed. Deleting it outright (first
             // attempt) took the glow with it and the fire read as extinguished —

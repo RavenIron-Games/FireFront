@@ -97,7 +97,14 @@ namespace FireFront.Fire
         // capable fire) — this mirror is visual only, no damage zone, so a
         // client watching someone else's fire can't accidentally deal damage
         // from a copy that only exists locally on their own machine.
-        private readonly Dictionary<Component, GameObject> _remoteVfx = new Dictionary<Component, GameObject>();
+        // Keyed by ZDOID since 0.22.0, like _vfx: a tree the client de-instantiates and later
+        // rebuilds is a DIFFERENT Component, and a Component key could neither find the fire
+        // again nor be told to stop (the phantom-fire leak). The Component is resolved when
+        // the rig is built and re-resolved when the object comes back (see OnBurnableInstantiated).
+        private readonly Dictionary<ZDOID, GameObject> _remoteVfx = new Dictionary<ZDOID, GameObject>();
+        // Every object fire this client has been told is alight and not yet told has stopped,
+        // instance or no instance — so a burner that instantiates later still gets its fire.
+        private readonly HashSet<ZDOID> _remoteBurningIds = new HashSet<ZDOID>();
         // The ZRoutedRpc INSTANCE the handlers are registered on — not a bool.
         // Valheim creates a fresh ZRoutedRpc per connection, so a client that
         // gets kicked (server restart) and auto-reconnects IN THE SAME PROCESS
@@ -734,6 +741,7 @@ namespace FireFront.Fire
             PruneStale();
             AgeFiresInRain();
             ExpireTimers();
+            TickTreeFire();
             PromoteFromQueue();
             ExpireGroundTimers();
             ProcessTreeRegrowth();
@@ -1057,6 +1065,9 @@ namespace FireFront.Fire
             _remoteVfxQueuedKeys.Clear();
             _remoteObjectVfxQueue.Clear();
             _remoteObjectVfxQueued.Clear();
+            _remoteBurningIds.Clear();
+            _remoteVfxSpawnedAt.Clear();
+            _remoteSmouldering.Clear();
             _groundExpiredSinceFlush.AddRange(_groundBurning.Keys); // so the next flush tells clients to clear these too
             _pendingIgniteResolutions.Clear();
             _burning.Clear();
@@ -1405,6 +1416,10 @@ namespace FireFront.Fire
                    $"dirtpaint {FireConfig.UseVanillaDirtPaint.Value}, " +
                    $"exhaustion {FireConfig.EffectiveGroundFuelExhaustionEnabled} (regrow {FireConfig.GroundFuelRegrowSeconds.Value}s), " +
                    $"treeregrowth {FireConfig.EffectiveTreeRegrowthEnabled} (after {FireConfig.TreeRegrowthSeconds.Value}s, pending {_pendingRegrowth.Count}), " +
+                   $"treefire {FireConfig.TreeFireDamageEnabled.Value} (tick {FireConfig.TreeFireTickInterval.Value}s, kill at {(FireConfig.TreeFireKillFraction.Value * 100f):F0}%), " +
+                   $"charred (collapse {FireConfig.TreeDestructionRate.Value:F0}% after {FireConfig.CharredCollapseDelaySeconds.Value}s, coal {FireConfig.CharredCoalMin.Value}-{FireConfig.CharredCoalMax.Value}, " +
+                   $"health {(FireConfig.CharredTreeHealthFraction.Value * 100f):F0}%, crumble {FireConfig.CharredLogCrumbleSeconds.Value}s, glow {FireConfig.CharredEmberGlowSeconds.Value}s; charred {_treesCharredCount}, collapsed {_treesCollapsedCount}), " +
+                   $"firelook (shadows {FireConfig.EffectiveFireShadowsEnabled}, haze {FireConfig.EffectiveHeatHazeEnabled}, barkchar {FireConfig.EffectiveBarkCharEnabled}), " +
                    $"pendingignite {_pendingIgniteResolutions.Count}, " +
                    $"firebreaks {FireConfig.EffectiveGroundFirebreaksEnabled}, " +
                    $"waterblocks {FireConfig.EffectiveGroundWaterBlocksSpreadEnabled}, " +
@@ -1829,7 +1844,7 @@ namespace FireFront.Fire
                 }
 
                 var vfxController = instance.AddComponent<FireVFXController>();
-                vfxController.Setup(b, duration, target);
+                vfxController.Setup(b, duration, target, id);
             }
             else if (!string.IsNullOrEmpty(FireConfig.VfxPrefabName.Value))
             {
@@ -1953,9 +1968,9 @@ namespace FireFront.Fire
 
         // When each remote VFX started showing, so a client can drop it to
         // embers on its own clock without any extra network traffic.
-        private readonly Dictionary<Component, float> _remoteVfxSpawnedAt = new Dictionary<Component, float>();
-        private readonly HashSet<Component> _remoteSmouldering = new HashSet<Component>();
-        private readonly List<Component> _remoteSmoulderScratch = new List<Component>();
+        private readonly Dictionary<ZDOID, float> _remoteVfxSpawnedAt = new Dictionary<ZDOID, float>();
+        private readonly HashSet<ZDOID> _remoteSmouldering = new HashSet<ZDOID>();
+        private readonly List<ZDOID> _remoteSmoulderScratch = new List<ZDOID>();
         private float _nextRemoteSmoulderCheck;
 
         /// <summary>
@@ -1977,7 +1992,7 @@ namespace FireFront.Fire
             float now = Time.time;
 
             _remoteSmoulderScratch.Clear();
-            foreach (KeyValuePair<Component, float> kv in _remoteVfxSpawnedAt)
+            foreach (KeyValuePair<ZDOID, float> kv in _remoteVfxSpawnedAt)
             {
                 if (_remoteSmouldering.Contains(kv.Key)) continue;
                 if (now - kv.Value < after) continue;
@@ -1986,7 +2001,7 @@ namespace FireFront.Fire
 
             for (int i = 0; i < _remoteSmoulderScratch.Count; i++)
             {
-                Component c = _remoteSmoulderScratch[i];
+                ZDOID c = _remoteSmoulderScratch[i];
                 _remoteSmouldering.Add(c); // latch first — a throw must not retry forever
                 try
                 {
@@ -1998,6 +2013,48 @@ namespace FireFront.Fire
                     FireLogger.Debug($"[SMOULDER] remote downgrade failed: {ex.Message}");
                 }
             }
+
+            SweepDeadRemoteVfx();
+        }
+
+        /// <summary>
+        /// A remote fire whose object no longer exists anywhere (the charring destroyed the
+        /// tree, and its stop event may have arrived first or not at all) is dropped here, on
+        /// the same 2 s cadence. Cheap: one dictionary lookup per live remote fire.
+        /// </summary>
+        private void SweepDeadRemoteVfx()
+        {
+            _remoteSmoulderScratch.Clear();
+            foreach (ZDOID id in _remoteVfx.Keys)
+            {
+                if (!ValheimBridge.ZdoExists(id)) _remoteSmoulderScratch.Add(id);
+            }
+            for (int i = 0; i < _remoteSmoulderScratch.Count; i++)
+            {
+                _remoteBurningIds.Remove(_remoteSmoulderScratch[i]);
+                RemoveRemoteVfxFor(_remoteSmoulderScratch[i]);
+            }
+        }
+
+        /// <summary>
+        /// Client-side: a tree, log or piece just came up as an instance. If this client has
+        /// been told it is burning and has no fire drawn on it (it was out of range when the
+        /// event arrived, or it was de-instantiated and rebuilt), draw one now.
+        /// </summary>
+        public void OnBurnableInstantiated(Component target)
+        {
+            if (target == null || ValheimBridge.IsServer()) return;
+            if (_remoteBurningIds.Count == 0) return;
+            ZDOID? id = ValheimBridge.ZDOIDOf(target);
+            if (!id.HasValue || !_remoteBurningIds.Contains(id.Value)) return;
+            if (_remoteVfx.TryGetValue(id.Value, out GameObject existing) && existing != null)
+            {
+                // Drawn already; if its rig lost the old instance, rebuild against the new one.
+                FireVFXController c = existing.GetComponent<FireVFXController>();
+                if (c != null && !c.TargetLost) return;
+                RemoveRemoteVfxFor(id.Value);
+            }
+            EnqueueRemoteObjectVfx(id.Value);
         }
         private void HandleFireEventBroadcast(long sender, ZDOID id, bool started)
         {
@@ -2005,15 +2062,25 @@ namespace FireFront.Fire
             FireLogger.Debug($"[SYNC-DIAG] FireEvent arrived from {sender} (id={id}, started={started}, IsServer={ValheimBridge.IsServer()}).");
             if (ValheimBridge.IsServer()) return;
 
-            Component target = ValheimBridge.ComponentFromZdoid(id);
-            if (target == null) return; // not loaded on this peer (out of range) — nothing to show
-
-            if (started) EnqueueRemoteObjectVfx(target);
-            else RemoveRemoteVfxFor(target);
+            // No ComponentFromZdoid here: on a client that helper force-creates the object and
+            // CLAIMS OWNERSHIP of it, which would pull a far-away tree's ownership (and the
+            // server's damage ticks) to whichever client heard about the fire first. The
+            // instance is looked up without side effects when the rig is built, and a burner
+            // that is not loaded here simply gets its fire when it instantiates.
+            if (started)
+            {
+                _remoteBurningIds.Add(id);
+                EnqueueRemoteObjectVfx(id);
+            }
+            else
+            {
+                _remoteBurningIds.Remove(id);
+                RemoveRemoteVfxFor(id);
+            }
         }
 
-        private readonly List<Component> _remoteObjectVfxQueue = new List<Component>();
-        private readonly HashSet<Component> _remoteObjectVfxQueued = new HashSet<Component>();
+        private readonly List<ZDOID> _remoteObjectVfxQueue = new List<ZDOID>();
+        private readonly HashSet<ZDOID> _remoteObjectVfxQueued = new HashSet<ZDOID>();
 
         /// <summary>
         /// Deliberately smaller than RemoteVfxSpawnsPerFrame: an object fire
@@ -2039,12 +2106,12 @@ namespace FireFront.Fire
         /// The fix is the pattern this file already uses for ground cells rather
         /// than a new one.
         /// </remarks>
-        private void EnqueueRemoteObjectVfx(Component target)
+        private void EnqueueRemoteObjectVfx(ZDOID id)
         {
-            if (target == null) return;
-            if (_remoteVfx.ContainsKey(target)) return;
-            if (!_remoteObjectVfxQueued.Add(target)) return;
-            _remoteObjectVfxQueue.Add(target);
+            if (id == ZDOID.None) return;
+            if (_remoteVfx.ContainsKey(id)) return;
+            if (!_remoteObjectVfxQueued.Add(id)) return;
+            _remoteObjectVfxQueue.Add(id);
         }
 
         private void DrainRemoteObjectVfxQueue()
@@ -2052,22 +2119,26 @@ namespace FireFront.Fire
             int spawned = 0;
             while (_remoteObjectVfxQueue.Count > 0 && spawned < RemoteObjectVfxSpawnsPerFrame)
             {
-                Component target = _remoteObjectVfxQueue[_remoteObjectVfxQueue.Count - 1];
+                ZDOID id = _remoteObjectVfxQueue[_remoteObjectVfxQueue.Count - 1];
                 _remoteObjectVfxQueue.RemoveAt(_remoteObjectVfxQueue.Count - 1);
-                _remoteObjectVfxQueued.Remove(target);
+                _remoteObjectVfxQueued.Remove(id);
 
-                // It can have been destroyed, unloaded or extinguished while it
-                // sat in the queue; Unity reports a destroyed Component as null.
+                // Extinguished while it sat in the queue.
+                if (!_remoteBurningIds.Contains(id)) continue;
+
+                // Not instantiated on this peer: nothing to draw yet. OnBurnableInstantiated
+                // queues it again the moment the object comes up.
+                Component target = ValheimBridge.InstanceComponentOf(id);
                 if (target == null) continue;
 
-                SpawnRemoteVfxOnly(target);
+                SpawnRemoteVfxOnly(id, target);
                 spawned++;
             }
         }
 
-        private void SpawnRemoteVfxOnly(Component target)
+        private void SpawnRemoteVfxOnly(ZDOID id, Component target)
         {
-            if (_remoteVfx.ContainsKey(target)) return;
+            if (_remoteVfx.ContainsKey(id)) return;
 
             bool wantVisual = FireConfig.UseProceduralVfx.Value || !string.IsNullOrEmpty(FireConfig.VfxPrefabName.Value);
             if (!wantVisual) return;
@@ -2088,7 +2159,7 @@ namespace FireFront.Fire
                 float duration = FireConfig.BurnDurationSeconds.Value;
 
                 var vfxController = instance.AddComponent<FireVFXController>();
-                vfxController.Setup(b, duration, target);
+                vfxController.Setup(b, duration, target, id);
             }
             else
             {
@@ -2098,22 +2169,22 @@ namespace FireFront.Fire
 
             if (instance != null)
             {
-                _remoteVfx[target] = instance;
-                _remoteVfxSpawnedAt[target] = Time.time; // this client's own smoulder clock
+                _remoteVfx[id] = instance;
+                _remoteVfxSpawnedAt[id] = Time.time; // this client's own smoulder clock
             }
         }
 
-        private void RemoveRemoteVfxFor(Component target)
+        private void RemoveRemoteVfxFor(ZDOID id)
         {
             // Drop it from the queue too, or an extinguished burner still gets a
             // fire built for it a frame or two later and is never cleaned up.
-            if (_remoteObjectVfxQueued.Remove(target)) _remoteObjectVfxQueue.Remove(target);
+            if (_remoteObjectVfxQueued.Remove(id)) _remoteObjectVfxQueue.Remove(id);
 
-            if (_remoteVfx.TryGetValue(target, out GameObject instance))
+            if (_remoteVfx.TryGetValue(id, out GameObject instance))
             {
-                _remoteVfx.Remove(target);
-                _remoteVfxSpawnedAt.Remove(target);
-                _remoteSmouldering.Remove(target);
+                _remoteVfx.Remove(id);
+                _remoteVfxSpawnedAt.Remove(id);
+                _remoteSmouldering.Remove(id);
                 if (instance != null) Destroy(instance);
             }
         }
@@ -2261,10 +2332,132 @@ namespace FireFront.Fire
                     continue;
                 }
 
+                BurnKind kind = ValheimBridge.KindOf(target);
+                if (kind == BurnKind.Tree || kind == BurnKind.Log)
+                {
+                    // The timer is the fallback authority for trees: the unseen damage ticks
+                    // normally get there first (TreeFireKillFraction), but rain shortens the
+                    // timer and not the ticks, and TreeFireDamageEnabled can be off entirely.
+                    // Either way the tree ends charred, never felled with real wood.
+                    _burning.Remove(id);
+                    FireLogger.Debug($"Burned down (timer): {ValheimBridge.NameOf(target)}");
+                    CharTree(id, state);
+                    RemoveVfxFor(id);
+                    killed++;
+                    continue;
+                }
+
                 _burning.Remove(id);
                 FireLogger.Debug($"Burned down: {ValheimBridge.NameOf(target)}");
+                ValheimBridge.KillBurningTarget(target);
+                RemoveVfxFor(id);
+                killed++;
+            }
+        }
 
-                if (FireConfig.EffectiveTreeRegrowthEnabled && ValheimBridge.KindOf(target) == BurnKind.Tree)
+        // ---------------------------------------------------------------
+        // Tree fire damage: the flames climb by the tree's real health
+        // ---------------------------------------------------------------
+
+        private float _nextTreeTick = -1f;
+        private int _treesCharredCount;
+        private int _treesCollapsedCount;
+
+        /// <summary>
+        /// Every TreeFireTickInterval, each burning tree and log takes an unseen fire tick sized
+        /// so a healthy one dies at TreeFireKillFraction of BurnDurationSeconds; a tree whose
+        /// replicated health has reached the floor is charred. Ticks are routed to whichever
+        /// peer owns the tree (see CharredTreeLifecycle), so this costs one routed RPC per tree
+        /// per tick, not a Component resolution.
+        /// </summary>
+        private void TickTreeFire()
+        {
+            if (!FireConfig.TreeFireDamageEnabled.Value) return;
+            if (_burning.Count == 0) return;
+            float interval = Mathf.Max(0.5f, FireConfig.TreeFireTickInterval.Value);
+            if (Time.time < _nextTreeTick) return;
+            float dt = _nextTreeTick < 0f ? interval : Mathf.Max(interval, Time.time - _nextTreeTick + interval);
+            _nextTreeTick = Time.time + interval;
+
+            float killSeconds = Mathf.Max(1f, FireConfig.BurnDurationSeconds.Value * Mathf.Clamp(FireConfig.TreeFireKillFraction.Value, 0.2f, 1f));
+            int charred = 0;
+
+            _scratch.Clear();
+            foreach (KeyValuePair<ZDOID, BurningState> kv in _burning) _scratch.Add(kv.Key);
+
+            for (int i = 0; i < _scratch.Count; i++)
+            {
+                ZDOID id = _scratch[i];
+                if (!_burning.TryGetValue(id, out BurningState state)) continue;
+                ZDO zdo = ZDOMan.instance != null ? ZDOMan.instance.GetZDO(id) : null;
+                if (zdo == null) continue;
+
+                float max = CharredTreeLifecycle.MaxHealthOf(zdo);
+                if (max <= 0f) continue; // a piece, or an unknown prefab: the timer handles it
+
+                if (CharredTreeLifecycle.IsBurnedOut(zdo, max))
+                {
+                    if (charred >= FireConfig.EffectiveMaxKillsPerCycle) continue; // same batch cap as ExpireTimers
+                    _burning.Remove(id);
+                    FireLogger.Debug($"[TREE-HP] {state.PrefabName} burned out (health floor) — charring.");
+                    CharTree(id, state);
+                    RemoveVfxFor(id);
+                    charred++;
+                    continue;
+                }
+
+                float damage = max * dt / killSeconds;
+                float before = CharredTreeLifecycle.HealthOf(zdo, max);
+                bool sent = CharredTreeLifecycle.SendFireTick(zdo, damage);
+                FireLogger.Debug($"[TREE-HP] {state.PrefabName} {id}: {before:F1}/{max:F0} -{damage:F2} " +
+                                 $"({(sent ? (zdo.GetOwner() == ZDOMan.GetSessionID() || zdo.GetOwner() == 0L ? "applied here" : "routed to owner " + zdo.GetOwner()) : "NOT sent")})");
+            }
+        }
+
+        /// <summary>
+        /// A tree or log the fire has killed: replaced in place by its charred twin, whose fate
+        /// (collapse or stand) is rolled now and carried in its ZDO. Regrowth is queued only for
+        /// a collapse — a standing charred snag occupies the spot.
+        /// </summary>
+        private void CharTree(ZDOID id, BurningState state)
+        {
+            ZDO zdo = ZDOMan.instance != null ? ZDOMan.instance.GetZDO(id) : null;
+            if (zdo == null)
+            {
+                FireLogger.Debug($"[CHARRED] {state.PrefabName} {id}: ZDO already gone, nothing to char.");
+                return;
+            }
+            bool isTree = ZNetScene.instance != null && ZNetScene.instance.GetPrefab(zdo.GetPrefab()) is GameObject p && p.GetComponent<TreeBase>() != null;
+            int fate;
+            try
+            {
+                fate = CharredTreeLifecycle.ReplaceWithCharred(zdo, out _);
+            }
+            catch (System.Exception ex)
+            {
+                // The charring is gameplay, so a throw is logged loudly; the tree is still
+                // removed so the fire's bookkeeping cannot wedge on it.
+                FireLogger.Warn($"[CHARRED] ReplaceWithCharred threw for {state.PrefabName}: {ex}");
+                Component target = ValheimBridge.ComponentFromZdoid(id);
+                if (target != null) ValheimBridge.KillBurningTarget(target);
+                return;
+            }
+            if (fate == CharredTreeLifecycle.FateUndecided)
+            {
+                // No registered prefab for this ZDO (a mod's tree that was unloaded?): the
+                // one thing that must not happen is a burned-out tree standing forever at
+                // the health floor, so it is felled the old way.
+                FireLogger.Warn($"[CHARRED] could not char {state.PrefabName} {id} (prefab unresolved); felling it instead.");
+                Component target = ValheimBridge.ComponentFromZdoid(id);
+                if (target != null) ValheimBridge.KillBurningTarget(target);
+                return;
+            }
+
+            _treesCharredCount++;
+            if (fate == CharredTreeLifecycle.FateCollapse)
+            {
+                _treesCollapsedCount++;
+                if (isTree && FireConfig.EffectiveTreeRegrowthEnabled)
                 {
                     EnqueueRegrowth(new PendingRegrowth
                     {
@@ -2273,20 +2466,6 @@ namespace FireFront.Fire
                         RegrowAt = Time.time + FireConfig.TreeRegrowthSeconds.Value
                     });
                 }
-
-                if (ValheimBridge.KindOf(target) == BurnKind.Tree || ValheimBridge.KindOf(target) == BurnKind.Log)
-                {
-                    if (UnityEngine.Random.Range(0f, 100f) > FireConfig.TreeDestructionRate.Value)
-                    {
-                        // Clone to burnt tree instead of total destruction
-                        string prefabName = ValheimBridge.NameOf(target);
-                        if (prefabName.Contains("(Clone)")) prefabName = prefabName.Replace("(Clone)", "");
-                        BurntTreeManager.CloneToBurntTree(target, prefabName, state.Position, target.transform.rotation);
-                    }
-                }
-                ValheimBridge.KillBurningTarget(target);
-                RemoveVfxFor(id);
-                killed++;
             }
         }
 

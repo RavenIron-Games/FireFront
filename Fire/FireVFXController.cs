@@ -1,503 +1,845 @@
 using System.Collections.Generic;
+using FireFront.Config;
 using FireFront.Utils;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace FireFront.Fire
 {
+    /// <summary>
+    /// The fire drawn on a burning tree, log or structure. A FIRE FRONT that starts at the foot
+    /// and climbs the trunk as the object's real health drops, so the height of the flames is
+    /// the tree's health bar; a band of licking flame behind the front; embers, lit smoke, heat
+    /// shimmer, a glow halo and a shadow-casting point light that follow it; and the bark
+    /// itself blackening and glowing with ember cracks below the front.
+    /// </summary>
+    /// <remarks>
+    /// Built from vanilla's own fire, not from scratch (read out of the 1.0.15 bundles, see
+    /// FireFrontTextureGenerator): the flame is a greyscale flipbook sheet on the game's
+    /// gradient-mapped particle shader, recoloured by two HDR colours delivered per particle
+    /// through custom vertex streams — the exact construction of fire_pit's "flames (1)". HDR
+    /// colours above 1.0 are what make the game's bloom read it as fire; the 0.21.x flame
+    /// gradient never left 0..1 and only reached bloom by stacking twelve additive ribbons,
+    /// which saturated to white streaks.
+    ///
+    /// LineRenderer is gone. A ribbon is a camera-facing strip with no internal structure and
+    /// no per-element motion; tiling a texture along it and scrolling it reads as a laser, not
+    /// a flame, whatever the texture. Flames are vertical-billboard flipbook particles here,
+    /// like every fire the game ships.
+    ///
+    /// Progress comes from the ZDO health that the server's unseen damage ticks drive (see
+    /// CharredTreeLifecycle), re-read at 4 Hz on every peer — the float is replicated, so no
+    /// extra sync exists for this. Structures, and trees while TreeFireDamageEnabled is off,
+    /// climb on the burn clock instead.
+    ///
+    /// House rules honoured: nothing here is built on a headless server (no graphics device,
+    /// nothing to draw, and a LineRenderer rig per burner was being updated there every frame
+    /// in 0.21.x); every existing Visuals key is wired (smoke, crown sparks, max flame height,
+    /// the tall-fire cap reserved at spawn, smouldering, the low-spec preset); wind is read off
+    /// EnvMan directly rather than through per-frame reflection; materials are shared clones.
+    /// </remarks>
     public class FireVFXController : MonoBehaviour
     {
-        private const int LineCount = 8;
-        private const int CharLineCount = 4;
-        private const int GroundLineCount = 4;
-        private const int SegmentsPerLine = 30;
-        private const int SegmentsPerGroundLine = 20;
-
-        // 1. Outer licking flame ribbons
-        private LineRenderer[] _flameLines = new LineRenderer[LineCount];
-        private float[] _lineTwists = new float[LineCount];
-        private float[] _bottomOffsets = new float[LineCount];
-        private float[] _topOffsets = new float[LineCount];
-        private float[] _noiseSeedsX = new float[LineCount];
-        private float[] _noiseSeedsZ = new float[LineCount];
-
-        // 2. Inner glowing char ribbons (wood actively smoldering/burning underneath)
-        private LineRenderer[] _charLines = new LineRenderer[CharLineCount];
-
-        // 3. Ground collar creeping flames (crawling across turf/roots)
-        private LineRenderer[] _groundLines = new LineRenderer[GroundLineCount];
-        private float[] _groundAngles = new float[GroundLineCount];
-
-        private ParticleSystem _sparksSystem;
-        private ParticleSystem _smokeSystem;
-        private Light _fireLight;
-
-        private float _burnDuration;
+        // Geometry
+        private Bounds _bounds;
+        private float _burnDuration = 60f;
         private float _timeAlive;
-        private Bounds _targetBounds;
-        private float _trunkRadius = 0.40f;
-        private float _treeHeight = 4f;
-        private float _baseLightIntensity = 2.8f;
+        private Component _target;
+        private ZDOID _id;
+        private BurnKind _kind = BurnKind.Unknown;
+        private bool _isLog;
+        private float _height = 4f;        // along the trunk axis, metres
+        private float _trunkRadius = 0.4f;
+        private Vector3 _axis = Vector3.up;
+        private Quaternion _axisRot = Quaternion.identity;
+        private float _maxHealth;
+        private bool _healthDriven;
 
-        private Vector3 _trunkAxis = Vector3.up;
-        private Vector3 _perpX = Vector3.right;
-        private Vector3 _perpZ = Vector3.forward;
-        private bool _isLog = false;
+        // Progress
+        private float _rawProgress;
+        private float _progress;
+        private float _nextHealthPoll;
+        private float _frontHeight;
 
-        private Material _fireLineMat;
-        private Material _charMat;
-        private Material _sparksMat;
-        private Material _smokeMat;
+        // Rig
+        private bool _built;
+        private bool _tallReserved;
+        private bool _smoulder;
+        private ParticleSystem _front;    // fire-front tongues
+        private ParticleSystem _column;   // licks along the burning band
+        private ParticleSystem _embers;
+        private ParticleSystem _smoke;
+        private ParticleSystem _haze;
+        private ParticleSystem _glow;
+        private Light _light;
+        private LightFlicker _flicker;
+        private LightLod _lightLod;
+        private float _baseLightIntensity = 2.2f;
+        private float _baseLightRange = 10f;
+        private List<Renderer> _barkRenderers;
+        private float _nextBarkUpdate;
+        private float _nextDistanceCheck;
+        private bool _far;
+        private float _noiseSeed;
 
-        public void Setup(Bounds bounds, float burnDuration, Component target = null)
+        private const float CostHeightCeiling = 14f;   // particle budget stops growing past this
+        private const float TallBurnerMinHeight = 3f;
+        private const float HealthPollInterval = 0.25f;
+        private const float BarkUpdateInterval = 0.2f;
+        private const float FarDistance = 70f;
+
+        /// <summary>Live tall fires, so their total can be bounded at spawn (never by a per-frame sweep).</summary>
+        private static readonly List<FireVFXController> s_tall = new List<FireVFXController>();
+
+        private static readonly List<ParticleSystemVertexStream> s_gradientStreams = new List<ParticleSystemVertexStream>
         {
-            _targetBounds = bounds;
+            ParticleSystemVertexStream.Position,
+            ParticleSystemVertexStream.Color,
+            ParticleSystemVertexStream.UV,
+            ParticleSystemVertexStream.Custom1XYZ,
+            ParticleSystemVertexStream.Custom2XYZ,
+        };
+
+        // Vanilla fire_pit "flames (1)" CustomData colours: HDR hot/cold pairs the gradient shader maps between.
+        private static readonly Gradient s_hot = MakeGradient(new Color(2.0f, 1.22f, 0f), new Color(0.25f, 0.16f, 0f));
+        private static readonly Gradient s_cold = MakeGradient(new Color(2.0f, 0f, 0f), new Color(1.0f, 0.30f, 0f));
+
+        public static bool GraphicsAvailable => SystemInfo.graphicsDeviceType != GraphicsDeviceType.Null;
+
+        public float Progress => _progress;
+        public float FrontHeight => _frontHeight;
+
+        /// <summary>The burner this rig was built on has been destroyed or de-instantiated on this peer.</summary>
+        public bool TargetLost => _hadTarget && _target == null;
+        private bool _hadTarget;
+
+        // ---------------------------------------------------------------
+        // Setup
+        // ---------------------------------------------------------------
+
+        public void Setup(Bounds bounds, float burnDuration, Component target = null) => Setup(bounds, burnDuration, target, default);
+
+        public void Setup(Bounds bounds, float burnDuration, Component target, ZDOID id)
+        {
+            _bounds = bounds;
             _burnDuration = Mathf.Max(1f, burnDuration);
             _timeAlive = 0f;
+            _target = target;
+            _hadTarget = target != null;
+            _id = id;
+            _kind = target != null ? ValheimBridge.KindOf(target) : BurnKind.Unknown;
+            _noiseSeed = Random.Range(0f, 100f);
 
-            // Detect if the target is a fallen log or horizontal burner
-            if (target != null && target.transform != null && bounds.size.y < 2.2f && (bounds.size.x > 2.5f || bounds.size.z > 2.5f))
+            MeasureGeometry(target, bounds);
+            ResolveHealthSource();
+
+            // Start the front where the health already is: a re-ignited, half-burned tree does
+            // not restart at the foot.
+            _rawProgress = SampleProgress();
+            _progress = _rawProgress;
+            _frontHeight = FrontHeightFor(_progress);
+
+            if (!GraphicsAvailable) return; // headless: state only, nothing to draw
+            if (!FireConfig.UseProceduralVfx.Value) return;
+
+            try
             {
-                _isLog = true;
-                Vector3 fwd = target.transform.forward;
-                fwd.y = 0f;
-                if (fwd.sqrMagnitude < 0.05f) fwd = target.transform.right;
-                fwd.y = 0f;
-                if (fwd.sqrMagnitude < 0.05f) fwd = Vector3.forward;
-                _trunkAxis = fwd.normalized;
-                _treeHeight = Mathf.Max(2.5f, Mathf.Max(bounds.size.x, bounds.size.z));
-                _trunkRadius = Mathf.Clamp(bounds.size.y * 0.38f, 0.22f, 0.50f);
+                Build();
+                _built = true;
+            }
+            catch (System.Exception ex)
+            {
+                // Cosmetics stay off the gameplay path: a rig that fails to build is a fire
+                // you cannot see, not a fire that stops burning.
+                FireLogger.Warn($"[VFX] fire rig failed to build for {(target != null ? target.name : "?")}: {ex.Message}");
+            }
+        }
+
+        private void MeasureGeometry(Component target, Bounds bounds)
+        {
+            _isLog = _kind == BurnKind.Log;
+            if (_isLog && target != null)
+            {
+                // A TreeLog's long axis is its LOCAL +Y (TreeLog scatters drops along transform.up).
+                Vector3 axis = target.transform.up;
+                if (axis.sqrMagnitude < 0.01f) axis = Vector3.forward;
+                _axis = axis.normalized;
+                float along = Mathf.Abs(Vector3.Dot(bounds.size, _axis));
+                _height = Mathf.Clamp(Mathf.Max(along, Mathf.Max(bounds.size.x, bounds.size.z)), 2f, 12f);
+                _trunkRadius = Mathf.Clamp(bounds.size.y * 0.35f, 0.25f, 0.6f);
             }
             else
             {
-                _isLog = false;
-                _trunkAxis = Vector3.up;
-                _treeHeight = Mathf.Max(2.5f, bounds.size.y);
-                // Tight trunk radius to hug the bark directly
-                _trunkRadius = Mathf.Clamp(bounds.extents.x * 0.14f, 0.28f, 0.55f);
+                _axis = Vector3.up;
+                float h = Mathf.Max(1.5f, bounds.size.y);
+                if (_kind == BurnKind.Tree && FireConfig.TreeFlameScaling.Value)
+                    _height = Mathf.Min(h, FireConfig.EffectiveMaxFlameHeight);
+                else if (_kind == BurnKind.Tree)
+                    _height = Mathf.Min(h, TallBurnerMinHeight);
+                else
+                    _height = Mathf.Min(h, 8f);
+                // The crown radius that arrives in bounds is canopy reach; the trunk is a small
+                // fraction of it. Structures get their footprint instead.
+                _trunkRadius = _kind == BurnKind.Tree
+                    ? Mathf.Clamp(bounds.extents.x * 0.14f, 0.28f, 0.6f)
+                    : Mathf.Clamp(Mathf.Max(bounds.extents.x, bounds.extents.z) * 0.6f, 0.3f, 1.6f);
             }
-
-            // Establish orthonormal basis around trunk axis
-            Vector3.OrthoNormalize(ref _trunkAxis, ref _perpX, ref _perpZ);
-
-            // Seed per-tendril variations
-            for (int i = 0; i < LineCount; i++)
-            {
-                _lineTwists[i] = (i % 2 == 0 ? 0.30f : -0.30f) + Random.Range(-0.08f, 0.08f);
-                _bottomOffsets[i] = Random.Range(-0.15f, 0.25f);
-                _topOffsets[i] = Random.Range(-0.35f, 0.45f);
-                _noiseSeedsX[i] = Random.Range(10f, 100f);
-                _noiseSeedsZ[i] = Random.Range(10f, 100f);
-            }
-
-            for (int k = 0; k < GroundLineCount; k++)
-            {
-                _groundAngles[k] = (k / (float)GroundLineCount) * Mathf.PI * 2f + Random.Range(-0.2f, 0.2f);
-            }
-
-            // Borrow authentic materials or fall back to high-res procedural
-            _fireLineMat = FireFrontTextureGenerator.GetOrCreateFlameMaterial();
-            _charMat = FireFrontTextureGenerator.GetOrCreateFlameMaterial();
-            _sparksMat = FireFrontTextureGenerator.GetOrCreateSparkMaterial();
-            _smokeMat = FireFrontTextureGenerator.GetOrCreateSmokeMaterial();
-
-            InitLines();
-            InitLight();
-            InitParticles();
+            _axisRot = Quaternion.LookRotation(_axis, Mathf.Abs(Vector3.Dot(_axis, Vector3.up)) > 0.99f ? Vector3.forward : Vector3.up);
         }
 
-        private void InitLines()
+        private void ResolveHealthSource()
         {
-            // 1. Tapered flame ribbon width curve
-            AnimationCurve trunkCurve = new AnimationCurve();
-            trunkCurve.AddKey(new Keyframe(0.0f, 0.32f));
-            trunkCurve.AddKey(new Keyframe(0.25f, 0.44f));
-            trunkCurve.AddKey(new Keyframe(0.65f, 0.22f));
-            trunkCurve.AddKey(new Keyframe(1.0f, 0.02f));
-
-            // Char under-glow width curve (broad glowing embers on the wood)
-            AnimationCurve charCurve = new AnimationCurve();
-            charCurve.AddKey(new Keyframe(0.0f, 0.38f));
-            charCurve.AddKey(new Keyframe(0.5f, 0.35f));
-            charCurve.AddKey(new Keyframe(1.0f, 0.05f));
-
-            // Ground collar creeping fire curve (wide base spreading across turf)
-            AnimationCurve groundCurve = new AnimationCurve();
-            groundCurve.AddKey(new Keyframe(0.0f, 0.40f));
-            groundCurve.AddKey(new Keyframe(0.3f, 0.30f));
-            groundCurve.AddKey(new Keyframe(0.7f, 0.15f));
-            groundCurve.AddKey(new Keyframe(1.0f, 0.01f));
-
-            // Incandescent 5-stop flame color gradient
-            Gradient flameGradient = new Gradient();
-            flameGradient.SetKeys(
-                new GradientColorKey[]
-                {
-                    new GradientColorKey(new Color(1.0f, 0.98f, 0.80f), 0.0f),  // White-hot core
-                    new GradientColorKey(new Color(1.0f, 0.65f, 0.10f), 0.22f), // Brilliant flame yellow-orange
-                    new GradientColorKey(new Color(1.0f, 0.26f, 0.02f), 0.58f), // Deep flame red-orange
-                    new GradientColorKey(new Color(0.70f, 0.08f, 0.01f), 0.85f),// Crimson ember
-                    new GradientColorKey(new Color(0.18f, 0.02f, 0.00f), 1.0f)  // Dark smoke tip
-                },
-                new GradientAlphaKey[]
-                {
-                    new GradientAlphaKey(0.95f, 0.0f),
-                    new GradientAlphaKey(0.90f, 0.25f),
-                    new GradientAlphaKey(0.75f, 0.65f),
-                    new GradientAlphaKey(0.35f, 0.88f),
-                    new GradientAlphaKey(0.00f, 1.0f)
-                }
-            );
-
-            // Char under-glow color gradient (deep smoldering wood embers)
-            Gradient charGradient = new Gradient();
-            charGradient.SetKeys(
-                new GradientColorKey[]
-                {
-                    new GradientColorKey(new Color(1.0f, 0.40f, 0.05f), 0.0f),  // Hot orange embers
-                    new GradientColorKey(new Color(0.85f, 0.15f, 0.01f), 0.5f), // Deep red char
-                    new GradientColorKey(new Color(0.20f, 0.02f, 0.00f), 1.0f)  // Blackened char
-                },
-                new GradientAlphaKey[]
-                {
-                    new GradientAlphaKey(0.85f, 0.0f),
-                    new GradientAlphaKey(0.70f, 0.5f),
-                    new GradientAlphaKey(0.00f, 1.0f)
-                }
-            );
-
-            // 1. Trunk-climbing licking flame ribbons
-            for (int i = 0; i < LineCount; i++)
+            _healthDriven = false;
+            _maxHealth = 0f;
+            if (!FireConfig.TreeFireDamageEnabled.Value) return;
+            if (_kind != BurnKind.Tree && _kind != BurnKind.Log) return;
+            if (_id == default && _target != null)
             {
-                GameObject lineObj = new GameObject("FlameRibbon_" + i);
-                lineObj.transform.SetParent(transform, false);
-                var lr = lineObj.AddComponent<LineRenderer>();
-                lr.useWorldSpace = true;
-                lr.material = _fireLineMat;
-                lr.positionCount = SegmentsPerLine;
-                lr.textureMode = LineTextureMode.Tile;
-                lr.numCornerVertices = 4;
-                lr.numCapVertices = 4;
-                lr.widthCurve = trunkCurve;
-                lr.colorGradient = flameGradient;
-                _flameLines[i] = lr;
+                ZDOID? maybe = ValheimBridge.ZDOIDOf(_target);
+                if (maybe.HasValue) _id = maybe.Value;
             }
-
-            // 2. Char under-glow ribbons (hugging the bark directly)
-            for (int c = 0; c < CharLineCount; c++)
-            {
-                GameObject charObj = new GameObject("CharGlow_" + c);
-                charObj.transform.SetParent(transform, false);
-                var lr = charObj.AddComponent<LineRenderer>();
-                lr.useWorldSpace = true;
-                lr.material = _charMat;
-                lr.positionCount = SegmentsPerLine;
-                lr.textureMode = LineTextureMode.Tile;
-                lr.numCornerVertices = 3;
-                lr.numCapVertices = 3;
-                lr.widthCurve = charCurve;
-                lr.colorGradient = charGradient;
-                _charLines[c] = lr;
-            }
-
-            // 3. Ground collar creeping flames
-            for (int k = 0; k < GroundLineCount; k++)
-            {
-                GameObject gObj = new GameObject("GroundCreep_" + k);
-                gObj.transform.SetParent(transform, false);
-                var lr = gObj.AddComponent<LineRenderer>();
-                lr.useWorldSpace = true;
-                lr.material = _fireLineMat;
-                lr.positionCount = SegmentsPerGroundLine;
-                lr.textureMode = LineTextureMode.Tile;
-                lr.numCornerVertices = 4;
-                lr.numCapVertices = 4;
-                lr.widthCurve = groundCurve;
-                lr.colorGradient = flameGradient;
-                _groundLines[k] = lr;
-            }
+            ZDO zdo = CurrentZdo();
+            if (zdo == null) return;
+            _maxHealth = CharredTreeLifecycle.MaxHealthOf(zdo);
+            _healthDriven = _maxHealth > 0f;
         }
 
-        private void InitLight()
+        /// <summary>Re-fetched by id every time: ZDOs are pooled and a cached reference can come back as another object.</summary>
+        private ZDO CurrentZdo()
         {
-            GameObject lightObj = new GameObject("FirePointLight");
-            lightObj.transform.SetParent(transform, false);
-            lightObj.transform.localPosition = Vector3.zero;
-
-            _fireLight = lightObj.AddComponent<Light>();
-            _fireLight.type = LightType.Point;
-            _fireLight.color = new Color(1.0f, 0.58f, 0.18f);
-            _fireLight.range = Mathf.Clamp(_trunkRadius * 8f + 8f, 8f, 22f);
-            _fireLight.intensity = _baseLightIntensity;
-            _fireLight.shadows = LightShadows.None;
+            if (_id == default || ZDOMan.instance == null) return null;
+            return ZDOMan.instance.GetZDO(_id);
         }
 
-        private void InitParticles()
+        private float SampleProgress()
         {
-            // Natural lazy drifting sparks/embers (ELIMINATES FIREWORKS!)
-            GameObject sparksObj = new GameObject("Sparks");
-            sparksObj.transform.SetParent(transform, false);
-            _sparksSystem = sparksObj.AddComponent<ParticleSystem>();
-            var smain = _sparksSystem.main;
-            smain.loop = true;
-            smain.startLifetime = new ParticleSystem.MinMaxCurve(2.0f, 4.0f);
-            smain.startSpeed = new ParticleSystem.MinMaxCurve(0.4f, 1.2f); // Slow, lazy drift
-            smain.startSize = new ParticleSystem.MinMaxCurve(0.02f, 0.05f); // Authentic small glowing motes
-            smain.startColor = new Color(1f, 0.85f, 0.35f, 0.95f);
-            smain.simulationSpace = ParticleSystemSimulationSpace.World;
-            smain.gravityModifier = 0.02f; // Slight positive gravity: embers slowly sink unless lifted by heat
-
-            var semission = _sparksSystem.emission;
-            semission.rateOverTime = 8f; // Gentle, occasional embers rather than rocket barrage
-
-            var sshape = _sparksSystem.shape;
-            sshape.shapeType = ParticleSystemShapeType.Cone;
-            sshape.angle = 20f;
-            sshape.radius = _trunkRadius * 1.05f;
-            sshape.rotation = new Vector3(-90f, 0f, 0f); // Point along world +Y
-
-            // Swirling thermal turbulence
-            var snoise = _sparksSystem.noise;
-            snoise.enabled = true;
-            snoise.strength = 0.45f;
-            snoise.frequency = 0.6f;
-            snoise.scrollSpeed = 0.8f;
-
-            var srenderer = sparksObj.GetComponent<ParticleSystemRenderer>();
-            srenderer.renderMode = ParticleSystemRenderMode.Billboard; // No more 4-meter laser streaks!
-            srenderer.material = _sparksMat;
-
-            // Billowing atmospheric smoke plume
-            GameObject smokeObj = new GameObject("Smoke");
-            smokeObj.transform.SetParent(transform, false);
-            _smokeSystem = smokeObj.AddComponent<ParticleSystem>();
-            var skmain = _smokeSystem.main;
-            skmain.loop = true;
-            skmain.startLifetime = new ParticleSystem.MinMaxCurve(3.5f, 6.0f);
-            skmain.startSpeed = new ParticleSystem.MinMaxCurve(0.6f, 1.4f);
-            skmain.startSize = new ParticleSystem.MinMaxCurve(1.0f, 2.6f);
-            skmain.startColor = new Color(0.22f, 0.22f, 0.22f, 0.35f);
-            skmain.simulationSpace = ParticleSystemSimulationSpace.World;
-            skmain.gravityModifier = -0.04f;
-
-            var skemission = _smokeSystem.emission;
-            skemission.rateOverTime = 10f;
-
-            var skshape = _smokeSystem.shape;
-            skshape.shapeType = ParticleSystemShapeType.Cone;
-            skshape.angle = 20f;
-            skshape.radius = _trunkRadius * 1.4f;
-            skshape.rotation = new Vector3(-90f, 0f, 0f);
-
-            var sksize = _smokeSystem.sizeOverLifetime;
-            sksize.enabled = true;
-            sksize.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(new Keyframe(0f, 0.4f), new Keyframe(1f, 1.8f)));
-
-            var skcolor = _smokeSystem.colorOverLifetime;
-            skcolor.enabled = true;
-            Gradient smokeGrad = new Gradient();
-            smokeGrad.SetKeys(
-                new[] { new GradientColorKey(new Color(0.25f, 0.23f, 0.2f), 0f), new GradientColorKey(new Color(0.35f, 0.35f, 0.35f), 1f) },
-                new[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(0.35f, 0.25f), new GradientAlphaKey(0f, 1f) }
-            );
-            skcolor.color = smokeGrad;
-
-            var skrenderer = smokeObj.GetComponent<ParticleSystemRenderer>();
-            skrenderer.material = _smokeMat;
-
-            _sparksSystem.Play();
-            _smokeSystem.Play();
+            if (_healthDriven)
+            {
+                ZDO zdo = CurrentZdo();
+                if (zdo != null) return CharredTreeLifecycle.BurntFraction(zdo, _maxHealth);
+            }
+            return Mathf.Clamp01(_timeAlive / _burnDuration);
         }
+
+        private float FrontHeightFor(float progress)
+        {
+            // Slightly eased so the front spends a little longer low, where the fire looks
+            // like it is taking hold, and reaches the crown only at death.
+            return Mathf.Lerp(0.6f, _height, Mathf.Pow(Mathf.Clamp01(progress), 0.9f));
+        }
+
+        // ---------------------------------------------------------------
+        // Rig construction
+        // ---------------------------------------------------------------
+
+        private static Gradient MakeGradient(Color a, Color b)
+        {
+            var g = new Gradient();
+            g.SetKeys(new[] { new GradientColorKey(a, 0f), new GradientColorKey(b, 1f) },
+                      new[] { new GradientAlphaKey(1f, 0f), new GradientAlphaKey(1f, 1f) });
+            return g;
+        }
+
+        private static Gradient AlphaGradient(Color tint, params (float t, float a)[] keys)
+        {
+            var g = new Gradient();
+            var ak = new GradientAlphaKey[keys.Length];
+            for (int i = 0; i < keys.Length; i++) ak[i] = new GradientAlphaKey(keys[i].a, keys[i].t);
+            g.SetKeys(new[] { new GradientColorKey(tint, 0f), new GradientColorKey(tint, 1f) }, ak);
+            return g;
+        }
+
+        private static AnimationCurve Curve(params (float t, float v)[] keys)
+        {
+            var c = new AnimationCurve();
+            for (int i = 0; i < keys.Length; i++) c.AddKey(new Keyframe(keys[i].t, keys[i].v));
+            return c;
+        }
+
+        private ParticleSystem NewSystem(string name, Material mat, ParticleSystemRenderMode mode)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(transform, false);
+            go.transform.rotation = _axisRot;
+            var ps = go.AddComponent<ParticleSystem>();
+            ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+            var main = ps.main;
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+            main.playOnAwake = false;
+            main.loop = true;
+            var r = go.GetComponent<ParticleSystemRenderer>();
+            r.renderMode = mode;
+            if (mat != null) r.sharedMaterial = mat;
+            r.shadowCastingMode = ShadowCastingMode.Off;
+            r.receiveShadows = false;
+            return ps;
+        }
+
+        private void Build()
+        {
+            float cost = Mathf.Clamp(_height, 2f, CostHeightCeiling) / CostHeightCeiling; // 0.14..1
+            bool tall = _kind == BurnKind.Tree && _height >= TallBurnerMinHeight && FireConfig.TreeFlameScaling.Value;
+            if (tall) _tallReserved = TryReserveTall();
+            bool full = !tall || _tallReserved;   // past the tall cap: the ordinary small fire
+            if (tall && !_tallReserved)
+            {
+                // The small fire keeps a short front, or its handful of tongues would be spread
+                // over thirty metres of trunk and read as nothing at all.
+                _height = TallBurnerMinHeight;
+                _frontHeight = FrontHeightFor(_progress);
+            }
+
+            Material flameMat = FireFrontTextureGenerator.GetOrCreateFlameMaterial();
+            bool gradient = FireFrontTextureGenerator.FlameMaterialIsGradientMapped();
+
+            _front = BuildFlames("FireFront", flameMat, gradient, cost, front: true);
+            if (full) _column = BuildFlames("FlameColumn", flameMat, gradient, cost, front: false);
+            if (FireConfig.EffectiveCrownSparksEnabled || _kind != BurnKind.Tree) _embers = BuildEmbers(cost);
+            if (FireConfig.FireSmokeEnabled.Value) _smoke = BuildSmoke(cost);
+            if (FireConfig.EffectiveHeatHazeEnabled && full) _haze = BuildHaze();
+            _glow = BuildGlow();
+            BuildLight(full);
+
+            if (FireConfig.EffectiveBarkCharEnabled && _target != null && (_kind == BurnKind.Tree || _kind == BurnKind.Log))
+            {
+                _barkRenderers = CharredTreeSkin.CollectMeshRenderers(_target.gameObject);
+            }
+
+            PositionEmitters();
+            _front?.Play();
+            _column?.Play();
+            _embers?.Play();
+            _smoke?.Play();
+            _haze?.Play();
+            _glow?.Play();
+        }
+
+        private ParticleSystem BuildFlames(string name, Material mat, bool gradient, float cost, bool front)
+        {
+            ParticleSystem ps = NewSystem(name, mat, ParticleSystemRenderMode.VerticalBillboard);
+            var r = ps.GetComponent<ParticleSystemRenderer>();
+            r.pivot = new Vector3(0f, 0.4f, 0f);          // base-anchored tongues, like the Ashlands ground fire
+            r.sortMode = ParticleSystemSortMode.OldestInFront;
+            r.maxParticleSize = 0.5f;
+            r.alignment = ParticleSystemRenderSpace.View;
+            if (gradient) r.SetActiveVertexStreams(s_gradientStreams);
+
+            var main = ps.main;
+            float scale = Mathf.Clamp(_trunkRadius / 0.4f, 0.7f, 1.6f);
+            main.startLifetime = front ? new ParticleSystem.MinMaxCurve(0.55f, 0.9f) : new ParticleSystem.MinMaxCurve(0.4f, 0.7f);
+            // No shape-directed speed: the emitter's cone runs ALONG the trunk (so the band of
+            // fire lies on a fallen log's length), but flame always rises, so the rise is a
+            // world-space velocity set below, the same for a standing tree and a log.
+            main.startSpeed = new ParticleSystem.MinMaxCurve(0f);
+            main.startSize3D = true;
+            main.startSizeX = new ParticleSystem.MinMaxCurve(0.9f * scale, 1.4f * scale);
+            main.startSizeY = front ? new ParticleSystem.MinMaxCurve(1.6f * scale, 3.0f * scale) : new ParticleSystem.MinMaxCurve(0.7f * scale, 1.4f * scale);
+            main.startSizeZ = new ParticleSystem.MinMaxCurve(1f);
+            main.startRotation = new ParticleSystem.MinMaxCurve(0f, Mathf.PI * 2f);
+            // Per-particle brightness variance, exactly vanilla's grey 0.625..1 start colour.
+            main.startColor = new ParticleSystem.MinMaxGradient(new Color(0.625f, 0.625f, 0.625f, 1f), Color.white);
+            main.maxParticles = front ? Mathf.RoundToInt(Mathf.Lerp(90f, 260f, cost)) : Mathf.RoundToInt(Mathf.Lerp(60f, 200f, cost));
+            main.gravityModifier = 0f;
+
+            var emission = ps.emission;
+            emission.rateOverTime = front ? Mathf.Lerp(30f, 55f, cost) * scale : 20f;
+
+            var shape = ps.shape;
+            if (front)
+            {
+                shape.shapeType = ParticleSystemShapeType.Cone;
+                shape.radius = _trunkRadius + 0.05f;
+                shape.radiusThickness = 0f;      // on the bark, not inside the trunk
+                shape.angle = 8f;
+                shape.length = 0.3f;
+            }
+            else
+            {
+                shape.shapeType = ParticleSystemShapeType.ConeVolume;
+                shape.radius = _trunkRadius + 0.03f;
+                shape.radiusThickness = 0f;
+                shape.angle = 0f;
+                shape.length = 1f;               // stretched to the burning band every update
+            }
+            shape.rotation = Vector3.zero;        // the emitter transform already points along the trunk
+
+            var col = ps.colorOverLifetime;
+            col.enabled = true;
+            col.color = new ParticleSystem.MinMaxGradient(AlphaGradient(Color.white, (0f, 0f), (0.135f, 1f), (0.28f, 0.86f), (1f, 0f)));
+
+            var sol = ps.sizeOverLifetime;
+            sol.enabled = true;
+            sol.size = new ParticleSystem.MinMaxCurve(1f, Curve((0f, 1f), (1f, 0.28f)));
+
+            var tsa = ps.textureSheetAnimation;
+            tsa.enabled = true;
+            tsa.mode = ParticleSystemAnimationMode.Grid;
+            tsa.animation = ParticleSystemAnimationType.WholeSheet;
+            CopyFlipbookGrid(tsa);
+            tsa.timeMode = ParticleSystemAnimationTimeMode.FPS;
+            tsa.fps = 30f;
+            tsa.startFrame = new ParticleSystem.MinMaxCurve(0f, 0.999f);
+            tsa.cycleCount = 1;
+
+            if (gradient)
+            {
+                var custom = ps.customData;
+                custom.enabled = true;
+                custom.SetMode(ParticleSystemCustomData.Custom1, ParticleSystemCustomDataMode.Color);
+                custom.SetColor(ParticleSystemCustomData.Custom1, new ParticleSystem.MinMaxGradient(s_hot));
+                custom.SetMode(ParticleSystemCustomData.Custom2, ParticleSystemCustomDataMode.Color);
+                custom.SetColor(ParticleSystemCustomData.Custom2, new ParticleSystem.MinMaxGradient(s_cold));
+            }
+            else
+            {
+                // Procedural additive fallback: the flipbook is white, so the tint is the colour.
+                col.color = new ParticleSystem.MinMaxGradient(FallbackFlameGradient());
+            }
+
+            var noise = ps.noise;
+            noise.enabled = true;
+            noise.strength = 0.18f;
+            noise.frequency = 1.5f;
+            noise.scrollSpeed = 0.3f;
+            noise.quality = ParticleSystemNoiseQuality.Medium;
+
+            var vel = ps.velocityOverLifetime;
+            vel.enabled = true;
+            vel.space = ParticleSystemSimulationSpace.World;
+            vel.y = front ? new ParticleSystem.MinMaxCurve(1.0f, 3.2f) : new ParticleSystem.MinMaxCurve(0.6f, 1.8f);
+
+            return ps;
+        }
+
+        private static Gradient FallbackFlameGradient()
+        {
+            var g = new Gradient();
+            g.SetKeys(
+                new[] { new GradientColorKey(new Color(1f, 0.85f, 0.35f), 0f), new GradientColorKey(new Color(1f, 0.45f, 0.05f), 0.4f), new GradientColorKey(new Color(0.7f, 0.1f, 0.01f), 1f) },
+                new[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(1f, 0.15f), new GradientAlphaKey(0.8f, 0.4f), new GradientAlphaKey(0f, 1f) });
+            return g;
+        }
+
+        /// <summary>Grid size from the donor sheet when we have one (8x8 for fire_pit, 16x8 for the Ashlands tongues); 8x8 otherwise.</summary>
+        private static void CopyFlipbookGrid(ParticleSystem.TextureSheetAnimationModule tsa)
+        {
+            ParticleSystem donor = FireFrontTextureGenerator.FindDonorSystem("flame");
+            if (donor != null && donor.textureSheetAnimation.enabled)
+            {
+                tsa.numTilesX = Mathf.Max(1, donor.textureSheetAnimation.numTilesX);
+                tsa.numTilesY = Mathf.Max(1, donor.textureSheetAnimation.numTilesY);
+                return;
+            }
+            tsa.numTilesX = 8;
+            tsa.numTilesY = 8;
+        }
+
+        private ParticleSystem BuildEmbers(float cost)
+        {
+            ParticleSystem ps = NewSystem("Sparks", FireFrontTextureGenerator.GetOrCreateEmberMaterial(), ParticleSystemRenderMode.Billboard);
+            var r = ps.GetComponent<ParticleSystemRenderer>();
+            r.sortMode = ParticleSystemSortMode.Distance;
+            r.maxParticleSize = 0.5f;
+
+            var main = ps.main;
+            main.startLifetime = new ParticleSystem.MinMaxCurve(3f, 5f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(0.1f, 0.6f);
+            main.startSize = new ParticleSystem.MinMaxCurve(0.02f, 0.06f);     // motes, never rectangles
+            main.startColor = new ParticleSystem.MinMaxGradient(new Color(1f, 0.77f, 0f, 1f), Color.white);
+            main.maxParticles = Mathf.RoundToInt(Mathf.Lerp(40f, 120f, cost));
+            main.gravityModifier = 0.01f;
+
+            var emission = ps.emission;
+            emission.rateOverTime = Mathf.Lerp(5f, 14f, cost);
+
+            var shape = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.Cone;
+            shape.radius = _trunkRadius + 0.1f;
+            shape.angle = 20f;
+            shape.length = 0.2f;
+            shape.rotation = Vector3.zero;
+
+            var col = ps.colorOverLifetime;
+            col.enabled = true;
+            var g = new Gradient();
+            g.SetKeys(
+                new[] { new GradientColorKey(Color.white, 0f), new GradientColorKey(new Color(1f, 0.8f, 0f), 0.5f), new GradientColorKey(new Color(1f, 0.19f, 0f), 1f) },
+                new[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(1f, 0.03f), new GradientAlphaKey(0.97f, 0.47f), new GradientAlphaKey(0f, 1f) });
+            col.color = new ParticleSystem.MinMaxGradient(g);
+
+            var sol = ps.sizeOverLifetime;
+            sol.enabled = true;
+            sol.size = new ParticleSystem.MinMaxCurve(1f, Curve((0f, 1f), (1f, 0f)));
+
+            // Buoyancy, not a rocket: a little lift, thermal turbulence, drag so nothing streaks.
+            var force = ps.forceOverLifetime;
+            force.enabled = true;
+            force.space = ParticleSystemSimulationSpace.World;
+            force.y = new ParticleSystem.MinMaxCurve(0.2f, 0.4f);
+
+            var noise = ps.noise;
+            noise.enabled = true;
+            noise.strength = 0.5f;
+            noise.frequency = 1f;
+            noise.scrollSpeed = 0.1f;
+            noise.octaveCount = 1;
+            noise.damping = true;
+            noise.positionAmount = 0.3f;
+            noise.quality = ParticleSystemNoiseQuality.High;
+
+            var limit = ps.limitVelocityOverLifetime;
+            limit.enabled = true;
+            limit.drag = 0.3f;
+
+            var vel = ps.velocityOverLifetime;
+            vel.enabled = true;
+            vel.space = ParticleSystemSimulationSpace.World;
+            return ps;
+        }
+
+        private ParticleSystem BuildSmoke(float cost)
+        {
+            ParticleSystem ps = NewSystem("Smoke", FireFrontTextureGenerator.GetOrCreateSmokeMaterial(), ParticleSystemRenderMode.Billboard);
+            var r = ps.GetComponent<ParticleSystemRenderer>();
+            r.sortMode = ParticleSystemSortMode.OldestInFront;
+            r.maxParticleSize = 10f;
+            r.sortingFudge = 1f;
+            r.receiveShadows = true;   // Lux Lit Particles: shadowed by the sun, lit by our point light
+
+            var main = ps.main;
+            main.startLifetime = new ParticleSystem.MinMaxCurve(2.5f, 4.5f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(0f, 0.3f);
+            main.startSize = new ParticleSystem.MinMaxCurve(Mathf.Lerp(1.6f, 3.2f, cost));
+            main.startColor = new ParticleSystem.MinMaxGradient(new Color(0.10f, 0.10f, 0.10f, 1f), new Color(0.47f, 0.47f, 0.47f, 1f));
+            main.maxParticles = Mathf.RoundToInt(Mathf.Lerp(24f, 60f, cost));
+            main.gravityModifier = 0f;
+
+            var emission = ps.emission;
+            emission.rateOverTime = Mathf.Lerp(3f, 7f, cost);
+
+            var shape = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.ConeVolume;
+            shape.radius = Mathf.Max(0.6f, _trunkRadius * 1.4f);
+            shape.length = 1.2f;
+            shape.angle = 10f;
+            shape.rotation = Vector3.zero;
+
+            var sol = ps.sizeOverLifetime;
+            sol.enabled = true;
+            sol.size = new ParticleSystem.MinMaxCurve(1f, Curve((0f, 0.03f), (0.4f, 0.7f), (1f, 1f)));
+
+            var col = ps.colorOverLifetime;
+            col.enabled = true;
+            var g = new Gradient();
+            g.SetKeys(
+                new[] { new GradientColorKey(new Color(1f, 0.64f, 0f), 0f), new GradientColorKey(Color.white, 0.3f), new GradientColorKey(Color.white, 1f) }, // fire-tinted at birth
+                new[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(1f, 0.22f), new GradientAlphaKey(0.6f, 0.6f), new GradientAlphaKey(0f, 1f) });
+            col.color = new ParticleSystem.MinMaxGradient(g);
+
+            var rot = ps.rotationOverLifetime;
+            rot.enabled = true;
+            rot.z = new ParticleSystem.MinMaxCurve(-0.15f, 0.15f);
+
+            var force = ps.forceOverLifetime;
+            force.enabled = true;
+            force.space = ParticleSystemSimulationSpace.World;
+            force.y = new ParticleSystem.MinMaxCurve(0.1f, 0.5f);
+
+            var vel = ps.velocityOverLifetime;
+            vel.enabled = true;
+            vel.space = ParticleSystemSimulationSpace.World;
+            return ps;
+        }
+
+        private ParticleSystem BuildHaze()
+        {
+            Material haze = FireFrontTextureGenerator.GetOrCreateHazeMaterial();
+            if (haze == null) return null; // no donor, no haze — never a fallback that draws a grey quad
+            ParticleSystem ps = NewSystem("HeatHaze", haze, ParticleSystemRenderMode.Billboard);
+            var r = ps.GetComponent<ParticleSystemRenderer>();
+            r.sortMode = ParticleSystemSortMode.Distance;
+
+            var main = ps.main;
+            main.startLifetime = new ParticleSystem.MinMaxCurve(2f, 4f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(0.3f, 0.8f);
+            main.startSize = new ParticleSystem.MinMaxCurve(1.5f, 3f);
+            main.startColor = new ParticleSystem.MinMaxGradient(Color.white);
+            main.maxParticles = 8;       // GrabPass refraction: keep the count tiny
+            main.gravityModifier = -0.05f;
+
+            var emission = ps.emission;
+            emission.rateOverTime = 2.5f;
+
+            var shape = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.Sphere;
+            shape.radius = 0.5f;
+
+            var rot = ps.rotationOverLifetime;
+            rot.enabled = true;
+            rot.z = new ParticleSystem.MinMaxCurve(-0.09f, 0.09f);
+
+            var col = ps.colorOverLifetime;
+            col.enabled = true;
+            col.color = new ParticleSystem.MinMaxGradient(AlphaGradient(Color.white, (0f, 0f), (0.4f, 1f), (1f, 0f)));
+
+            var vel = ps.velocityOverLifetime;
+            vel.enabled = true;
+            vel.space = ParticleSystemSimulationSpace.World;
+            return ps;
+        }
+
+        /// <summary>Vanilla's cheap halo trick (fire_pit "flare"): one long-lived billboard the bloom smears into a glow.</summary>
+        private ParticleSystem BuildGlow()
+        {
+            ParticleSystem ps = NewSystem("Glow", FireFrontTextureGenerator.GetOrCreateGlowMaterial(), ParticleSystemRenderMode.Billboard);
+            var main = ps.main;
+            main.simulationSpace = ParticleSystemSimulationSpace.Local; // rides the emitter to the front
+            main.startLifetime = new ParticleSystem.MinMaxCurve(1e6f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(0f);
+            main.startSize = new ParticleSystem.MinMaxCurve(Mathf.Clamp(_trunkRadius * 5f, 1.6f, 3.5f));
+            main.startColor = new ParticleSystem.MinMaxGradient(new Color(1.6f, 0.7f, 0.25f, 0.35f));
+            main.maxParticles = 1;
+            main.loop = false;
+
+            var emission = ps.emission;
+            emission.rateOverTime = 0f;
+            emission.SetBursts(new[] { new ParticleSystem.Burst(0f, 1) });
+
+            var shape = ps.shape;
+            shape.enabled = false;
+            return ps;
+        }
+
+        private void BuildLight(bool full)
+        {
+            var go = new GameObject("FirePointLight");
+            go.transform.SetParent(transform, false);
+            _light = go.AddComponent<Light>();
+            _light.type = LightType.Point;
+            _light.color = new Color(1f, 0.504f, 0.324f);            // vanilla fire_pit
+            _baseLightIntensity = full ? 2.2f + Mathf.Min(_height, CostHeightCeiling) * 0.06f : 2f;
+            _baseLightRange = full ? Mathf.Clamp(10f + _height * 0.35f, 10f, 16f) : 8f;
+            _light.intensity = _baseLightIntensity;
+            _light.range = _baseLightRange;
+            _light.renderMode = LightRenderMode.ForcePixel;           // so the lit smoke gets it per pixel
+            _light.cullingMask = ~0;
+            if (FireConfig.EffectiveFireShadowsEnabled)
+            {
+                // Set BEFORE LightLod's Awake: it disables shadow LOD for a light that has none.
+                _light.shadows = LightShadows.Soft;
+                _light.shadowResolution = LightShadowResolution.Medium;
+                _light.shadowBias = 0.05f;
+                _light.shadowNormalBias = 0.4f;
+                _light.shadowStrength = 1f;
+            }
+            else
+            {
+                _light.shadows = LightShadows.None;
+            }
+
+            // Vanilla's own light management: fades the light in within 40 m, the shadows within
+            // 20 m, and keeps the number of shadowed point lights inside the player's setting.
+            try
+            {
+                _lightLod = go.AddComponent<LightLod>();
+                _lightLod.m_lightDistance = 40f;
+                _lightLod.m_shadowDistance = 20f;
+                _flicker = go.AddComponent<LightFlicker>();
+                _flicker.m_flickerIntensity = 0.12f;
+                _flicker.m_flickerSpeed = 10f;
+                _flicker.m_movement = 0.1f;
+            }
+            catch (System.Exception ex)
+            {
+                FireLogger.Debug($"[VFX] vanilla light helpers unavailable: {ex.Message}");
+            }
+        }
+
+        private bool TryReserveTall()
+        {
+            for (int i = s_tall.Count - 1; i >= 0; i--)
+            {
+                if (s_tall[i] == null) s_tall.RemoveAt(i);
+            }
+            if (s_tall.Count >= FireConfig.EffectiveTallFireMaxConcurrent) return false;
+            s_tall.Add(this);
+            return true;
+        }
+
+        // ---------------------------------------------------------------
+        // Per frame
+        // ---------------------------------------------------------------
 
         private void Update()
         {
-            _timeAlive += Time.deltaTime;
-            float progress = Mathf.Clamp01(_timeAlive / _burnDuration);
+            float dt = Time.deltaTime;
+            _timeAlive += dt;
 
-            // Fetch live wind from the environment
-            Vector3 windDir = ValheimBridge.GetWindDirection() ?? Vector3.forward;
-            float windStrength = ValheimBridge.GetWindIntensity() ?? 0.5f;
-            Vector3 windHoriz = new Vector3(windDir.x, 0f, windDir.z);
-            if (windHoriz.sqrMagnitude > 0.001f) windHoriz.Normalize();
-            else windHoriz = Vector3.forward;
-
-            // Dynamic wind gusts
-            float gust = 1f + 0.35f * (Mathf.PerlinNoise(Time.time * 2.2f, 31.4f) - 0.5f) * 2f;
-            float currentWindSpeed = windStrength * gust;
-            Vector3 windForceVec = windHoriz * (currentWindSpeed * 1.4f);
-
-            // Continuous upward texture scrolling on the flame material (flames actively rush & lick upward!)
-            if (_fireLineMat != null)
+            if (Time.time >= _nextHealthPoll)
             {
-                _fireLineMat.mainTextureOffset = new Vector2(0f, -Time.time * 2.6f);
+                _nextHealthPoll = Time.time + HealthPollInterval;
+                _rawProgress = SampleProgress();
+            }
+            // Ease toward the sampled value: a tick every couple of seconds must read as a
+            // fire climbing, not as flames jumping a rung.
+            _progress = Mathf.MoveTowards(_progress, _rawProgress, dt * 0.12f);
+            _frontHeight = FrontHeightFor(_progress);
+
+            if (!_built) return;
+
+            if (Time.time >= _nextDistanceCheck)
+            {
+                _nextDistanceCheck = Time.time + 1f;
+                UpdateDistanceLod();
             }
 
-            // Fire front progression along trunk
-            float flameHeadDist = Mathf.Lerp(1.0f, _treeHeight, progress);
-            float flameBaseDist = Mathf.Max(0f, (progress - 0.35f) / 0.65f * (_treeHeight * 0.75f));
+            Vector3 wind = EnvMan.instance != null ? EnvMan.instance.GetWindForce() : Vector3.zero;
+            wind.y = 0f;
+            float gust = 1f + 0.35f * (Mathf.PerlinNoise(Time.time * 1.7f, _noiseSeed) - 0.5f) * 2f;
+            Vector3 windVel = wind * gust;
 
-            Vector3 rootPos = transform.position;
-            float midDist = (flameBaseDist + flameHeadDist) * 0.5f;
-            Vector3 midPosition = rootPos + _trunkAxis * midDist;
+            PositionEmitters();
+            ApplyWind(windVel);
+            UpdateRates();
+            UpdateLight(windVel);
 
-            // Point light tracks the flame center, leaning slightly with wind
-            if (_fireLight != null)
+            if (_barkRenderers != null && Time.time >= _nextBarkUpdate)
             {
-                _fireLight.transform.position = midPosition + windForceVec * (midDist / _treeHeight * 0.4f);
-                float flicker = Mathf.PerlinNoise(Time.time * 8.5f, 0.25f) * 0.35f + Mathf.Sin(Time.time * 26f) * 0.1f;
-                _fireLight.intensity = _baseLightIntensity * (0.85f + flicker);
-            }
-
-            // Gentle thermal updraft on embers and smoke (no rocket acceleration!)
-            if (_sparksSystem != null)
-            {
-                _sparksSystem.transform.position = midPosition;
-                var svel = _sparksSystem.velocityOverLifetime;
-                svel.enabled = true;
-                svel.space = ParticleSystemSimulationSpace.World;
-                svel.x = windForceVec.x * 0.9f;
-                svel.z = windForceVec.z * 0.9f;
-                svel.y = new ParticleSystem.MinMaxCurve(0.6f, 1.4f);
-            }
-
-            if (_smokeSystem != null)
-            {
-                _smokeSystem.transform.position = rootPos + _trunkAxis * flameHeadDist;
-                var skvel = _smokeSystem.velocityOverLifetime;
-                skvel.enabled = true;
-                skvel.space = ParticleSystemSimulationSpace.World;
-                skvel.x = windForceVec.x * 2.2f;
-                skvel.z = windForceVec.z * 2.2f;
-                skvel.y = new ParticleSystem.MinMaxCurve(0.8f, 1.8f);
-            }
-
-            // 1. Animate outer licking flame ribbons
-            for (int i = 0; i < LineCount; i++)
-            {
-                if (_flameLines[i] != null)
-                {
-                    UpdateFlameLine(_flameLines[i], i, rootPos, flameBaseDist, flameHeadDist, windForceVec);
-                }
-            }
-
-            // 2. Animate inner glowing char ribbons (clamped directly to bark)
-            for (int c = 0; c < CharLineCount; c++)
-            {
-                if (_charLines[c] != null)
-                {
-                    UpdateCharLine(_charLines[c], c, rootPos, flameBaseDist, flameHeadDist);
-                }
-            }
-
-            // 3. Animate ground collar creeping fire surrounding the tree base
-            for (int k = 0; k < GroundLineCount; k++)
-            {
-                if (_groundLines[k] != null)
-                {
-                    UpdateGroundLine(_groundLines[k], k, rootPos, progress, windForceVec);
-                }
+                _nextBarkUpdate = Time.time + BarkUpdateInterval;
+                float pulse = 0.7f + 0.3f * Mathf.PerlinNoise(Time.time * 2.5f, _noiseSeed);
+                if (_smoulder) pulse *= 0.5f;
+                CharredTreeSkin.ApplyBurnChar(_barkRenderers, _progress, pulse);
             }
         }
 
-        private void UpdateFlameLine(LineRenderer lr, int index, Vector3 rootPos, float flameBaseDist, float flameHeadDist, Vector3 windForceVec)
+        private Vector3 AlongTrunk(float dist) => transform.position + _axis * dist;
+
+        private void PositionEmitters()
         {
-            float baseAzimuth = (index / (float)LineCount) * (Mathf.PI * 2f);
-            float twist = _lineTwists[index];
-
-            float lineBottom = Mathf.Max(0f, flameBaseDist + _bottomOffsets[index]);
-            float lineTop = Mathf.Clamp(flameHeadDist + _topOffsets[index], lineBottom + 0.6f, _treeHeight + 0.4f);
-            float lineSpan = lineTop - lineBottom;
-
-            Vector3[] points = new Vector3[SegmentsPerLine];
-
-            for (int j = 0; j < SegmentsPerLine; j++)
+            float front = _frontHeight;
+            if (_front != null) _front.transform.position = AlongTrunk(Mathf.Max(0f, front - 0.3f));
+            if (_column != null)
             {
-                float u = j / (float)(SegmentsPerLine - 1); // 0 (base) to 1 (flame tip)
-                float distAlongTrunk = lineBottom + u * lineSpan;
-
-                // Convective wave traveling along the trunk
-                float wavePhase = (distAlongTrunk * 2.2f) - (Time.time * 6.2f) + (index * 1.8f);
-                float waveRadial = (Mathf.PerlinNoise(_noiseSeedsX[index] + wavePhase * 0.35f, 0.3f) - 0.5f) * 2f;
-                float waveTangential = (Mathf.PerlinNoise(0.3f, _noiseSeedsZ[index] + wavePhase * 0.35f) - 0.5f) * 2f;
-
-                // High-frequency chaotic flutter/lick (increases toward flame tip)
-                float flutter = Mathf.Sin(Time.time * 24f + j * 1.5f + index * 3.7f) * 0.05f;
-
-                // Clamped tightly to the bark cylinder so fire creeps along the surface
-                float currentAngle = baseAzimuth + (u * twist) + (waveTangential * 0.15f * u);
-                float currentRadius = _trunkRadius + (0.03f + waveRadial * 0.04f * u + flutter * u);
-                if (currentRadius < 0.12f) currentRadius = 0.12f;
-
-                // Radial displacement around the trunk
-                Vector3 radialOffset = (_perpX * Mathf.Cos(currentAngle) + _perpZ * Mathf.Sin(currentAngle)) * currentRadius;
-
-                // Wind deflection: flame tips lean downwind
-                Vector3 windOffset = windForceVec * (Mathf.Pow(u, 1.35f) * 0.9f);
-
-                // Natural buoyant updraft
-                Vector3 buoyantLick = Vector3.up * (flutter * u * 0.25f + Mathf.Pow(u, 1.2f) * 0.18f);
-
-                points[j] = rootPos + (_trunkAxis * distAlongTrunk) + radialOffset + windOffset + buoyantLick;
+                // The burning band runs from the foot to the front; the emitter sits at the
+                // foot and its cone volume is stretched to the front.
+                _column.transform.position = AlongTrunk(0.1f);
+                var shape = _column.shape;
+                shape.length = Mathf.Max(0.3f, front - 0.2f);
             }
-
-            lr.SetPositions(points);
+            if (_embers != null) _embers.transform.position = AlongTrunk(front * 0.85f);
+            if (_smoke != null) _smoke.transform.position = AlongTrunk(front + 0.5f);
+            if (_haze != null) _haze.transform.position = AlongTrunk(front + 1f);
+            if (_glow != null) _glow.transform.position = AlongTrunk(Mathf.Max(0.5f, front * 0.7f));
         }
 
-        private void UpdateCharLine(LineRenderer lr, int index, Vector3 rootPos, float flameBaseDist, float flameHeadDist)
+        private void ApplyWind(Vector3 windVel)
         {
-            float baseAzimuth = (index / (float)CharLineCount) * (Mathf.PI * 2f) + (Mathf.PI / 4f);
-
-            float lineBottom = flameBaseDist;
-            float lineTop = Mathf.Min(flameHeadDist, _treeHeight);
-            float lineSpan = Mathf.Max(0.1f, lineTop - lineBottom);
-
-            Vector3[] points = new Vector3[SegmentsPerLine];
-
-            for (int j = 0; j < SegmentsPerLine; j++)
-            {
-                float u = j / (float)(SegmentsPerLine - 1);
-                float distAlongTrunk = lineBottom + u * lineSpan;
-
-                // Sits flush against the bark with subtle heat shimmer
-                float shimmer = Mathf.Sin(Time.time * 12f + j * 2f + index) * 0.015f;
-                float currentAngle = baseAzimuth + shimmer;
-                float currentRadius = _trunkRadius + 0.01f + shimmer;
-
-                Vector3 radialOffset = (_perpX * Mathf.Cos(currentAngle) + _perpZ * Mathf.Sin(currentAngle)) * currentRadius;
-                points[j] = rootPos + (_trunkAxis * distAlongTrunk) + radialOffset;
-            }
-
-            lr.SetPositions(points);
+            SetVelocity(_front, windVel * 0.6f, 0f);
+            SetVelocity(_column, windVel * 0.35f, 0f);
+            SetVelocity(_embers, windVel * 0.9f, 0f);
+            SetVelocity(_smoke, windVel * 2.0f, 0f);
+            SetVelocity(_haze, windVel * 1.2f, 0f);
         }
 
-        private void UpdateGroundLine(LineRenderer lr, int index, Vector3 rootPos, float progress, Vector3 windForceVec)
+        private static void SetVelocity(ParticleSystem ps, Vector3 v, float y)
         {
-            float baseAngle = _groundAngles[index];
-            float maxReach = Mathf.Lerp(0.6f, 1.4f, Mathf.Clamp01(progress * 1.8f));
+            if (ps == null) return;
+            var vel = ps.velocityOverLifetime;
+            vel.x = v.x;
+            vel.z = v.z;
+            if (y != 0f) vel.y = y;
+        }
 
-            Vector3[] points = new Vector3[SegmentsPerGroundLine];
-
-            for (int j = 0; j < SegmentsPerGroundLine; j++)
+        private void UpdateRates()
+        {
+            // The band behind the front burns hardest early and settles to embers as the wood
+            // chars; the front itself is fiercest in the middle of the burn.
+            float bandFactor = Mathf.Lerp(1f, 0.35f, Mathf.Clamp01((_progress - 0.5f) / 0.5f));
+            float frontFactor = 0.8f + 0.4f * Mathf.Sin(_progress * Mathf.PI);
+            if (_smoulder) { bandFactor *= 0.3f; frontFactor *= 0.4f; }
+            if (_column != null)
             {
-                float u = j / (float)(SegmentsPerGroundLine - 1); // 0 (trunk collar) to 1 (outer creeping tongue)
-                float r = Mathf.Lerp(_trunkRadius * 0.9f, maxReach, u);
-
-                float wave = Mathf.Sin(Time.time * 8f + j * 0.8f + index * 2.3f) * 0.05f;
-                float angle = baseAngle + (Mathf.PerlinNoise(index * 10f + u * 2f, Time.time * 1.2f) - 0.5f) * 0.4f;
-
-                Vector3 dir = (_perpX * Mathf.Cos(angle) + _perpZ * Mathf.Sin(angle)).normalized;
-
-                // Hug ground with slight licking flame height
-                float groundY = wave * (1f - u) + Mathf.Sin(Time.time * 14f + j) * 0.04f * u;
-
-                // Wind pushes creeping ground flames downwind
-                Vector3 windLean = windForceVec * (u * 0.25f);
-
-                points[j] = rootPos + (dir * r) + Vector3.up * Mathf.Max(0.02f, groundY) + windLean;
+                var e = _column.emission;
+                float perMetre = _far ? 0f : 22f;
+                e.rateOverTime = Mathf.Min(150f, perMetre * Mathf.Max(0.3f, _frontHeight) * bandFactor);
             }
+            if (_front != null)
+            {
+                var e = _front.emission;
+                float baseRate = Mathf.Lerp(30f, 55f, Mathf.Clamp01(_height / CostHeightCeiling)) * Mathf.Clamp(_trunkRadius / 0.4f, 0.7f, 1.6f);
+                e.rateOverTime = baseRate * frontFactor;
+            }
+        }
 
-            lr.SetPositions(points);
+        private void UpdateLight(Vector3 windVel)
+        {
+            if (_light == null) return;
+            float lean = Mathf.Clamp01(_frontHeight / Mathf.Max(1f, _height)) * 0.4f;
+            _light.transform.position = AlongTrunk(Mathf.Max(0.5f, _frontHeight - 0.5f)) + windVel * lean;
+            // LightFlicker owns the fast flicker; this is the slow swell with the burn.
+            float swell = _smoulder ? 0.45f : Mathf.Lerp(0.8f, 1.15f, Mathf.Sin(_progress * Mathf.PI));
+            float target = _baseLightIntensity * swell;
+            // LightFlicker rewrites intensity from its captured base every update; nudging the
+            // base through the component keeps the two from fighting.
+            if (_flicker != null) _flicker.m_baseIntensity = target;
+            else _light.intensity = target;
+        }
+
+        private void UpdateDistanceLod()
+        {
+            Camera cam = global::Utils.GetMainCamera();
+            if (cam == null) return;
+            float d = Vector3.Distance(cam.transform.position, transform.position);
+            bool far = d > FarDistance;
+            if (far == _far) return;
+            _far = far;
+            // Far away, the fire is its front, its glow and its light; the rest is not visible
+            // at that size and only costs.
+            if (_haze != null) { var e = _haze.emission; e.enabled = !far; }
+            if (_embers != null) { var e = _embers.emission; e.enabled = !far; }
+            if (_smoke != null) { var e = _smoke.emission; e.rateOverTime = far ? 1.5f : Mathf.Lerp(3f, 7f, Mathf.Clamp01(_height / CostHeightCeiling)); }
+        }
+
+        // ---------------------------------------------------------------
+        // Smoulder / teardown
+        // ---------------------------------------------------------------
+
+        /// <summary>
+        /// Long-burning fires drop to embers and smoke. Cosmetic only; the front keeps climbing
+        /// with the health. Called by ValheimBridge.DowngradeVfxToSmoulder.
+        /// </summary>
+        public void SetSmoulder()
+        {
+            if (_smoulder) return;
+            _smoulder = true;
+            if (_haze != null) { var e = _haze.emission; e.enabled = false; }
+            if (_glow != null)
+            {
+                var main = _glow.main;
+                main.startColor = new ParticleSystem.MinMaxGradient(new Color(1.2f, 0.35f, 0.1f, 0.25f));
+                _glow.Clear();
+                _glow.Play();
+            }
+            if (_light != null)
+            {
+                _light.color = new Color(1f, 0.35f, 0.10f);
+                // LightLod fades the range back up to ITS captured base every second, so the
+                // reduction has to go through that base rather than the Light directly.
+                if (_lightLod != null) _lightLod.m_baseRange = _baseLightRange * 0.6f;
+                else _light.range = _baseLightRange * 0.6f;
+            }
+            if (_embers != null) { var e = _embers.emission; e.rateOverTime = 2f; }
+            UpdateRates();
+        }
+
+        private void OnDestroy()
+        {
+            if (_barkRenderers != null)
+            {
+                try { CharredTreeSkin.ClearBurnChar(_barkRenderers); } catch (System.Exception) { }
+                _barkRenderers = null;
+            }
+            s_tall.Remove(this);
         }
     }
 }
-
-

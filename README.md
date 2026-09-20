@@ -9,7 +9,10 @@ Fire that actually spreads. Torch a wall and it can take the whole build with it
 —
 
 **What it does**
-• Structures, standing trees, and felled logs can all catch fire and burn down for real — with real drops (trees fell via vanilla's own felling and leave logs, logs leave wood)
+• Structures, standing trees, and felled logs can all catch fire and burn down for real — buildings leave their drops; trees and logs burn to CHARCOAL (see below)
+• **New in 0.22.0: fire climbs the tree, and the flames are its health bar.** A burning tree takes unseen fire damage (no floating numbers) and the fire front starts at the foot and climbs the trunk as the tree weakens — flames in the crown mean it's about to go. The bark blackens and glows with embers below the flames as it burns
+• **New in 0.22.0: burned trees char.** A tree the fire kills is replaced on the spot by a charred husk of the same species — black, bare, ash-dusted, ember cracks fading over a couple of minutes. Three seconds later it either COLLAPSES (the charred trunk falls with the game's own felling crash, drops a little coal, and crumbles to ash) or stays standing as a snag you can chop later for coal. Charred wood never drops wood or seeds and never catches fire again. `fireset treedestruction <0-100>` is the collapse chance
+• **Rebuilt fire visuals in 0.22.0.** Built the way the game's own campfire and bonfire are: flipbook flame tongues, ember motes, smoke lit by the fire and shadowed by the sun, heat shimmer, and a point light with real soft shadows. The white streaks some testers saw in 0.21.x are gone (they were an inactive 8x8 placeholder texture tiled along ribbons — long story, it's in the changelog)
 • Fire spreads to nearby burnable stuff, structure-to-structure, tree-to-tree, or structure-to-tree
 • **Big fix in 0.17.4: forest spread now actually works on dedicated servers.** It turns out tree-to-tree and ground-to-tree spread had *never* worked on a dedicated server (fine in single-player) — the server literally couldn't see trees. If you tested on a server before and thought fire seemed weirdly tame, that was this. Burn a forest and see the difference.
 • Fire also spreads across open ground/grass between things too far apart to ignite each other directly — you can *see* it crawling through grass as small ember flickers
@@ -43,7 +46,8 @@ New in 0.19.6, and the first thing to reach for if big fires cost you frames. On
 If you've been running an older build and big fires stuttered, **update first** — 0.18.6, 0.18.7 and 0.19.5 each removed a separate cause of that, and the newest one cut out a full-scene scan whose cost grew with how much stuff was lying around your world.
 
 **What to expect / known limits**
-• The fire visual is homemade, not a vanilla asset — it'll look like fire, just not *exactly* like Valheim's own fire
+• The fire visual is built from the game's own fire materials and particle recipes, so it should sit next to a campfire without looking like a different game — but it's still assembled in code, not authored in the editor
+• Ray-traced lighting is not something any mod can add to Valheim: the game runs the built-in render pipeline with no ray-tracing support compiled in. Shadow-casting fire lights, HDR bloom, normal-mapped char, lit smoke and heat haze are the ceiling, and 0.22.0 uses all of them
 • Default settings are tuned aggressive for testing — expect fire to spread fast and hungrily unless you dial it down yourself
 
 —
@@ -59,6 +63,8 @@ firedebug               — toggle verbose fire logging
 fireset <key> <value>   — live-tune settings, no restart needed (applies on the server no matter where you type it)
 ```
 Full list of tunable `fireset` keys: `burnduration`, `firematurity`, `spreadradius`, `maxburning`, `queuesize`, `spreadinterval`, `trees`, `burnbuildings`, `vfx`, `procedural`, `groundenabled`, `groundcellsize`, `groundradius`, `groundburnduration`, `groundmax`, `groundvfxmax`, `grounddamagemax`, `firehurts`, `firehurtsplayeronly`, `firehurtsradius`, `firedamage`, `firetickinterval`, `extinguishradius`, `douseimmunity`, `rainsuppress`, `rainmultiplier`, `scorchmarks`, `scorchlifetime`, `dirtpaint`, `dirtpaintradius`, `rampenabled`, `rampduration`, `rampstart`, `exhaustionenabled`, `fuelregrow`, `windbias`, `windupwindchance`, `windinfluence`, `dousingradius`, `persistfires`, `firebreaks`, `treeregrowth`, `treeregrowthseconds`, `groundleashenabled`, `groundleashdistance`, `lowspec`, `debug`, `burntheworld`, `enabled`
+
+Tree fire and charring (0.22.0): `treefire` (unseen damage on/off), `treetick` (seconds per tick), `treekillfraction` (fraction of burnduration at which a healthy tree dies), `treedestruction` (collapse chance %), `charreddelay`, `charredcoalmin`, `charredcoalmax`, `charredhealth`, `charredcrumble`, `charredglow`. Fire look: `treeflames`, `crownsparks`, `maxflameheight`, `tallfiremax`, `fireshadows`, `heathaze`, `barkchar`, `smouldering`, `smoulderafter`.
 
 Wind ones worth playing with: `fireset windinfluence 0` ignores wind entirely (old-style even spread), `1` is full effect (the default). `firestatus` shows the live wind strength the fire is currently feeling.
 

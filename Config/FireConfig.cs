@@ -73,6 +73,18 @@ namespace FireFront.Config
         public static ConfigEntry<bool> WatchTheWorldBurn;
         public static ConfigEntry<bool> SmoulderingVfxEnabled;
         public static ConfigEntry<float> SmoulderAfterFraction;
+        public static ConfigEntry<bool> TreeFireDamageEnabled;
+        public static ConfigEntry<float> TreeFireTickInterval;
+        public static ConfigEntry<float> TreeFireKillFraction;
+        public static ConfigEntry<float> CharredCollapseDelaySeconds;
+        public static ConfigEntry<int> CharredCoalMin;
+        public static ConfigEntry<int> CharredCoalMax;
+        public static ConfigEntry<float> CharredTreeHealthFraction;
+        public static ConfigEntry<float> CharredLogCrumbleSeconds;
+        public static ConfigEntry<float> CharredEmberGlowSeconds;
+        public static ConfigEntry<bool> FireShadowsEnabled;
+        public static ConfigEntry<bool> HeatHazeEnabled;
+        public static ConfigEntry<bool> BarkCharEnabled;
 
         // --- Low-spec preset -------------------------------------------------
         //
@@ -135,6 +147,20 @@ namespace FireFront.Config
         public static int EffectiveTallFireMaxConcurrent =>
             LowSpec ? Mathf.Min(TallFireMaxConcurrent.Value, LowSpecTallFireMaxConcurrent)
             : TallFireMaxConcurrent.Value;
+
+        /// <summary>
+        /// A shadow-casting point light is the single most expensive thing a fire
+        /// draws (it re-renders every shadow caster in range into a cube map), so
+        /// the preset drops shadows first. Vanilla's own LightLod still budgets
+        /// how many shadowed point lights exist at once (3 at default settings).
+        /// </summary>
+        public static bool EffectiveFireShadowsEnabled => !LowSpec && FireShadowsEnabled.Value;
+
+        /// <summary>Heat haze is a GrabPass refraction: pure decoration, first to go.</summary>
+        public static bool EffectiveHeatHazeEnabled => !LowSpec && HeatHazeEnabled.Value;
+
+        /// <summary>Bark charring is a per-renderer property block; cheap, survives the preset.</summary>
+        public static bool EffectiveBarkCharEnabled => BarkCharEnabled.Value;
 
         // --- Watch The World Burn ------------------------------------------
         //
@@ -341,7 +367,15 @@ namespace FireFront.Config
 
             TreeDestructionRate = config.Bind(
                 "Fire", "TreeDestructionRate", 65f,
-                "Percentage chance (0-100) that a burning tree is fully destroyed. If it survives, it turns into a Burnt Tree.");
+                new ConfigDescription(
+                    "Percentage chance (0-100) that a tree which has burned to death COLLAPSES. " +
+                    "Every tree the fire kills is first replaced in place by a charred husk of the " +
+                    "same species; CharredCollapseDelaySeconds later this roll decides whether it " +
+                    "topples (a charred trunk falls with vanilla's own felling physics and crash, " +
+                    "dropping only a little coal - no wood, no seeds) or stays standing, blackened, " +
+                    "for players to walk past or chop down later (also coal only). 100 = every " +
+                    "burned tree falls, 0 = every burned tree is left standing as a charred snag.",
+                    new AcceptableValueRange<float>(0f, 100f)));
 
             BurnPlayerBuildings = config.Bind(
                 "Fire", "BurnPlayerBuildings", true,
@@ -410,6 +444,25 @@ namespace FireFront.Config
                 "the same, they just cost what fire always cost. Object fire otherwise has no " +
                 "aggregate visual cap the way ground fire does, and a tall burner costs about " +
                 "four times a short one. LowSpecPreset caps this at 4.");
+
+            FireShadowsEnabled = config.Bind(
+                "Visuals", "FireShadowsEnabled", true,
+                "The point light on a burning object casts real-time soft shadows, the way " +
+                "vanilla's campfire and bonfire lights do. This is the most expensive thing a " +
+                "fire draws; the game's own light manager still limits how many shadowed point " +
+                "lights exist at once (your 'Point light shadows' setting), so a forest fire does " +
+                "not become a forest of shadow maps. Forced off by LowSpecPreset.");
+
+            HeatHazeEnabled = config.Bind(
+                "Visuals", "HeatHazeEnabled", true,
+                "A refraction shimmer above the flames, borrowed from the lava heat haze the " +
+                "game already ships. A handful of particles per fire; forced off by LowSpecPreset.");
+
+            BarkCharEnabled = config.Bind(
+                "Visuals", "BarkCharEnabled", true,
+                "The bark below the fire front visibly blackens and glows with embers as the " +
+                "flames climb, so the burnt band reads on the tree itself and not only in the " +
+                "flames. A per-renderer property block, no extra draw calls.");
 
             GroundSpreadEnabled = config.Bind(
                 "Ground", "GroundSpreadEnabled", true,
@@ -649,6 +702,83 @@ namespace FireFront.Config
                     "genuinely fails retries every 30s up to 20 times. Turning TreeRegrowthEnabled " +
                     "off stops trees already queued as well as new ones.",
                     new AcceptableValueRange<float>(30f, 7200f)));
+
+            TreeFireDamageEnabled = config.Bind(
+                "Trees", "TreeFireDamageEnabled", true,
+                "A burning tree or log takes real, UNSEEN fire damage every TreeFireTickInterval " +
+                "seconds - no floating numbers, no shake, no hit effect - sized so that a healthy " +
+                "tree dies at TreeFireKillFraction of BurnDurationSeconds. The tree's health is " +
+                "what drives the flames: fire starts at the foot and climbs the trunk as the health " +
+                "drops, so a tree with flames in its crown is a tree about to go. Each tick is " +
+                "printed under the debug flag (firedebug) as [TREE-HP]. A tree that is already " +
+                "damaged burns down sooner, and a tree put out early keeps the damage it took. " +
+                "Off: trees burn for the full BurnDurationSeconds on the timer alone, exactly as " +
+                "before, and the flames climb on a clock instead of on health.");
+
+            TreeFireTickInterval = config.Bind(
+                "Trees", "TreeFireTickInterval", 2f,
+                new ConfigDescription(
+                    "Seconds between unseen fire damage ticks on a burning tree or log. Each tick " +
+                    "is one routed message to whichever peer owns the tree, so a shorter interval " +
+                    "costs bandwidth in proportion to how many trees are alight.",
+                    new AcceptableValueRange<float>(0.5f, 30f)));
+
+            TreeFireKillFraction = config.Bind(
+                "Trees", "TreeFireKillFraction", 0.9f,
+                new ConfigDescription(
+                    "Fraction of BurnDurationSeconds at which the unseen damage ticks alone would " +
+                    "kill a full-health tree. Below 1 the health path wins and the burn timer is " +
+                    "only a fallback; at 1 they coincide. Rain shortens the timer but not the " +
+                    "ticks, so a rained-on tree can hit the timer first - it is charred either way.",
+                    new AcceptableValueRange<float>(0.2f, 1f)));
+
+            CharredCollapseDelaySeconds = config.Bind(
+                "Trees", "CharredCollapseDelaySeconds", 3f,
+                new ConfigDescription(
+                    "Seconds a freshly charred tree stands, still glowing, before the " +
+                    "TreeDestructionRate roll decides whether it collapses. Baked into the charred " +
+                    "tree itself, so it survives a save, a restart and the tree changing hands " +
+                    "between peers.",
+                    new AcceptableValueRange<float>(0f, 120f)));
+
+            CharredCoalMin = config.Bind(
+                "Trees", "CharredCoalMin", 1,
+                new ConfigDescription(
+                    "Fewest coal a charred tree yields when it collapses or is chopped down. " +
+                    "Charred wood never drops wood, fine wood, core wood, resin or seeds.",
+                    new AcceptableValueRange<int>(0, 20)));
+
+            CharredCoalMax = config.Bind(
+                "Trees", "CharredCoalMax", 3,
+                new ConfigDescription(
+                    "Most coal a charred tree yields when it collapses or is chopped down.",
+                    new AcceptableValueRange<int>(0, 20)));
+
+            CharredTreeHealthFraction = config.Bind(
+                "Trees", "CharredTreeHealthFraction", 0.35f,
+                new ConfigDescription(
+                    "Health of a standing charred tree as a fraction of its species' full health, " +
+                    "so a burned snag is quicker to clear than a live tree. The same axe tier is " +
+                    "still required.",
+                    new AcceptableValueRange<float>(0.05f, 1f)));
+
+            CharredLogCrumbleSeconds = config.Bind(
+                "Trees", "CharredLogCrumbleSeconds", 20f,
+                new ConfigDescription(
+                    "Seconds after a charred trunk hits the ground before it crumbles to ash and " +
+                    "vanishes (its coal was already dropped when the tree fell). 0 = charred logs " +
+                    "stay in the world until chopped, like any other log. A charred log lying " +
+                    "around is the price of the falling animation being real physics rather than " +
+                    "a puff of smoke; this is how long you pay it.",
+                    new AcceptableValueRange<float>(0f, 600f)));
+
+            CharredEmberGlowSeconds = config.Bind(
+                "Trees", "CharredEmberGlowSeconds", 120f,
+                new ConfigDescription(
+                    "Seconds over which the ember glow in a charred tree's bark cracks fades to " +
+                    "black. Cosmetic; timed from world time so a late-joining player sees the " +
+                    "right stage.",
+                    new AcceptableValueRange<float>(0f, 1800f)));
 
             GroundFirebreaksEnabled = config.Bind(
                 "Ground", "GroundFirebreaksEnabled", true,
