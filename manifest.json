@@ -2,7 +2,7 @@
   "name": "FireFront",
   "version_number": "0.22.1",
   "website_url": "https://github.com/RavenIron-Games/FireFront",
-  "description": "Fire that actually spreads: structure to structure, into the trees, and crawling across open ground. Wind-driven, rain-doused, stopped by dirt paths and water. Real drops, burn scars, tree regrowth, and fires that remember who lit them.",
+  "description": "Fire that actually spreads: structure to structure, into the trees, and crawling across open ground. Wind-driven, rain-doused, stopped by water (and by dirt paths in a hosted game). Real drops, burn scars, tree regrowth, and fires that remember who lit them.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2350"
   ]

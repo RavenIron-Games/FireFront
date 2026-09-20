@@ -13,7 +13,7 @@ mkdir -p $P/BepInEx/plugins/RavenIron-FireFront && cp bin/Release/net472/FireFro
 ~/valheim-testbed/boot-check.sh firefront 2530 420 'FireFront|FIRE|CHARRED'
 ```
 
-Expect `BOOTED`, `Loading [FireFront 0.22.1]`, `All 11 FireFront RPCs registered` and an
+Expect `BOOTED`, `Loading [FireFront 0.22.1]`, `All 12 FireFront RPCs registered` and an
 empty errors section. This proves load-time binding and Harmony patching only: the world
 clock stops on an empty server, and everything visual is client-side.
 
@@ -368,6 +368,136 @@ naming a key this build does not bind must NOT withhold it: that cannot succeed 
 either, and withholding would re-run the migration on every boot forever. `firestatus` reads
 `LastSummary`, which is written from the plan's INTENT before anything runs, so refusals have
 to be folded back into it or the one line an admin reads is confidently wrong.
+
+## 0.21.16 (2026-09-20): the dormant dirt painter, made real
+
+Prompted by a Mists of Avalor write-up (`PATHER-REPAINT.md`, in the owner's Downloads) of how
+that mod paints its road through vanilla's terrain ops. FireFront already had the same idea
+sitting behind `UseVanillaDirtPaint` (off by default, "test-world only"). Against the shipping
+1.0.15 assembly it had three defects, and the first repair of them - "every client paints what it
+sees" - had three more, found by a 31-agent Opus review before it was ever run. What shipped:
+
+**The three original defects.**
+
+- **Headless-dead.** `LeaveScorchMark` queued cells on the simulating machine; on a dedicated
+  server `Heightmap.FindHeightmap` / `TerrainComp.FindTerrainCompiler` scan static instance
+  lists, and the server keeps real zones only around its own reference position, which never
+  leaves world origin - everywhere a player is it makes ghost zones (`CreateGhostZones`
+  instantiates a zone only to generate it and destroys it in the same call). So wherever a fire
+  burns, every flush dropped everything at Debug level.
+- **No compiler for pristine ground.** `FindTerrainCompiler` returns null for a zone nobody has
+  hoed. Now `Heightmap.GetAndCreateTerrainCompiler`, which is what vanilla's `TerrainOp.Awake`
+  uses.
+- **No regenerate.** The batch called `Save(false)` only. Vanilla's `DoOperation` is
+  `Save(paintOnly)` + `m_hmap.Poke(1, paintOnly)` + `ClutterSystem.ResetGrass`; the painter's
+  own ZDO revision is already current after Save, so it never saw its own paint and the grass
+  stayed.
+
+**The three the review caught in the first repair, and the design that answers them.**
+
+- Every client painting the cells it saw expire meant N peers writing the same zone. Two peers
+  creating a compiler for a pristine zone in the same second destroy each other's
+  (`TerrainComp.Awake` removes the OTHER compiler it finds, on both machines), and the next
+  flush creates two more. And `ClaimOwnership` on a compiler another peer holds is a lost
+  update: `Save` republishes the whole zone (heights too), ZDOMan keeps whichever revision lands
+  first, and the loser's `m_lastDataRevision` already matches so it never reloads.
+  **Now: exactly one painter per ZONE, elected by the server** (`FireManager.AssignPendingPaint`,
+  once a second): the compiler's owner if the zone has one (the ZDO from
+  `ValheimBridge.FindTerrainCompilerZdo`, then `ZDO.GetOwner()`; a headless server has the ZDO,
+  just no instance) and the owner is connected and in reach; else the peer elected for that zone
+  in the last 15 s (the window between a painter creating a compiler and its ZDO reaching the
+  server); else the nearest ready peer in reach, who becomes that zone's painter for the window.
+  "In reach" is standing in the zone or one next to it, which every simulation-distance setting
+  keeps loaded - except that a zone with NO compiler needs its painter standing IN it, because
+  `ZNetScene.IsAreaReady` (the create gate) checks the 3x3 around the zone, which at the lowest
+  simulation distance is only instantiated around the zone the player stands in (fourth review
+  round, 14 agents, the one finding). Delivered by a new routed RPC, `FireFront_PaintAssign`, server to ONE peer,
+  radius + world positions + a per-cell MayCreate; a listen host is a candidate like any peer and
+  queues for itself. The painter never takes a compiler from a live owner (`HasOwner` and not
+  ours: drop); an unowned one in a zone it was elected for it claims, as vanilla's own `Awake`
+  does.
+- Calling `PaintCleared` directly skips `InternalDoOperation`'s stamp of `m_operations`,
+  `m_lastOpPoint`, `m_lastOpRadius`. `CheckLoad` on every OTHER peer resets grass over that
+  point and radius only when `m_operations` advanced by exactly one; otherwise it rebuilds the
+  whole zone's clutter, per peer, per flush. The batch now stamps one op covering itself.
+- `PaintCleared` reads each vertex through `getMask`, which returns the heightmap's last-BAKED
+  texture unless `m_doLateUpdate == 1`, in which case it reads the compiler's accumulating mask.
+  A batch that pokes only after painting has its second disc overwrite its first from stale
+  pixels. The batch pokes BEFORE painting; still one regenerate.
+
+A second review round (25 agents) on that design found four more, all fixed:
+
+- **A local "no compiler here" is not "no compiler".** A zone's real compiler ZDO can exist and
+  not be instantiated on this client yet (ZNetScene creates instances over several frames after a
+  zone's heightmap is up). Creating one then makes a duplicate, and `TerrainComp.Awake` on any
+  machine that HAS the real one instantiated destroys the OTHER through `ZNetScene.Destroy` - the
+  real compiler, with every hoe mark in that zone, for everyone. So the server, which sees every
+  ZDO, sends a per-cell `MayCreate` that is true only when it finds no `_TerrainCompiler` ZDO in
+  the zone, and the painter creates only with it and only when `ZNetScene.IsAreaReady(pos)` says
+  every ZDO of the zone has an instance here. Otherwise it paints an existing instance or drops.
+- **An orphaned owner blocked a zone for good.** A compiler owned by a peer that left (or by the
+  server itself) is never a candidate, so the painter refused it forever. The server releases
+  such an owner (`ZDO.SetOwner(0)`, what `ReleaseNearbyZDOS` does within 2 s when a peer's
+  active area holds the zone - a burning zone is often in the loaded ring outside one).
+- **The sticky window never expired.** It was re-armed on every pass, including the pass it
+  supplied the painter for, and had no distance test, so a painter that could not reach the zone
+  kept it. Now armed only on a fresh nearest-peer election, and reused only while that peer is
+  still within reach.
+- **Cell indices on the wire.** The painter rebuilt positions with its OWN `GroundCellSize`; a
+  mismatch would have laid permanent dirt at the wrong coordinates. World positions now.
+- Also: the op stamp is rolled back when `Save(paintOnly)` short-circuits (else `m_operations`
+  drifts ahead of the ZDO and every later batch lands remote peers in the whole-zone clutter
+  branch); and `_groundPainted` is a counter for `firestatus`, not a gate.
+
+A third round (16 agents) found three more, all fixed:
+
+- **Election was per cell; what must be unique is the writer of a zone.** Two cells of one
+  pristine zone could go to two peers in one pass, both with MayCreate (a zone's diagonal is
+  89 m; reach was a 96 m radius), and both would create - the duplicate-compiler destroy again.
+  Election is per zone now, and reach is zone adjacency, which is also what guarantees the
+  painter has the heightmap loaded.
+- **The owner branch had no reach test.** An owner that teleported away keeps a far compiler for
+  good (`ReleaseNearbyZDOS` only scans around each peer's current position), and it was
+  re-elected every pass. An owner out of reach is released like a departed one.
+- **The neighbour spill could claim.** A disc crossing into the next zone claimed that zone's
+  compiler if unowned - while that zone's own elected painter might be claiming it the same
+  second. The spill now paints only a compiler this machine already owns; otherwise the sliver
+  is dropped.
+
+Load-bearing facts, all from the shipping DLL. The publicized copy has the same method bodies;
+what it gets wrong is visibility, which is why the private/public list is the part that had to
+come from the real file: `m_hmap`, `m_nview`, `m_operations`, `m_lastOpPoint`, `m_lastOpRadius`,
+`PaintCleared`, `Save` private; `FindTerrainCompiler`, `FindHeightmap`,
+`GetAndCreateTerrainCompiler`, `IsOwner`, `HasOwner`, `ClaimOwnership`, `Poke`, `ResetGrass`,
+`ZNet.GetPeers`, `ZNetPeer.m_uid/GetRefPos/IsReady`, `ZDO.GetOwner/GetPrefab` public.
+`PaintCleared` preserves alpha (`color2.a = a2`), so `PaintType.ClearVegetation` does nothing
+different from Reset through it. Clutter suppresses grass where any mask channel > 0.5
+(`Heightmap.IsCleared`). `FindSectorObjects` with `SimulationDistance(0, 0, true)` walks exactly
+one sector.
+
+Known and accepted: an owner that walks away keeps the compiler for up to 2 s
+(`ReleaseNearbyZDOS`), during which cells elected to it may find its heightmap unloaded and be
+dropped. A player hoeing a pristine zone in the same second the elected painter creates its
+compiler is vanilla's own two-hoes race, narrowed by `IsAreaReady`, not closed. The dirt is
+permanent; `ScorchMarkLifetimeSeconds` applies to the decal only. `FireFront_PaintAssign`'s
+sender check is a filter, not an authenticator (same as every routed RPC here): a forged message
+is bounded to 4096 cells at a clamped radius, but nothing bounds how many arrive, and it can
+make this client create and claim a compiler for any pristine zone it has loaded.
+
+**Found in passing, NOT fixed: dirt paths are not firebreaks on a dedicated server, except in
+the ring of real zones it keeps around world origin.** `ValheimBridge.IsClearedOrCultivated` goes
+through `Heightmap.FindHeightmap`, which is null anywhere a player is. The README now says so
+(near the world's centre only, on a dedicated server; water everywhere). The fix is
+to read the zone's `_TerrainCompiler` ZDO (`ZDOVars.s_TCData`, compressed ZPackage: version, op
+count, last op point/radius, per-vertex height deltas, then per-vertex paint mask) and test the
+vertex under the sample point, cached per zone by DataRevision. Own release.
+
+Test: `fireset dirtpaint true` (server setting; the command forwards from a client),
+`fireset scorchmarks false` on the client to see the dirt alone, light a ground fire, walk it.
+Expect on the client: `[IGNITE-TRACE] All 11 FireFront RPCs registered`, then nothing about
+paint unless a cell could not be laid (`Paint flush:` Debug lines). Expect on the server:
+`Paint assign:` Debug lines only for zones no player was in or next to. Not yet run in play as
+of this note.
 
 ## 0.21.10 (2026-09-19): the three left open by 0.21.9
 

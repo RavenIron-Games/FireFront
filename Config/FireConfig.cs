@@ -676,27 +676,27 @@ namespace FireFront.Config
             ScorchMarkLifetimeSeconds = config.Bind(
                 "Visuals", "ScorchMarkLifetimeSeconds", 300f,
                 new ConfigDescription(
-                    "How long a burn-scar decal stays before disappearing. Ignored if UseVanillaDirtPaint is true — real terrain paint is permanent, not timed.",
+                    "How long a burn-scar decal stays before disappearing. Real dirt laid by UseVanillaDirtPaint is separate and permanent.",
                     new AcceptableValueRange<float>(10f, 3600f)));
 
             UseVanillaDirtPaint = config.Bind(
                 "Visuals", "UseVanillaDirtPaint", false,
-                "Paint REAL bare dirt via vanilla's own terrain system (PaintType.Dirt, the same " +
-                "mechanism the Cultivator uses) instead of the procedural decal. GENUINELY HIGHER " +
-                "RISK than every other visual system in this mod: TerrainComp is networked and " +
-                "writes to persistent per-zone terrain data that gets SAVED TO DISK, unlike " +
-                "anything else here, which is purely runtime and reload-safe. Test-world use only " +
-                "until proven safe. When enabled, this replaces (not adds to) the scorch decal, " +
-                "and the painted dirt is permanent — it does not respect ScorchMarkLifetimeSeconds.");
+                "Also lay REAL bare dirt where ground fire burned out, through vanilla's own terrain " +
+                "paint (PaintType.Dirt, what the Hoe lays). Unlike the decal it is part of the " +
+                "terrain: it follows the slope, joins up across cells, keeps the grass off, is seen " +
+                "by every player and is SAVED WITH THE WORLD - permanently, like a hoe mark; " +
+                "nothing in this mod removes it. Server-side: the server hands each burnt patch to " +
+                "one player's game to lay (whoever holds that ground, or the nearest), so set this " +
+                "where the simulation runs - `fireset dirtpaint true` forwards there. The decal " +
+                "still draws on top as instant feedback; set ScorchMarksEnabled false to see the " +
+                "dirt alone. Off by default because it changes the world on disk.");
 
             DirtPaintRadius = config.Bind(
                 "Visuals", "DirtPaintRadius", 2f,
                 new ConfigDescription(
-                    "Radius (meters) of real dirt painted each time a ground cell burns out and " +
-                    "triggers TryPaintScorchedDirt, if UseVanillaDirtPaint is on. This is a direct " +
-                    "terrain write (TerrainComp.PaintCleared) — no new object is spawned, so a " +
-                    "larger radius covers more ground per call at zero extra instance cost, unlike " +
-                    "the old per-cell piece-spawning approach.",
+                    "Radius in metres of the dirt disc laid per burnt-out ground cell when " +
+                    "UseVanillaDirtPaint is on. Server-side, sent to the painter with each batch. " +
+                    "Cells sit GroundCellSize (1 m) apart, so 1.5 and up joins them into one scar.",
                     new AcceptableValueRange<float>(0.5f, 8f)));
 
             FireRampEnabled = config.Bind(
