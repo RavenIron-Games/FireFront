@@ -12,7 +12,7 @@ namespace FireFront
     {
         public const string GUID = "com.raveniron.firefront";
         public const string NAME = "FireFront";
-        public const string VERSION = "0.21.15";
+        public const string VERSION = "0.21.16";
 
         public static Plugin Instance { get; private set; }
 
