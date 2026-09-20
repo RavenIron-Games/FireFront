@@ -2209,7 +2209,8 @@ namespace FireFront.Utils
         }
 
         private static Texture2D _cachedScorchTexture;
-        private const float ScorchDrawChance = 0.4f;
+        private const float ScorchDrawChance = 0.5f;
+        private static int _scorchDrawn;
 
         /// <summary>Dark, soft-edged radial texture for burn scars — same approach as
         /// the fire particle texture, just dark instead of bright.</summary>
@@ -2237,9 +2238,13 @@ namespace FireFront.Utils
             float half = size / 2f;
             float seed = Random.Range(0f, 1000f);
 
-            // Dark umber, not soot-grey: burnt earth. The mottle keeps it from reading as paint.
-            var dirtDark = new Color(0.10f, 0.065f, 0.035f);
-            var dirtLight = new Color(0.22f, 0.15f, 0.085f);
+            // Soot, not umber. A dark-brown 30% darkening does not register on a Black Forest
+            // floor that is already that colour - the first pass of this drew nothing anyone
+            // could see. What reads as burnt ground is near-black with a soft edge and a few
+            // pale ash flecks. STRAIGHT alpha: Sprites/Default does `c.rgb *= c.a` in its own
+            // fragment shader, so premultiplying here on top of that squared the colour away.
+            var soot = new Color(0.035f, 0.03f, 0.025f);
+            var ash = new Color(0.30f, 0.29f, 0.27f);
 
             for (int y = 0; y < size; y++)
             {
@@ -2253,10 +2258,11 @@ namespace FireFront.Utils
                     float radius = half * (0.72f + 0.56f * warp);          // ~0.58..0.86 of the quad
                     float k = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(1f - d.magnitude / radius));
                     float mottle = Mathf.PerlinNoise(x / 7f + seed, y / 7f + seed);
-                    k *= 0.65f * (0.6f + 0.4f * mottle);                     // peak ~0.65: the ground still shows through
-                    Color dirt = Color.Lerp(dirtDark, dirtLight, mottle);
-                    // PREMULTIPLIED for One OneMinusSrcAlpha: rgb carries its own alpha.
-                    tex.SetPixel(x, y, new Color(dirt.r * k, dirt.g * k, dirt.b * k, k));
+                    float alpha = k * (0.88f - 0.22f * mottle);              // 0.66..0.88 at the centre, feathering to 0
+                    // Ash flecks: sparse pale speckle, only where the soot is solid.
+                    float fleck = Mathf.Clamp01((Mathf.PerlinNoise(x / 2.5f + seed * 2f, y / 2.5f + seed * 2f) - 0.62f) * 4f) * k;
+                    Color c = Color.Lerp(soot, ash, fleck);
+                    tex.SetPixel(x, y, new Color(c.r, c.g, c.b, alpha));
                 }
             }
             tex.Apply(true);
@@ -2290,14 +2296,16 @@ namespace FireFront.Utils
             // Lay it on the ground, not on the horizontal. The old quad was always flat and
             // cut into any hill; on the test slope that was the second half of the grid look.
             Vector3 normal = Vector3.up;
-            if (Physics.Raycast(position + Vector3.up * 3f, Vector3.down, out RaycastHit hit, 6f, TerrainLayerMask))
+            float syncedY = position.y;
+            bool onTerrain = Physics.Raycast(position + Vector3.up * 3f, Vector3.down, out RaycastHit hit, 6f, TerrainLayerMask);
+            if (onTerrain)
             {
                 normal = hit.normal;
                 position.y = hit.point.y;
             }
 
             var quad = new GameObject("FireFrontScorchMark");
-            quad.transform.position = position + normal * 0.03f; // avoid z-fighting with terrain
+            quad.transform.position = position + normal * 0.05f; // above the z-fight, below the grass
             quad.transform.rotation = Quaternion.FromToRotation(Vector3.up, normal) * Quaternion.Euler(90f, Random.Range(0f, 360f), 0f);
             quad.transform.localScale = new Vector3(size, size, 1f);
 
@@ -2308,6 +2316,17 @@ namespace FireFront.Utils
 
             Material shared = GetOrCreateScorchMaterial();
             if (shared != null) renderer.sharedMaterial = shared;
+
+            // Where every mark lands, for the first few and then one in fifty. The first pass
+            // of this decal produced "no scorch marks at all" in play and nothing in the log
+            // to say whether they were absent or invisible; that distinction is now free.
+            _scorchDrawn++;
+            if (_scorchDrawn <= 6 || _scorchDrawn % 50 == 0)
+            {
+                FireLogger.Info($"[SCORCH] #{_scorchDrawn} at {quad.transform.position:F1} size {size:F1} " +
+                                $"terrainHit={onTerrain} (synced y {syncedY:F1}) normal {normal:F2} " +
+                                $"material={(shared != null ? shared.shader.name : "NONE")}");
+            }
 
             Object.Destroy(quad, lifetimeSeconds);
         }
