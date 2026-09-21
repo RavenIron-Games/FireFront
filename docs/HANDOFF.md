@@ -3,8 +3,13 @@
 **Resume point.** The `wubarrk` branch carries 0.22.1 on top of 0.22.0, compiling (0 errors)
 and booted headless on the real `l-1.0.15` Linux dedicated server (every patch applied, 0
 exceptions). NomadicWar play-tested `720f520` clean (four sessions, 0 exceptions); the six
-look items from that review are closed on top of it (CHANGELOG, last 0.22.1 entry) and NOT
-yet seen in game - the scorch decal in particular has never drawn until this build. Read the
+look items from that review are closed on top of it (CHANGELOG, last 0.22.1 entry). **Seen in
+game 2026-09-20 evening** (owner, dedicated test rig, both sides on the 7cbfe09 build = main
+b8c9ee5): the `[SHADER-DIAG] scorch decal material` read-back matched the expected line word
+for word (blend 10/5, alphaChannel 0, skyMask 0, softParticles 0, cameraFadeFactor 1000,
+fejdFog 1), the first five `[SCORCH] mark` lines were 5/5 terrain hits with 8-19 cm lift on
+a 2-7 degree slope, the owner saw the blots on the ground and liked the fire and the charred
+trees; 0 exceptions either side. Tagged v0.22.1 on the commit that records this. Read the
 0.22.1 and 0.22.0 CHANGELOG entries first.
 
 **Headless boot check on this box (one command, ~40 s):** the Steam-installed Linux dedicated
