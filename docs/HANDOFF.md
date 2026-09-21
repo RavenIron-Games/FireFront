@@ -1,3 +1,208 @@
+# FireFront — 0.22.1 (2026-09-20): late-join fire sync, real charred wood, post-fire smoke
+
+**Resume point.** The `wubarrk` branch carries 0.22.1 on top of 0.22.0, compiling (0 errors)
+and booted headless on the real `l-1.0.15` Linux dedicated server (every patch applied, 0
+exceptions). NomadicWar play-tested `720f520` clean (four sessions, 0 exceptions); the six
+look items from that review are closed on top of it (CHANGELOG, last 0.22.1 entry) and NOT
+yet seen in game - the scorch decal in particular has never drawn until this build. Read the
+0.22.1 and 0.22.0 CHANGELOG entries first.
+
+**Headless boot check on this box (one command, ~40 s):** the Steam-installed Linux dedicated
+server plus `~/valheim-testbed/boot-check.sh` (libs-Tools' `DEDICATED-SERVER-TESTBED` lineage):
+
+```
+P=~/valheim-testbed/profiles/firefront; rm -rf $P; cp -r ~/valheim-testbed/base-profile $P
+mkdir -p $P/BepInEx/plugins/RavenIron-FireFront && cp bin/Release/net472/FireFront.dll $P/BepInEx/plugins/RavenIron-FireFront/
+~/valheim-testbed/boot-check.sh firefront 2530 420 'FireFront|FIRE|CHARRED'
+```
+
+Expect `BOOTED`, `Loading [FireFront 0.22.1]`, `All 12 FireFront RPCs registered` and an
+empty errors section. This proves load-time binding and Harmony patching only: the world
+clock stops on an empty server, and everything visual is client-side.
+
+**0.22.1 client checks, on top of the 0.22.0 list below:**
+
+- `firedebug` on, char a tree: expect `[CHARRED] charred albedo built from <bark texture>`
+  once per species and `[CHARRED] ember masks built: 4x512² at coverage 0.20` once. If the
+  first line is a `Warn` about reading the bark back, the tint look is in use (still fine,
+  just flatter). `firedumptex` then writes the PNGs under `BepInEx/config/FireFront-textures/`
+  — compare with `libs-Tools/CSharp/TexturePreview` output (same generator, same seed).
+- The whole-tree pink glow from NomadicWar's 17:01 run is fixed at the mask (premultiplied,
+  alpha 255, always bound, atlas needles excluded, distance fade) - if any trunk still glows
+  end to end, `firedumptex` and look at `FireFront_EmberMask_0.png`: it must be BLACK between
+  the pockets. Burning pines must show embers on the bark only, never the canopy.
+- Scorch marks: `[SCORCH] mark 1..5` lines with `terrain-hits=5/5 lift=0.04m` (more lift on
+  a bumpy patch; a Debug `too rough ... mark dropped` line is a hollow, not a bug) and
+  `shader=Custom/Particle (Unlit) blend=10/5`; on the ground, soft dark blots 1.6-2.2 m
+  across with no grid. THIS is the first build in which the multiply decal can draw at all -
+  0.22.1 as reviewed multiplied the ground by white (the shader outputs vertex colour, not
+  the texture; CHANGELOG, last 0.22.1 entry) - so one blot on flat ground is the check. The
+  `[SHADER-DIAG] scorch decal material` line must read `blend 10/5 ... alphaChannel 0, cull
+  0, skyMask 0, softParticles 0 (SOFTPARTICLES_ON off, nearFade -1000, fadeFactor 1),
+  cameraFadeFactor 1000, fejdFog 1`. If `blend=n/a` the alpha-disc fallback is in use (no
+  ember donor found). Blots must stay visible under a canopy and while walking right up to
+  them - those were the two donor fades that would have hidden them - and in mist at 50 m
+  they must fade into the grey like everything else, not sit on it as black blobs (that is
+  what the black vertices + `_FejdFog` are for).
+- Charred pine/fir (the atlas species): embers on the bark only, never on the bare branch
+  cards of the dead atlas; then `fireset charredembercover 0.6` mid-glow: after ~10 s of the
+  new masks existing, `firestatus` should show `retired masks 0` and a Debug `[CHARRED] freed
+  retired mask set generation N (M textures)`, with NO tree lighting up whole at that moment
+  (that is the destroyed-texture-samples-white failure the reaper is argued against).
+- Walk away from a burning tree and from a charred one side by side: both glows fade on the
+  same ramp between 30 and 90 m; nothing steps at 70 m any more except the far emitters.
+- The charred trunk should be black plates with a few glowing pockets, not a lit lattice;
+  `fireset charredember 1` makes it the Ashlands strength, `fireset charredembercover 0.6`
+  spreads the pockets (masks rebuild in a few ms; watch for `ember masks built`).
+- Thin smoke off the trunk and off a fallen charred log for 90 s, thinning after 60 s;
+  `fireset charredsmokeseconds 0` stops new ones.
+- Late join: light a few things, connect a SECOND client afterwards; its log should show
+  `[SYNC-DIAG] object snapshot from <server>: N burning, N new to this client` and the fires
+  should be drawn (smouldering ones already as embers). Without a second machine, disconnect
+  and reconnect the same client mid-fire.
+
+**Shared tooling this release added to libs-Tools** (the user's standing rule: tools and
+methods live there): `SharedMedia/ProceduralTextures.cs` (the generator; FireFront's
+`Utils/ProceduralTextures.cs` is a byte-identical vendored copy — change both),
+`CSharp/TexturePreview/` (offline harness: `~/.dotnet/dotnet run -- --tex <textures> --out
+<dir>`), `UNITY-ASSET-TOOLS/` (the UnityPy scripts that read the bundles), `1.0/ASSET-DATA/`
+(extracted textures, shader source, material dumps, the 2026-09-20 research reports) and
+`RENDERING-AND-VEGETATION-SHADER-FACTS.md`.
+
+---
+
+# FireFront — 0.22.0 (2026-09-20): tree fire rework, charred trees, rebuilt VFX
+
+**Reviewed 2026-09-20 evening (0.22.1, 66 Opus agents) and first run - five things fixed in
+place, the look handed back.** Fixed here: (1) `CharredTextures` built the 512² crack field and
+all four 512² ember masks synchronously, reached from `FireVFXController.Update` on the first
+bark tick of the first burning tree - several hundred milliseconds of hashing on the main
+thread. Fields, masks and the atlas erosion now build on worker threads (`Task.Run`; the
+generator touches no Unity object), one variant at a time on demand; `EmberMask` /
+`EmberMaskForAtlas` return null until ready, which every caller already treats as black, and
+`OnEmberMasksRebuilt` re-points the clones when variant 0 lands. The GPU read-backs stay on
+the main thread. The charred albedo/normal at charring time are still synchronous (once per
+species, not on the ignition frame) - a follow-up if it shows. A tiered review of this fix
+(Haiku map, Sonnet, Opus) found the one hole: a tree that streams in already charred skins
+on its spawn frame with no local burn first, so `CharredAlbedoFor` joined the field build
+synchronously. `CharredTextures.Prewarm()` now starts it from `Plugin.Awake` on any client
+(`GraphicsAvailable`), a few MB once per process, so the build is done before a world loads. (2) `HandleObjectFireSync` read
+the burn age off the wire unchecked (a NaN poisons the smoulder skip test and the VFX
+progress) and stored it as an age, stale by however long the burner took to instantiate; now
+clamped and stored as an ignition instant. (3) The scorch thinning hashed the floored metre,
+not the cell. (4) Found in play, not on review: Unity logged `Particle Velocity curves must
+all be in the same mode` every frame a flame was alive - 80,000 lines in eight minutes,
+each a BepInEx console + disk write. Shuriken requires a velocity (and force) module's
+x/y/z `MinMaxCurve`s to share one mode; `BuildFlames` set y to two constants with x/z left
+constant, and `SetVelocity` assigned bare floats (implicit Constant) on every wind change.
+Same shape in `CharredSmoke` and in `ValheimBridge.BuildCrownFlames` (main, since 0.21.2).
+Every site writes all three in one mode now; `SetVelocity` reads `vel.y.mode` first.
+(5) Also found in play: the client spawned a scorch decal the moment the sync stream said a
+cell went out, wherever that cell was and even during the loading screen - both sessions
+logged five of five marks with `terrain-hit=False`, the second set 500 m from the player
+before any heightmap existed. `QueueScorchMark` / `DrainPendingScorch` (FireManager, client
+path of Update) hold the mark until `ZoneSystem.IsZoneLoaded(pos)` and spawn it with the
+lifetime it has left, so the 300 s contract in the config text stays true. A tiered review
+of this fix (Sonnet, Opus) then shaped it: the 42 % keep is applied before queuing
+(`ValheimBridge.ScorchMarkKept`), the drain runs per frame with a scan window (256) and a
+spawn budget (8) so a region that loads at once fills in over seconds, the cap (4000) evicts
+the entry at the cursor (O(1): this runs inside the sync handler), and anything with under
+15 s or half the configured lifetime left is dropped rather than flashed. A second Opus pass
+over that shape added one entry per cell (a cell that re-burns unseen would have spawned
+coincident multiply blots, N deep, in one batch), made the scan bound a single pass rather
+than a re-walk, and made the drain drop everything when marks are switched off while they
+wait. A third pass on that: the cell set became an index (`Dictionary<cell, int>`, kept in
+step through swap-remove), so a cell that re-burns while its mark waits refreshes the entry;
+the floor is stored per entry from its own lifetime, so a runtime `scorchlifetime` change
+cannot wipe the queue; eviction walks its own cursor so a burst at the cap cannot push the
+drain past unchecked entries. A fourth pass then removed the direct-spawn path altogether
+(a sync batch of expiries in the zone the player stands in is the COMMON case, and inline
+spawning was the one-frame burst the budget exists to prevent; a loaded cell now spawns from
+the drain within a frame or two) and rebuilt the probe: the synced height is not a terrain
+height on a dedicated server (every cell inherits the seed object's Y for the whole spread),
+so `SpawnScorchMark` casts from y=6000 down 10 km on the terrain layer, the way
+`ZoneSystem.GetGroundHeight` does, and answers false with no quad when nothing is there.
+`ResetScorchDiagnostics` restarts the five-mark `[SCORCH]` log on reconnect. Accepted, not
+fixed: a cell that re-burns after its mark has already spawned gets a second coincident
+blot for the overlap of their lifetimes (pre-existing; the multiply material squares it),
+and the quad's spin is `Random.Range`, the one property peers do not agree on (radially
+symmetric blot, invisible); `ScorchMarkKept` keys on each machine's own `GroundCellSize`, so
+two clients with different values draw different keep sets (the same key already sizes
+their decals differently; the real fix is a server-to-client config broadcast, see
+`docs/CONFIG-KEY-MAP.md`), a runtime `GroundCellSize` change re-rolls queued cells, and the `IsDedicatedServer`
+gate fails open if its reflection misses (pre-existing, every visual path shares it). Same
+hole exists on `main` since 0.21.15 (the remote-mirror path); `DrainRemoteVfxSpawnQueue` has
+no zone gate either and spawns ground VFX at any synced cell world-wide, capped only by
+`EffectiveGroundVfxMaxConcurrent` - not touched, worth the same treatment.
+Two changelog numbers corrected to the code (32 smoking objects, 10 s retry).
+Handed to Wu'barrk on PR #3, look-side: the blot is 1.5x bigger than the changelog says (both
+callers pass GroundCellSize*1.5 and SpawnScorchMark scales again) and at 42 % keep that is
+~2.7 multiply blots deep everywhere, so burnt ground may go near-black; the multiply material
+inherits the spark donor's tint (needs an in-game look - neutralise `_Color`/`_TintColor`
+explicitly); the charred twin of an atlas species binds the plain mask, not the bark-confined
+one; `SetEmber` drives `_EmissionColor` on slots that never got a mask; the live-burn glow
+steps at 70 m where the charred path fades. Retired mask sets are parked until unload (5.5 MB
+per coverage change; admin action, left alone on purpose - a destroyed texture samples white).
+**Merge with main (0.21.16, dd22ad4) conflicts in six files**, all resolvable: the four
+version/changelog files take 0.22.1 on top with main's manifest `description`; FireManager
+and ValheimBridge both add an RPC in `RegisterFireRpcs` (make it 12 and say `All 12`), and
+main's `LeaveScorchMark` no longer queues paint locally. First play run 2026-09-20 afternoon
+(test rig, both sides on this build): 0 exceptions either side, the 8-object join snapshot
+was sent, five `[SCORCH]` marks logged at join with `terrain-hit=False` (spawned before the
+terrain loaded - inconclusive), and the velocity-mode error above. Tester's client had
+`LowSpecPreset` on, which silently turns off scorch marks, charred smoke, crown sparks,
+haze and shadows (`Effective*` flags are `!LowSpec && ...`), and `[CHARRED]` / snapshot
+arrival lines are Debug level - `fireset lowspec false` and `fireset debug true` on the
+client before judging the look.
+
+**Reviewed 2026-09-20, before any run - two blockers fixed in place.** `LightFlicker.m_baseIntensity`
+(written every frame per burner from `UpdateLight`) and `LightLod.m_baseRange` (from `SetSmoulder`)
+are both `private float` in the shipping assembly and public only in the publicized reference.
+Both writes compiled clean and would have thrown `FieldAccessException` on the first fire on every
+client - and because Mono aborts JIT of the whole method, the first one also killed `UpdateLight`
+before the light could track the front AND escaped `Update()` before the bark-char block, so the
+bark blackening would never have shown. Same trap as `ZNet.m_peers`. Both now go through
+`ValheimBridge.TrySetFlickerBaseIntensity` / `TrySetLightLodBaseRange`; the smoulder path also
+writes `Light.range` directly (lowering the base alone does nothing inside 40 m) and sheds the
+soft shadow via the public `m_shadowLod`. Also in the same commit: the two tick prefixes bind
+`sender`, filter on `IsFromServer` and reject non-finite damage, matching `HandleFireDamage`;
+`ApplyBurnChar` classifies its material slots once at collect time instead of allocating a
+`Material[]` per renderer at 5 Hz per burner. Still NOT run in-game. Step 1 below stands.
+
+**Resume point (superseded by 0.22.1 above; the test list still applies).** Read the 0.22.0
+CHANGELOG entry first; it is the design record. Then do this, in order:
+
+1. **Look at the fire.** Ignite a beech and a pine with `ignite`, `firedebug` on. Expect
+   `[SHADER-DIAG] flame material cloned from fire_pit/flames (1)` (and ember/smoke/glow/haze
+   lines) once, then `[TREE-HP]` lines every 2 s with the health dropping, and the front
+   climbing the trunk on the same schedule. If the flames are white or invisible, the first
+   suspect is `FireFrontTextureGenerator.FlameMaterialIsGradientMapped()` and the custom
+   vertex streams - log `renderer.activeVertexStreamsCount` and the material's shader name.
+2. **Watch a tree die.** At the health floor the tree should swap for a black one with the
+   same silhouette minus leaves (`[CHARRED] ... replaced by charred twin ... fate=`), then 3 s
+   later either fall (`sfx_tree_fall`, crash on landing, coal at the foot, log crumbles 20 s
+   later) or stay. Chop a standing one: damage text shows, it falls the same way, coal only.
+3. **Dedicated server.** The same, on the test server with a client attached. The ticks route
+   to the CLIENT (`routed to owner <id>` in the server log, `owner-side tick` in the client
+   log). The charred swap happens ZDO-only on the server; the client must see the swap.
+   Watch for `ReleaseNearbyZDOS` ownership ping-pong in the tick log lines.
+4. **Config on existing installs**: nothing was renamed or re-defaulted, so no ledger rung
+   was added. `TreeDestructionRate` gained a range and `fireset treedestruction`.
+
+Facts established this session live in the CHANGELOG and in three memory notes
+(`valheim-rendering-facts`, `valheim-tree-lifecycle-facts`, `firefront-no-burnt-tree-prefabs`)
+so the next session does not re-derive them: no burnt tree prefab exists; trees are
+fire-Immune; `RPC_Damage` damage text is unconditional; the server is not the tree's owner
+on a dedicated server; `Shader.Find` misses bundle shaders; normal maps are AG-packed.
+
+**Left out in 0.22.0, closed in 0.22.1:** a late-joining client learned about object fires
+only through the `FireEvent` RPC. 0.22.1 answers the join-time snapshot request with the
+object list (`FireFront_ObjectFireSync`) rather than a ZDO flag: a server-written flag on a
+client-owned ZDO can be discarded by the DataRevision race (ITEMDROP-OWNERSHIP-AND-PICKUP-
+SYNC-FACTS.md §6) and structures have no owner-side tick to write it from.
+
+---
+
 # FireFront — addendum from the Ragnarok's Wrath session, 2026-09-18
 
 **Scope note: this section is NARROW on purpose.** It was written by a session working in
@@ -311,8 +516,11 @@ Test: `fireset dirtpaint true` (server setting; the command forwards from a clie
 `fireset scorchmarks false` on the client to see the dirt alone, light a ground fire, walk it.
 Expect on the client: `[IGNITE-TRACE] All 11 FireFront RPCs registered`, then nothing about
 paint unless a cell could not be laid (`Paint flush:` Debug lines). Expect on the server:
-`Paint assign:` Debug lines only for zones no player was in or next to. Not yet run in play as
-of this note.
+`Paint assign:` Debug lines only for zones no player was in or next to. (On the merged branch
+the boot line says `All 12`.) **Run in play 2026-09-20 evening** on the merged build (wubarrk
+`de4ca34`, dedicated test rig): the owner turned it on and reported it works - the first real
+dirt under a fire on a dedicated server. Earlier that day, on the pre-merge build, every flush
+dropped, which is the old server-side path and was expected.
 
 ## 0.21.10 (2026-09-19): the three left open by 0.21.9
 

@@ -12,7 +12,7 @@ namespace FireFront
     {
         public const string GUID = "com.raveniron.firefront";
         public const string NAME = "FireFront";
-        public const string VERSION = "0.21.16";
+        public const string VERSION = "0.22.1";
 
         public static Plugin Instance { get; private set; }
 
@@ -32,6 +32,12 @@ namespace FireFront
             // FireManager lives on the plugin GameObject and persists across scenes.
             gameObject.AddComponent<FireManager>();
 
+            // A tree that streams in already charred skins on its spawn frame and would join the
+            // char field build synchronously (review of the async fix, 2026-09-20). On a client
+            // the build starts here, on a worker thread, and is long done before a world loads.
+            // Headless there is no graphics device and nothing to skin, so nothing starts.
+            if (FireVFXController.GraphicsAvailable) CharredTextures.Prewarm();
+
             _harmony = new Harmony(GUID);
             _harmony.PatchAll();
 
@@ -41,6 +47,7 @@ namespace FireFront
         private void OnDestroy()
         {
             _harmony?.UnpatchSelf();
+            CharredTreeSkin.ReleaseAll();
         }
     }
 }

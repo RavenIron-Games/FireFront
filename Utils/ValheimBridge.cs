@@ -361,6 +361,7 @@ namespace FireFront.Utils
                 if (zdo == null) continue;
                 if (!kinds.TryGetValue(zdo.GetPrefab(), out bool isTreeOrLog)) continue;
                 if (isTreeOrLog && !includeTreesAndLogs) continue;
+                if (isTreeOrLog && FireFront.Fire.CharredTreeLifecycle.IsCharred(zdo)) continue; // spent fuel
                 if (!isTreeOrLog && !includePlayerBuildings && zdo.GetLong(CreatorZdoHash, 0L) != 0L) continue;
 
                 Vector3 pos = zdo.GetPosition();
@@ -381,6 +382,24 @@ namespace FireFront.Utils
         /// recreate — this is the only reliable way to tell them apart.
         /// </summary>
         public static bool ZdoExists(ZDOID id) => ZDOMan.instance?.GetZDO(id) != null;
+
+        /// <summary>
+        /// The burnable Component of a ZDOID's LOCAL instance, or null — never creates one and
+        /// never touches ownership, unlike <see cref="ComponentFromZdoid"/>. This is the lookup
+        /// for anything cosmetic on a client: a fire drawn on a tree must not steal the tree.
+        /// </summary>
+        public static Component InstanceComponentOf(ZDOID id)
+        {
+            ZNetScene scene = ZNetScene.instance;
+            if (scene == null || id == ZDOID.None) return null;
+            GameObject go = scene.FindInstance(id);
+            if (go == null) return null;
+            Component c = go.GetComponent<WearNTear>();
+            if (c != null) return c;
+            c = go.GetComponent<TreeBase>();
+            if (c != null) return c;
+            return go.GetComponent<TreeLog>();
+        }
 
         public static Component ComponentFromZdoid(ZDOID id)
         {
@@ -475,7 +494,10 @@ namespace FireFront.Utils
                     return BurnableField != null && (bool)BurnableField.GetValue(target);
                 case BurnKind.Tree:
                 case BurnKind.Log:
-                    return FireFront.Config.FireConfig.BurnTreesAndLogs.Value;
+                    if (!FireFront.Config.FireConfig.BurnTreesAndLogs.Value) return false;
+                    // Charred wood is spent fuel: a burned snag or a fallen charred trunk never
+                    // catches again, however hard the fire around it burns.
+                    return !FireFront.Fire.CharredTreeLifecycle.IsCharred(target.GetComponent<ZNetView>());
                 default:
                     return false;
             }
@@ -553,6 +575,11 @@ namespace FireFront.Utils
                 }
 
                 case BurnKind.Tree:
+                    // 0.22.0: the fire no longer kills trees through here — a burned tree is
+                    // charred in place (CharredTreeLifecycle) and never felled with real wood.
+                    // This branch remains for the dev commands and the last-resort path when
+                    // charring throws, and still does what it did: vanilla felling.
+                    //
                     // 0.2.3 used ZNetScene.Destroy(gameObject) here directly, which
                     // does NOT properly deregister the object from ZNetScene's
                     // internal near/distant tracking lists — it left a dangling
@@ -2134,6 +2161,65 @@ namespace FireFront.Utils
             return result is float f ? f : (float?)null;
         }
 
+        // --- Vanilla light helpers: LightFlicker, LightLod ---
+        // Both components expose their tunables as public fields, which is exactly how these
+        // two got missed: the ONE field on each that matters for driving the light at runtime
+        // is private. LightFlicker captures m_baseIntensity in Awake and multiplies it into the
+        // Light every update, so a flickering light's brightness can only be changed through
+        // it. LightLod captures m_baseRange the same way and ramps the Light's range back up to
+        // it every second. Both are `private float` in the shipping assembly (ilspycmd,
+        // 2026-09-20) and public only in the publicized reference; direct writes compiled clean
+        // and threw FieldAccessException on every frame of every fire, on every client.
+        //
+        // The flicker base is written per frame per burning object, so it is a Harmony
+        // FieldRef (one delegate, then a plain field store) rather than FieldInfo.SetValue,
+        // which boxes a float per call.
+        private static readonly HarmonyLib.AccessTools.FieldRef<LightFlicker, float> FlickerBaseIntensityRef =
+            ResolveFlickerBaseIntensityRef();
+        private static readonly FieldInfo LightLodBaseRangeField = typeof(LightLod).GetField("m_baseRange", AnyInstance);
+        private static bool _flickerRefFailureLogged;
+
+        private static HarmonyLib.AccessTools.FieldRef<LightFlicker, float> ResolveFlickerBaseIntensityRef()
+        {
+            try { return HarmonyLib.AccessTools.FieldRefAccess<LightFlicker, float>("m_baseIntensity"); }
+            catch (System.Exception) { return null; }
+        }
+
+        /// <summary>
+        /// Sets the base brightness LightFlicker multiplies into its Light. Returns false if the
+        /// field could not be resolved, so the caller can write Light.intensity instead and at
+        /// least have a light - LightFlicker will then hold it at its own captured base.
+        /// </summary>
+        public static bool TrySetFlickerBaseIntensity(LightFlicker flicker, float value)
+        {
+            if (flicker == null) return false;
+            if (FlickerBaseIntensityRef == null)
+            {
+                if (!_flickerRefFailureLogged)
+                {
+                    _flickerRefFailureLogged = true;
+                    FireLogger.Warn("LightFlicker.m_baseIntensity could not be resolved, so fire lights flicker at a " +
+                                    "fixed brightness instead of swelling with the burn. Everything else is unaffected.");
+                }
+                return false;
+            }
+            FlickerBaseIntensityRef(flicker) = value;
+            return true;
+        }
+
+        /// <summary>
+        /// Sets the range LightLod ramps its Light back up to. Returns false if unresolved.
+        /// Set Light.range as well: lowering the base does NOT lower a range that is already at
+        /// full, because LightLod's ramp-up only runs while range is below the base and its
+        /// ramp-down only runs beyond m_lightDistance. Inside 40 m, the base alone changes nothing.
+        /// </summary>
+        public static bool TrySetLightLodBaseRange(LightLod lod, float range)
+        {
+            if (lod == null || LightLodBaseRangeField == null) return false;
+            LightLodBaseRangeField.SetValue(lod, range);
+            return true;
+        }
+
         // --- Player feedback messages ---
         private static readonly MethodInfo PlayerMessageMethod =
             // 1.0.7 appended `bool log = false`, which changes the signature even though it
@@ -2357,36 +2443,183 @@ namespace FireFront.Utils
         }
 
         /// <summary>
-        /// Spawns a flat, dark decal on the ground — a burn scar left behind
-        /// after ground fire passes through or gets extinguished. Purely
-        /// cosmetic and completely fire-and-forget: self-destructs after
-        /// lifetimeSeconds via Unity's own delayed Destroy overload, so unlike
-        /// the VFX/damage zones there's no tracking dictionary or cleanup path
-        /// needed on our side at all.
+        /// True when the zone under <paramref name="pos"/> is instantiated in this process, so a
+        /// terrain collider exists there to probe. On a dedicated server that is only the ring
+        /// around the world origin; on a client it is the ring around the player.
         /// </summary>
-        public static void SpawnScorchMark(Vector3 position, float size, float lifetimeSeconds)
+        public static bool IsZoneLoaded(Vector3 pos)
         {
-            var quad = new GameObject("FireFrontScorchMark");
-            quad.transform.position = position + Vector3.up * 0.03f; // avoid z-fighting with terrain
-            quad.transform.rotation = Quaternion.Euler(90f, Random.Range(0f, 360f), 0f);
-            quad.transform.localScale = new Vector3(size, size, 1f);
+            ZoneSystem zs = ZoneSystem.instance;
+            return zs != null && zs.IsZoneLoaded(pos);
+        }
 
-            quad.AddComponent<MeshFilter>().sharedMesh = GetOrCreateQuadMesh();
+        /// <summary>
+        /// The deterministic 42 % keep for a scorch mark at <paramref name="position"/>, decided
+        /// by ground cell so every peer that draws the cell, and a re-ignition of it, agree. By
+        /// CELL: GroundCellSize goes down to 0.5 m, and keying on the metre would fold
+        /// neighbouring cells onto one pick and one jitter, which is the grid this exists to
+        /// break. Public so the client's queue can drop what would never spawn.
+        /// </summary>
+        public static bool ScorchMarkKept(Vector3 position)
+        {
+            ScorchCell(position, out int cx, out int cz);
+            return SharedMedia.ProceduralTextures.Hash(cx, cz, 7) <= 0.42f;
+        }
+
+        /// <summary>The ground cell a scorch mark is keyed on, in the local GroundCellSize grid.</summary>
+        public static void ScorchCell(Vector3 position, out int cx, out int cz)
+        {
+            float cell = Mathf.Max(0.01f, FireFront.Config.FireConfig.GroundCellSize.Value);
+            cx = Mathf.FloorToInt(position.x / cell);
+            cz = Mathf.FloorToInt(position.z / cell);
+        }
+
+        /// <summary>
+        /// Leaves a burn scar on the ground where a cell went out. Purely cosmetic and
+        /// fire-and-forget (self-destructs via Unity's delayed Destroy). Since 0.22.1 it is a
+        /// multiply-blended soot blot laid on the terrain's own normal, not an umber disc:
+        /// the first client run showed the old one as rows of dark squares - one near-opaque
+        /// 1.5 m disc per 1 m cell, feathered rims overlapping LIGHTER than the discs (a
+        /// lattice), horizontal quads cutting into slopes, and a palette lighter than a Black
+        /// Forest floor, so the tiles read both ways. Now: roughly two blots in five cells,
+        /// 1.6-2.2x the cell, jittered, each a noise-warped blot that DARKENS what is lit
+        /// (framebuffer times the blot's red channel, fogged the way vanilla's own particles
+        /// are - the shader outputs its VERTEX colour, not the texture, so the multiply has to
+        /// ride on alpha; see FireFrontTextureGenerator.GetOrCreateScorchMultiplyMaterial for
+        /// the GLSL and the blend) so it shows on any floor, in any light, and never lightens an
+        /// overlap. The first few placements are logged (position, terrain hits, lift, shader)
+        /// so "no marks" is diagnosable as absent vs invisible.
+        ///
+        /// <paramref name="size"/> is the ground cell itself; the 1.6-2.2x is applied HERE and
+        /// nowhere else. Both callers used to pass the cell x 1.5 as well, which NomadicWar
+        /// (PR #3, 2026-09-20) caught from the changelog's own numbers: a 2.4-3.3 m blot per
+        /// 1 m cell. How deep the multiply stacks is what decides whether burnt ground reads as
+        /// soot or as black, so, counting each blot as the disc inscribed in its quad (the
+        /// outline the soot texture draws, rim at 0.39-0.5 of the quad width): keep 0.42 per
+        /// cell times pi/4 times the mean quad area E[(1.6+0.6h)^2] = 3.64 m^2 puts a burnt
+        /// square metre under 1.2 blot outlines on average, and under about 0.5 blots of full
+        /// soot tone once the feathered rim and the interior grain are integrated (a 0.30 tone
+        /// at 0.5 deep is lit ground at 54 %). With the callers' extra 1.5 those were 2.7 and
+        /// 1.1, and 0.30 at 1.1 deep is lit ground at 25 %, which is the near-black reported.
+        ///
+        /// A quad of that size spans two or three terrain vertices (the heightfield is ~1 m),
+        /// so a single centre probe cannot say where its corners lie: one normal and a fixed
+        /// 4 cm lift let the far edge of a tilted quad dip under a slope's terrain, the second
+        /// finding on PR #3. The quad is therefore fitted to FIVE terrain rays, centre and four
+        /// corners, and lifted along the fitted normal by what its highest-standing sample needs.
+        /// </summary>
+        public static bool SpawnScorchMark(Vector3 position, float size, float lifetimeSeconds)
+        {
+            if (!ScorchMarkKept(position)) return true; // see ScorchMarkKept: by cell, so every peer agrees; not a failure
+            ScorchCell(position, out int cx, out int cz);
+            float jx = (SharedMedia.ProceduralTextures.Hash(cx, cz, 11) - 0.5f) * 0.8f;
+            float jz = (SharedMedia.ProceduralTextures.Hash(cx, cz, 13) - 0.5f) * 0.8f;
+            float scale = size * (1.6f + 0.6f * SharedMedia.ProceduralTextures.Hash(cx, cz, 17));
+            Vector3 pos = new Vector3(position.x + jx, position.y, position.z + jz);
+
+            // Sit on the real ground, tilted to it: the client has the terrain collider (the
+            // headless server does not, which is why the spawn moved client-side in 0.21.15).
+            // The height that arrived with the sync stream is not a terrain height at all on a
+            // dedicated server - every cell inherits the Y of whatever seeded the fire - so the
+            // probe ignores it and casts the way ZoneSystem.GetGroundHeight does: from far above,
+            // terrain layer only (a heightfield, so one crossing at most, and nothing overhangs).
+            // No terrain under a loaded zone is a miss, and a miss is no mark: the queue only
+            // sends a position here once the zone is loaded, and a quad floating at a made-up
+            // height was the failure this exists to remove.
+            if (!Physics.Raycast(new Vector3(pos.x, 6000f, pos.z), Vector3.down, out RaycastHit rh, 10000f, TerrainLayerMask))
+            {
+                FireLogger.Debug($"[SCORCH] no terrain under {pos.x:F0},{pos.z:F0}; mark dropped.");
+                return false;
+            }
+
+            // Then the four corners, with the same ray. The yaw is chosen first so the corners
+            // probed are the quad's OWN corners (its in-plane axes spun by the yaw, then
+            // projected to the horizontal - the rays are vertical, so only x/z matter, and the
+            // tilt moves a corner's footprint by (1 - cos tilt) of its reach, a few centimetres
+            // on any slope a decal belongs on), not an axis-aligned square that would sample
+            // ground the quad never covers. Four rays on top of the centre's is cheap where it
+            // runs: only the ~42 % of cells that keep a mark reach this line, the queue spawns
+            // at most PendingScorchSpawnsPerFrame of them a frame, and a terrain-only ray
+            // against a heightfield is about the cheapest cast Unity does.
+            float yaw = Random.Range(0f, 360f);
+            Quaternion spin = Quaternion.Euler(0f, yaw, 0f);
+            Vector3 ax = spin * (Vector3.right * (0.5f * scale));
+            Vector3 az = spin * (Vector3.forward * (0.5f * scale));
+            Vector3 centre = rh.point;
+            Vector3 normalSum = rh.normal;
+            int cornerHits = 0;
+            Vector3[] cornerPoints = _scorchCornerScratch;
+            for (int i = 0; i < 4; i++)
+            {
+                Vector3 c = centre + ((i & 1) == 0 ? ax : -ax) + ((i & 2) == 0 ? az : -az);
+                if (!Physics.Raycast(new Vector3(c.x, 6000f, c.z), Vector3.down, out RaycastHit ch, 10000f, TerrainLayerMask))
+                    continue; // a zone edge, most likely: the neighbour is not loaded yet. Fit to what did hit.
+                cornerPoints[cornerHits++] = ch.point;
+                normalSum += ch.normal;
+            }
+
+            // The plane: the mean of the sampled normals, which on a plain slope is the slope
+            // and on a crest or a hollow is the average the quad has to split anyway. Fewer
+            // than three corners is a zone edge, not a fit; the centre normal stands alone then.
+            Vector3 normal = cornerHits >= 3 ? normalSum.normalized : rh.normal;
+
+            // The lift: 4 cm off the fitted plane at the centre, plus however far the HIGHEST
+            // sample stands above that plane, so every probed point ends up 4 cm or more under
+            // the quad. A sample's height above the centre plane is its signed distance along
+            // the normal (the centre's own is zero, so the lift is never under 4 cm). Past
+            // MaxScorchLift the terrain is rougher than a flat quad can follow - a hollow, a
+            // hoe's ditch, a rock edge - and a decal hanging a third of a metre in the air
+            // reads worse than no decal, so the mark is dropped and says so.
+            const float MaxScorchLift = 0.35f;
+            float lift = 0.04f;
+            for (int i = 0; i < cornerHits; i++)
+                lift = Mathf.Max(lift, 0.04f + Vector3.Dot(cornerPoints[i] - centre, normal));
+            if (lift > MaxScorchLift)
+            {
+                FireLogger.Debug($"[SCORCH] terrain under {pos.x:F0},{pos.z:F0} too rough for a {scale:F1} m quad (would lift {lift:F2} m, cap {MaxScorchLift:F2}); mark dropped.");
+                return false;
+            }
+            pos = centre + normal * lift; // off the surface, along its normal, not straight up
+
+            var quad = new GameObject("FireFrontScorchMark");
+            quad.transform.position = pos;
+            quad.transform.rotation = Quaternion.FromToRotation(Vector3.up, normal) * Quaternion.Euler(90f, yaw, 0f);
+            quad.transform.localScale = new Vector3(scale, scale, 1f);
+
+            Material shared = GetOrCreateScorchMaterial();
+            // The multiply decal wants BLACK vertices (its fog rides on the vertex colour, see
+            // FireFrontTextureGenerator.GetOrCreateScorchMultiplyMaterial); the alpha-disc
+            // fallback multiplies its texture by the vertex colour and wants white.
+            bool multiply = shared != null && shared.name == FireFrontTextureGenerator.ScorchMultiplyMaterialName;
+            quad.AddComponent<MeshFilter>().sharedMesh = GetOrCreateQuadMesh(multiply);
             MeshRenderer renderer = quad.AddComponent<MeshRenderer>();
             renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             renderer.receiveShadows = false;
-
-            Material shared = GetOrCreateScorchMaterial();
             if (shared != null) renderer.sharedMaterial = shared;
 
+            if (_scorchLogged < 5)
+            {
+                _scorchLogged++;
+                FireLogger.Info($"[SCORCH] mark {_scorchLogged}: at {pos.x:F1},{pos.y:F1},{pos.z:F1} size {scale:F1} terrain-hits={1 + cornerHits}/5 lift={lift:F2}m normal-tilt={Vector3.Angle(Vector3.up, normal):F0}deg shader={(shared != null && shared.shader != null ? shared.shader.name : "none")} blend={(shared != null && shared.HasProperty("_SrcBlend") ? shared.GetFloat("_SrcBlend") + "/" + shared.GetFloat("_DstBlend") : "n/a")}");
+            }
+
             Object.Destroy(quad, lifetimeSeconds);
+            return true;
         }
 
+        private static int _scorchLogged;
+        private static readonly Vector3[] _scorchCornerScratch = new Vector3[4]; // main thread only, like every spawn here; no per-mark array
+
+        /// <summary>The first five marks of a session are logged; a reconnect starts that count again.</summary>
+        public static void ResetScorchDiagnostics() { _scorchLogged = 0; }
+
         private static Mesh _cachedQuadMesh;
+        private static Mesh _cachedBlackQuadMesh;
         private static Material _cachedScorchMaterial;
 
         /// <summary>
-        /// One quad mesh, shared by every scorch mark ever spawned.
+        /// One quad mesh, shared by every scorch mark ever spawned - two, since 0.22.1's decal
+        /// fix: the same quad with white or with black vertex colours, see below.
         /// </summary>
         /// <remarks>
         /// Replaces GameObject.CreatePrimitive(Quad), which built a fresh mesh
@@ -2396,34 +2629,73 @@ namespace FireFront.Utils
         /// the render thread is exactly the shape of the periodic GC stall
         /// 0.18.7 chased out of the logging path.
         /// </remarks>
-        private static Mesh GetOrCreateQuadMesh()
+        private static Mesh GetOrCreateQuadMesh(bool blackVertices)
         {
-            if (_cachedQuadMesh != null) return _cachedQuadMesh;
+            if (blackVertices && _cachedBlackQuadMesh != null) return _cachedBlackQuadMesh;
+            if (!blackVertices && _cachedQuadMesh != null) return _cachedQuadMesh;
 
-            var mesh = new Mesh { name = "FireFrontQuad" };
+            var mesh = new Mesh { name = blackVertices ? "FireFrontQuadBlack" : "FireFrontQuad" };
             mesh.vertices = new[]
             {
                 new Vector3(-0.5f, -0.5f, 0f), new Vector3(0.5f, -0.5f, 0f),
                 new Vector3(-0.5f,  0.5f, 0f), new Vector3(0.5f,  0.5f, 0f),
             };
             mesh.uv = new[] { new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0f, 1f), new Vector2(1f, 1f) };
+            // Custom/Particle (Unlit) outputs COLOR.rgb and scales its alpha by COLOR.a. The
+            // multiply decal rides on that alpha and puts the game's fog through COLOR.rgb -
+            // black, so the fragment's RGB is exactly the fog term - and the alpha-blended
+            // fallback wants white. Either way the stream is set outright rather than left to
+            // Unity's substitute for a missing one (white in practice, promised nowhere); the
+            // alpha must be 255 in both, it scales the whole decal.
+            Color32 c = blackVertices ? new Color32(0, 0, 0, 255) : new Color32(255, 255, 255, 255);
+            mesh.colors32 = new[] { c, c, c, c };
             mesh.triangles = new[] { 0, 2, 1, 2, 3, 1 };
             mesh.RecalculateNormals();
             mesh.RecalculateBounds();
-            _cachedQuadMesh = mesh;
+            if (blackVertices) _cachedBlackQuadMesh = mesh; else _cachedQuadMesh = mesh;
             return mesh;
         }
 
-        /// <summary>Shared scorch material — every mark renders from this one instance.</summary>
+        /// <summary>
+        /// Shared scorch material - every mark renders from this one instance. Preferred: the
+        /// multiply-blended vanilla particle shader with a generated soot blot. Fallback (no
+        /// donor): the 0.21.x alpha-blended umber disc on whatever particle shader resolves.
+        /// </summary>
         private static Material GetOrCreateScorchMaterial()
         {
             if (_cachedScorchMaterial != null) return _cachedScorchMaterial;
+
+            Material multiply = null;
+            try { multiply = FireFrontTextureGenerator.GetOrCreateScorchMultiplyMaterial(GetOrCreateSootTexture()); }
+            catch (System.Exception ex) { FireLogger.Debug($"[SCORCH] multiply material failed ({ex.Message}); alpha fallback."); }
+            if (multiply != null) { _cachedScorchMaterial = multiply; return multiply; }
 
             Shader shader = FindUsableParticleShader();
             if (shader == null) return null;
 
             _cachedScorchMaterial = new Material(shader) { mainTexture = GetOrCreateScorchTexture() };
             return _cachedScorchMaterial;
+        }
+
+        private static Texture2D _cachedSootTexture;
+
+        /// <summary>The multiply-decal blot: white = untouched ground, ~0.3 at the heart, alpha 255 throughout.</summary>
+        private static Texture2D GetOrCreateSootTexture()
+        {
+            if (_cachedSootTexture != null) return _cachedSootTexture;
+            const int size = 256;
+            Color32[] px = SharedMedia.ProceduralTextures.SootBlot(size, 20260920);
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, true, false)
+            {
+                name = "FireFront_soot",
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Trilinear,
+                anisoLevel = 8,
+            };
+            tex.SetPixels32(px);
+            tex.Apply(true, true);
+            _cachedSootTexture = tex;
+            return tex;
         }
 
         private static Texture2D _cachedSoftParticleTexture;
@@ -2536,6 +2808,24 @@ namespace FireFront.Utils
         {
             if (_cachedAdditiveMaterial != null) return _cachedAdditiveMaterial;
             if (_additiveUnavailable) return null;
+            _cachedAdditiveMaterial = CreateAdditiveParticleMaterial(GetOrCreateAdditiveParticleTexture(), callerName);
+            return _cachedAdditiveMaterial;
+        }
+
+        /// <summary>
+        /// Builds an additive particle material around YOUR texture, with the blend setup this mod
+        /// had to work out the hard way. Returns null if the build ships no usable additive shader,
+        /// which is the caller's cue to fall back rather than render nothing.
+        ///
+        /// Use this for anything that should read as FIRE. The alpha chain behind
+        /// <see cref="ResolveParticleShader"/> lands on Sprites/Default, which is alpha-blended:
+        /// correct for smoke, wrong for flame, because alpha particles occlude one another instead
+        /// of accumulating and a mass of them reads as separate orange discs. That is exactly what
+        /// 0.20.1 looked like in play.
+        /// </summary>
+        public static Material CreateAdditiveParticleMaterial(Texture2D texture, string callerName)
+        {
+            if (_additiveUnavailable) return null;
 
             string how = "Shader.Find";
             Shader shader = Shader.Find("Custom/Particle (Unlit)");
@@ -2555,7 +2845,7 @@ namespace FireFront.Utils
                 return null;
             }
 
-            var mat = new Material(shader) { mainTexture = GetOrCreateAdditiveParticleTexture() };
+            var mat = new Material(shader) { mainTexture = texture };
 
             // WHICH CHANNEL IS ALPHA. Custom/Particle (Unlit) exposes
             //   [Enum(Red,0,Green,1,Blue,2,Alpha,3)] _AlphaChannel = 0
@@ -2591,11 +2881,19 @@ namespace FireFront.Utils
             mat.SetFloat("_DstBlend", 1f); // One
             mat.SetFloat("_ZWrite", 0f);
             mat.renderQueue = 3000;        // Transparent
-            _cachedAdditiveMaterial = mat;
 
-            FireLogger.Info("[SHADER-DIAG] additive flame material built (_SrcBlend=5 SrcAlpha, _DstBlend=1 One, _ZWrite=0).");
-            return _cachedAdditiveMaterial;
+            FireLogger.Info($"[SHADER-DIAG] additive flame material built for {callerName} " +
+                            "(_SrcBlend=5 SrcAlpha, _DstBlend=1 One, _ZWrite=0).");
+            return mat;
         }
+
+        /// <summary>
+        /// The alpha-blended particle shader this build actually ships, or null. Public so callers
+        /// outside this file resolve it HERE rather than calling Shader.Find themselves: the first
+        /// four obvious candidates are all stripped from Valheim, and a name-based guess returns
+        /// null and renders nothing. See the remarks on the chain itself.
+        /// </summary>
+        public static Shader ResolveParticleShader() => FindUsableParticleShader();
 
         /// <summary>
         /// Takes a shader off a vanilla fire material that is already loaded,
@@ -3035,6 +3333,16 @@ namespace FireFront.Utils
         {
             if (vfx == null) return;
 
+            // 0.22.0: the object-fire rig is a FireVFXController, which downgrades itself
+            // (front, band, embers, haze, glow, light). The generic pass below is kept for
+            // the ground-cell and prefab rigs, which have no controller.
+            FireFront.Fire.FireVFXController controller = vfx.GetComponent<FireFront.Fire.FireVFXController>();
+            if (controller != null)
+            {
+                controller.SetSmoulder();
+                return;
+            }
+
             // The light is SHRUNK, not destroyed. Deleting it outright (first
             // attempt) took the glow with it and the fire read as extinguished —
             // which matters because it is still contagious and still burning
@@ -3299,6 +3607,10 @@ namespace FireFront.Utils
             velocity.enabled = true;
             velocity.space = ParticleSystemSimulationSpace.World;
             velocity.y = new ParticleSystem.MinMaxCurve(1.2f, 2.4f); // the lick upward that makes it fire, not a glow
+            // x, y and z must share one curve mode or Unity logs "Particle Velocity curves must
+            // all be in the same mode" every frame the crown burns (see FireVFXController.BuildFlames).
+            velocity.x = new ParticleSystem.MinMaxCurve(0f, 0f);
+            velocity.z = new ParticleSystem.MinMaxCurve(0f, 0f);
 
             ParticleSystem.SizeOverLifetimeModule sizeOverLifetime = ps.sizeOverLifetime;
             sizeOverLifetime.enabled = true;
@@ -3555,6 +3867,7 @@ namespace FireFront.Utils
         private const string RpcCommandRelay = "FireFront_CommandRelay";
         private const string RpcFireDamage = "FireFront_FireDamage";
         private const string RpcGroundSyncRequest = "FireFront_GroundSyncRequest";
+        private const string RpcObjectFireSync = "FireFront_ObjectFireSync";
 
         /// <summary>Client → server: run this whitelisted dev command there; replies stream back on the status-response channel.</summary>
         public static void SendCommandRelayToServer(string commandLine)
@@ -3845,10 +4158,12 @@ namespace FireFront.Utils
         }
 
         /// <summary>
-        /// Registers all four RPCs. Safe to call multiple times (ZRoutedRpc.Register
-        /// just overwrites the prior handler for that name) but callers should
-        /// still guard with a one-shot flag once ZRoutedRpc.instance exists —
-        /// it doesn't exist yet at plugin Awake(), same as ZNet.instance.
+        /// Registers every FireFront routed RPC. NOT safe to call twice on the same
+        /// ZRoutedRpc: its Register is a Dictionary.Add and throws on a duplicate name (it is
+        /// ZRpc.Register, the unrouted one, that removes-then-adds), and one throw inside the
+        /// block below leaves every later RPC unregistered on that instance. The caller keys
+        /// on the instance reference, which ZNet.Awake rebuilds per world. ZRoutedRpc.instance
+        /// doesn't exist yet at plugin Awake(), same as ZNet.instance.
         /// </summary>
         public static void RegisterFireRpcs(
             System.Action<long, ZDOID, long> onIgniteRequest,
@@ -3861,7 +4176,8 @@ namespace FireFront.Utils
             System.Action<long, string> onCommandRelay,
             System.Action<long, float> onFireDamage,
             System.Action<long> onGroundSyncRequest,
-            System.Action<long, ZPackage> onPaintAssign)
+            System.Action<long, ZPackage> onPaintAssign,
+            System.Action<long, ZPackage> onObjectFireSync)
         {
             if (ZRoutedRpc.instance == null)
             {
@@ -3889,7 +4205,8 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.Register<float>(RpcFireDamage, onFireDamage);
                 ZRoutedRpc.instance.Register(RpcGroundSyncRequest, onGroundSyncRequest);
                 ZRoutedRpc.instance.Register<ZPackage>(RpcPaintAssign, onPaintAssign);
-                FireLogger.Info($"[IGNITE-TRACE] All 11 FireFront RPCs registered successfully (IsServer={IsServer()}).");
+                ZRoutedRpc.instance.Register<ZPackage>(RpcObjectFireSync, onObjectFireSync);
+                FireLogger.Info($"[IGNITE-TRACE] All 12 FireFront RPCs registered successfully (IsServer={IsServer()}).");
             }
             catch (System.Exception ex)
             {
@@ -3968,6 +4285,18 @@ namespace FireFront.Utils
             if (ZRoutedRpc.instance == null) return;
             try { ZRoutedRpc.instance.InvokeRoutedRPC(targetPeer, RpcGroundFireSync, pkg); }
             catch (System.Exception ex) { FireLogger.Debug($"SendGroundFireSyncTo threw: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Server -> ONE peer: every OBJECT fire alight right now (ZDOID, age, smouldering), the
+        /// answer to the same snapshot request as the ground set. Object fires are otherwise only
+        /// ever announced by a FireEvent at ignition, which a player who joins later never hears.
+        /// </summary>
+        public static void SendObjectFireSyncTo(long targetPeer, ZPackage pkg)
+        {
+            if (ZRoutedRpc.instance == null) return;
+            try { ZRoutedRpc.instance.InvokeRoutedRPC(targetPeer, RpcObjectFireSync, pkg); }
+            catch (System.Exception ex) { FireLogger.Debug($"SendObjectFireSyncTo threw: {ex.Message}"); }
         }
 
         /// <summary>Server -> ONE peer: "lay real dirt on these cells" (see FireManager.AssignPendingPaint).</summary>

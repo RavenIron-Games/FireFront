@@ -1,5 +1,253 @@
 # Changelog
 
+## 0.22.1
+
+- **A player who joins mid-fire now sees the fire.** Object fires (structures, trees, logs)
+  were announced only by a `FireEvent` broadcast at ignition; a client that connected after
+  it saw the tree taking damage, charring and falling with no flames on it. The join-time
+  snapshot request the ground fire already had (`FireFront_GroundSyncRequest`, sent once the
+  routed channel can reach the server) is now answered with a second package,
+  `FireFront_ObjectFireSync`: every burning ZDOID with its burn age and whether it has dropped
+  to embers. The client books each one exactly as a `FireEvent` would (it is idempotent
+  against fires it already heard about), backdates its own smoulder clock by the server's
+  age so a fire that burned ten minutes elsewhere does not start fresh, and asks again after
+  10 s if no object snapshot arrived (three tries; the server rate-limits per sender, so a
+  repeat that was not needed costs nothing). Only the connected server's reply is accepted.
+  A burner that is not loaded on the client yet is drawn when it instantiates, as before.
+- **Charred wood looks like charred wood, and the embers are dialled back.** The 0.22.0
+  char was a dark tint over the vanilla bark with a uniform ember lattice glowing at the
+  game's Ashlands HDR value (4.78) through every crack of the whole trunk: it consumed the
+  tree. Now the client builds, once per species, a charred albedo FROM the species' own bark
+  texture (read back through a RenderTexture; the bundle textures are not CPU-readable) -
+  domain-warped "alligator" plates cut by black fissures, the grain kept as tone, per-plate
+  variation, pale ash flecks on the plate tops - and a normal map that carries the char
+  relief over the vanilla bark grain, AG-packed like every map the game ships. The ember
+  glow lives only in scattered pockets: `CharredEmberCoverage` (0.2) is the fraction of the
+  trunk carrying live embers, thresholded at an honest quantile of a low-frequency field so
+  the number means what it says; inside a pocket the glow bleeds along the fissures and adds
+  pin-point embers on the plates, the way vanilla's own Ashlands tree mask is a field of
+  points, and nothing glows outside. `CharredEmberIntensity` (0.4; 1.0 ≈ the Ashlands value)
+  sets the heat, so at the default only the cores cross the bloom threshold. Four mask
+  variants, picked per object from its ZDOID, so neighbouring snags glow in different places;
+  the same masks and dial drive the live-burn bark char below the fire front. When the read-
+  back fails (no graphics device, unexpected format) the tint look of 0.22.0 stays. The
+  generator is `SharedMedia.ProceduralTextures`, vendored from libs-Tools and previewable
+  offline with `libs-Tools/CSharp/TexturePreview` against the extracted vanilla bark - the
+  contact sheet there is what shipped. `firedumptex` writes what this client generated as PNG
+  under `BepInEx/config/FireFront-textures/`.
+- **Charred wood smokes after the fire is out.** A charred trunk (two or three points on
+  its lower two thirds) and a fallen charred log (three points along it) give off thin grey
+  wisps for `CharredSmokeSeconds` (90 s, world time, so every peer and every late joiner sees
+  the same stage), full for two thirds of it and tapering to nothing; the same Lux-lit vanilla
+  smoke material the fire uses, at a hundredth of the rate, drifting with the real wind. Off
+  under LowSpec, `CharredSmokeEnabled` otherwise, capped at 32 smoking objects world-wide.
+- **The whole-tree glow from the first in-game run (NomadicWar, PR #3, 2026-09-20) is closed
+  at the root.** Trunks rendered as pink-white rods root to crown, canopies flat pink, distant
+  LOD trunks neon. The mask kept bright orange in RGB everywhere with the pattern only in
+  alpha; Custom/Vegetation does multiply by alpha (checked in BOTH the forward and the
+  deferred GLSL: `u_xlat2.xyz = u_xlat2.www * u_xlat2.xyz`), but Standard's `_EmissionMap`
+  does not, and mip levels average RGB and alpha separately, so at LOD distance a sparse mask
+  became "mean alpha × bright orange" over the whole surface. The mask is now PREMULTIPLIED
+  with alpha 255: black between embers in every pass, every shader and every mip. Also: a mask
+  is always bound (`Texture2D.blackTexture` when the generator could not run - an unbound
+  slot is Unity's default WHITE, and 0.22.0 drove `_EmissionColor` into exactly that);
+  atlas species (Pine, Fir) get masks confined to the bark block during a live burn, found by
+  eroding the atlas alpha and keeping the largest solid component, so needle cards never
+  light; the charred glow fades to a third past 30-90 m and the live-burn embers drop to 30 %
+  when the rig is far, so a distant snag is black, not a lamp.
+- **The scorch grid is gone.** Rows of dark squares across burnt hillsides: one near-opaque
+  1.5 m umber disc per 1 m cell, feathered rims overlapping LIGHTER than the discs (a
+  lattice), horizontal quads cutting into slopes, a palette lighter than a Black Forest floor
+  so the tiles read both ways, on `Sprites/Default`. Now a multiply-blended soot blot
+  (vanilla's `Custom/Particle (Unlit)` from the ember donor, `Blend OneMinusSrcAlpha
+  SrcAlpha` on black vertices with the shader's fog on - see the last entry below for why
+  not `DstColor Zero` - every other fade in the shader off, queue 2950)
+  that darkens whatever is lit - grass, sun, shadow and
+  the fire's own light survive, and two blots overlapping only get darker - laid on the
+  terrain's own normal by raycast, about two blots in five cells at 1.6-2.2x the cell,
+  jittered, with a noise-warped outline and pale ash flecks. The first five placements log
+  `[SCORCH]` (position, terrain hit, shader, blend) so "no marks" is diagnosable as absent vs
+  invisible. The 0.21.x alpha disc remains the fallback when no donor material exists.
+- **Only the server may paint fire on a client.** `ZRoutedRpc` relays the sender id verbatim,
+  and the two cosmetic handlers (`FireEvent`, `GroundFireSync`) accepted it from anyone, so a
+  modded client could address a forged event to Everybody and put phantom fires on every
+  screen. All three client-side handlers now apply the `IsFromServer` check the fire-damage
+  handler already had. (Found by the 2026-09-20 decompile pass; `ZRoutedRpc.Register` is also
+  a `Dictionary.Add` that throws on a duplicate name, not the overwrite the old comment
+  claimed — the per-instance registration guard is what keeps it safe, and the comment now
+  says so.)
+- New `fireset` keys: `charredember`, `charredembercover`, `charredsmoke`,
+  `charredsmokeseconds`. `firestatus` reports all four. No ledger rung: nothing renamed or
+  re-defaulted.
+- Verified headless: 0.22.0 booted the real Valheim `l-1.0.15` Linux dedicated server with
+  every patch applied and 0 exceptions (`~/valheim-testbed/boot-check.sh`, see HANDOFF).
+- **Five things fixed on review and on the first run** (NomadicWar, 2026-09-20): the charred
+  textures are generated on worker threads, because the first version built a 512² field and
+  four 512² masks on the main thread the frame the first tree caught, a freeze of several
+  hundred milliseconds (the field build starts at plugin load on a client, so a tree that
+  streams in already charred does not wait for it either); the join snapshot's burn age is clamped and turned into an ignition
+  instant on arrival, so a burner that instantiates a minute after the packet is not a minute
+  behind; the scorch thinning is keyed on the ground cell rather than the metre, which at
+  a GroundCellSize below 1 folded neighbouring cells onto one pick; and every velocity and
+  force module now writes x, y and z in one curve mode, because Unity logged `Particle
+  Velocity curves must all be in the same mode` once per frame per live flame (80,000 lines
+  in the first eight minutes of play, each a BepInEx disk write) - `BuildFlames` set y to two
+  constants and left x and z as constants, and the wind update assigned bare floats. The
+  same shape sat in `BuildCrownFlames` since 0.21.2, so 0.21.x logged it too whenever a
+  crown burned. And a scorch decal now waits for its zone: the sync stream reports a cell
+  going out anywhere on the map, during the loading screen included, and the mark was
+  spawned on the spot - five of five logged marks had no terrain under them, 500 m from the
+  player, floating at the synced height with no tilt. They queue and spawn, with the
+  lifetime they have left, once the zone is loaded on that client (since 0.21.15 the
+  remote-mirror path had this hole on `main` too).
+- **The six look items from that review, and one thing found under them.** The scorch blot
+  is the size the entry above says: both callers passed the ground cell x 1.5 on top of the
+  spawner's own 1.6-2.2x, so a blot was 2.4-3.3 m on a 1 m cell and burnt ground sat under
+  2.7 multiply blots on average; the callers now pass the cell, which is 1.2 blot outlines
+  (about half a blot of full soot tone) per burnt square metre. The quad is fitted to five
+  terrain rays instead of one - centre and its four corners - so its plane is the mean of
+  what it spans and it is lifted along that normal by whatever its highest corner needs
+  (4 cm minimum; a lift past 35 cm - a corner more than 31 cm above the centre plane - is a
+  hollow no flat quad can lie in, and that mark is dropped and says so in the log; a
+  heightfield bump BETWEEN the five samples can still poke through, the slope case is
+  exact). The `[SCORCH] mark N` line now prints `terrain-hits=k/5 lift=Lm`. Under the tint question sat the real defect: **the 0.22.1 decal
+  drew nothing.** `Custom/Particle (Unlit)`'s compiled fragment never outputs the texture's
+  RGB - its colour is the VERTEX colour, and the texture contributes one channel, picked by
+  `_AlphaChannel`, into alpha - so `Blend DstColor Zero` multiplied the ground by white. The
+  multiply now rides on alpha (`_DstBlend` = SrcAlpha, `_AlphaChannel` = red, the blot's tone:
+  0.30 as stored, which displays as the ground at about 30 % of its brightness at the heart),
+  and it is fogged the way vanilla's own particles are rather than darkening ground that is
+  already fog-grey: the quad's vertex colour is black, the shader's `_FejdFog` is ON so the
+  fragment's RGB is exactly the fog term, and `Blend OneMinusSrcAlpha SrcAlpha` works out to
+  `a * (1 - f) * lit + f * fog` - the multiply under the fog (review of the fix found the
+  bare `framebuffer * a` scaling the fog term too, a black blob on grey mist at 50 m). Every
+  other fade the GLSL applies to that alpha is forced to 1 with the reason for each in the
+  code: `_SkyMask` (a top-down depth
+  test that hides anything under a canopy - the ground under a burnt tree is exactly that;
+  the donor has it ON), the soft-particle depth fade (compiled under the GLOBAL keyword, not
+  the material toggle; `_SoftNearFade` -1000 saturates it whatever the gap), and the
+  near-camera fade (`_CameraFadeFactor` 0.2 on the donor faded a mark out as the player
+  walked up to it). The `[SHADER-DIAG] scorch decal material` line reads every value back.
+  The charred twin of a pine or fir now takes the bark-confined ember mask, not the plain one
+  that lit the dead atlas' branch cards, and the post-burn glow is driven per material slot
+  exactly as the live burn is: leaf and non-emissive slots get no block, a slot whose mask is
+  not ready gets a black mask AND a black colour in the same block, and atlas clones keep a
+  black mask at the material level for good (a coverage change no longer points them at the
+  plain mask). The live-burn glow fades over 30-90 m on the very ramp the charred twin uses
+  (`FireVFXController.EmberDistanceFactor`), instead of stepping to 30 % at 70 m, so a tree
+  that turns from burning to charred at 50 m keeps its brightness; the 70 m step stays as the
+  emitter cost LOD only. And retired ember-mask sets (a coverage change parks the old set,
+  about 5.5 MB, because a destroyed texture samples white) are now freed: once every mask of
+  the new generation exists - all four plain variants and all four of every parked atlas -
+  and ten seconds of Time.time have passed (forty of the longest consumer tick), so every
+  block has been re-bound; the argument that no block can then hold a colour against a dead
+  mask is written above `CharredTextures.ReapRetired`, and the charred controller now writes
+  one explicit black block when a tree's glow ends or is switched off, which closes the two
+  holes that argument had. `firestatus` reports `retired masks N`.
+
+## 0.22.0
+
+- **Fire climbs the tree, and the height of the flames is the tree's health.** A burning
+  tree or log now takes real, unseen fire damage every `TreeFireTickInterval` seconds (2 s),
+  sized so a healthy tree dies at `TreeFireKillFraction` (90 %) of `BurnDurationSeconds`; the
+  fire front starts at the foot and climbs the trunk as the health drops, so flames in the
+  crown mean a tree about to go. Every tick prints as `[TREE-HP]` under `firedebug`. The damage
+  cannot go through vanilla: every tree and log in 1.0.15 has `m_damageModifiers.m_fire =
+  Immune`, so `TreeBase.RPC_Damage` zeroes a fire hit before it touches health, and its
+  `DamageText.ShowText` is unconditional and routed to every peer within 30 m, so no vanilla
+  hit is ever silent (TreeBase.cs:113-122, DamageText.cs:184-192). The server therefore sends
+  a HitData carrying a marker in `m_statusEffectHash` (serialized, unread by trees) to whichever
+  peer OWNS the tree, and the mod's own `RPC_Damage` prefix applies it there straight to the
+  ZDO health: no text, no shake, no hit effect. On a dedicated server that owner is the
+  nearest client, not the server, which has no GameObject for the tree at all and whose claims
+  `ReleaseNearbyZDOS` hands back within seconds - so nothing here claims ownership. Health is
+  a ZDO float, replicated to every peer, and is what the flames on every client climb by; no
+  new sync exists for it. The burn timer stays as the fallback authority (rain shortens the
+  timer, not the ticks). `TreeFireDamageEnabled false` restores the old clock-driven climb.
+- **A tree the fire kills is charred in place, then falls or stands.** There is no burnt tree
+  in the game (all 115 `Charred*` prefabs are Ashlands enemies and gear; verified against the
+  7921-prefab dump), so the dead tree is replaced by a clone of ITS OWN species, at the same
+  transform and scale, re-skinned: Custom/Vegetation bark tinted to charcoal with the ridges
+  pushed into fissures, an ember-crack mask glowing in HDR through the shader's own emissive
+  path and fading over `CharredEmberGlowSeconds`, vanilla's Ashlands `Ash_d` dusting the
+  upward faces through the moss layer, and the leaf cards deleted in both the forward and the
+  shadow pass (`_Color.a 0`, `_Cutoff 2`). Pine and fir share one atlas for trunk and needles,
+  so they get vanilla's own dead atlases instead (`PineTree_01_dead`, `Pine_tree_small_dead`).
+  One cached material clone per vanilla material, shared by every charred tree of that species;
+  the first draft's `renderer.materials` allocated and leaked a Material per slot per renderer
+  per tree. The hover text reads "Charred Beech". `CharredCollapseDelaySeconds` (3 s) after the
+  swap, the `TreeDestructionRate` roll (65 %) decides: COLLAPSE, and the charred trunk falls
+  with vanilla's own felling - the species' log prefab thrown from `log_spawnp` with
+  `TreeBase.SpawnLog`'s exact impulse, so it tips, hits the ground with the real crash
+  (`ImpactEffect`: `sfx_tree_fall_hit`, dust, camera shake) and replicates through
+  `ZSyncTransform` - born charred, no wood, no stub, `CharredCoalMin`-`CharredCoalMax` coal at
+  the foot, and it crumbles to ash `CharredLogCrumbleSeconds` (20 s) after landing; or STAND,
+  a blackened snag at `CharredTreeHealthFraction` health that a player can chop later for the
+  same coal and nothing else. The fate, the times and the fall direction (downwind, scattered)
+  are baked into the charred tree's ZDO, so they replicate, survive a save and a restart, and
+  execute on whichever peer owns the tree when its time comes. Charred wood is spent fuel: it
+  never ignites again, and spread never picks it. Regrowth is queued only for a collapse.
+- **The 0.21.x fire visuals are gone, and why they looked like streaks.** The LineRenderer
+  ribbons read a "flame" texture off `fire_pit` by substring, which landed on `low_flames` - an
+  INACTIVE low-LOD emitter whose texture is an 8x8 point-filtered grey blob - and tiled it once
+  per metre along camera-facing strips up to 30 m long, scrolled on the wrong UV axis, twelve
+  of them additive on a 0.4 m trunk, with a gradient that never left 0..1 and reached the
+  bloom only by stacking: white lasers. Read out of the 1.0.15 bundles with UnityPy, 2026-09-20.
+  Vanilla flame is not a flame picture: it is a greyscale FLIPBOOK sheet on
+  `Custom/Gradient Mapped Particle (Unlit)`, recoloured per particle by two HDR colours
+  delivered through custom vertex streams. The fire is now built that way, from clones of the
+  game's own materials found by exact child name (`fire_pit/flames (1)`, `sparcs (1)`,
+  `bonfire/Smoke`, `flare`, `BlobLava/HeatDistort`), never by `Shader.Find`, which misses
+  bundle-loaded shaders even after world load (the mod's own log proved it). Per burning
+  object: vertical-billboard flipbook tongues at the fire front and a band of licks from the
+  foot to the front; embers that are motes (0.02-0.06 m) with buoyancy, turbulence and drag,
+  never stretched; smoke on `Lux Lit Particles/Bumped`, lit by the fire and shadowed by the
+  sun; a refraction heat shimmer (`HeatHazeEnabled`); vanilla's glow-halo trick; the bark
+  itself blackening and glowing with ember cracks below the front (`BarkCharEnabled`, a
+  property block, restored exactly when the fire goes out); and one point light at vanilla's
+  campfire values with SOFT SHADOWS (`FireShadowsEnabled`), managed by the game's own
+  `LightLod` (fade at 40 m, shadows at 20 m, inside the player's point-light-shadow budget)
+  and `LightFlicker`. Wind is read off `EnvMan` directly; the per-frame reflection is gone.
+  Textures the mod still bakes are sRGB or linear as appropriate, with full mip chains,
+  trilinear and 8x anisotropic; 0.21.x built them at 128x128 with mips OFF.
+- **Every existing Visuals key works again.** `FireSmokeEnabled`, `TreeFlameScaling`,
+  `CrownSparksEnabled`, `MaxFlameHeight`, `TallFireMaxConcurrent` and their low-spec caps,
+  and `SmoulderingVfxEnabled`, were all read only by the dead 0.20.x builder; the 0.21.x
+  controller ignored them and `firestatus` reported settings that were not in force. The
+  low-spec preset now also drops fire shadows and heat haze first, since a shadow-casting
+  point light is the single most expensive thing a fire draws.
+- **Nothing is drawn on a headless server any more.** 0.21.x built and updated a full
+  LineRenderer rig for every burning object on the dedicated server, every frame, into a
+  graphics device that does not exist.
+- **Remote (client) fire is keyed by ZDOID, like the server's.** It was keyed by Component,
+  so a tree the client de-instantiated and rebuilt was a different key: the fire could
+  neither be found again nor told to stop, and a burner destroyed by the charring before its
+  stop event arrived left a phantom fire. A burner that instantiates after its fire started
+  now gets its fire on arrival; a fire whose object no longer exists anywhere is swept every
+  2 s. The client's event handler also no longer resolves the burner through
+  `ComponentFromZdoid`, which force-creates the object and CLAIMS OWNERSHIP of it - on a
+  client that would have pulled a far-away tree's ownership, and the damage ticks with it, to
+  whichever client heard about the fire first.
+- **What is NOT possible, so nobody looks for it again: hardware ray tracing.** Valheim
+  1.0.15 is Unity 6000.0.75f1 on the Built-in Render Pipeline (deferred, HDR), with zero
+  RayTracingShader assets and the Vulkan device created with every `VK_KHR_ray_tracing_*`
+  extension disabled. Shadow-casting lights, HDR emissive into the bloom, normal maps, soft
+  particles, lit smoke and refraction are the ceiling, and vanilla already uses all of them.
+- New keys: `TreeFireDamageEnabled`, `TreeFireTickInterval`, `TreeFireKillFraction`,
+  `CharredCollapseDelaySeconds`, `CharredCoalMin`, `CharredCoalMax`,
+  `CharredTreeHealthFraction`, `CharredLogCrumbleSeconds`, `CharredEmberGlowSeconds` (Trees);
+  `FireShadowsEnabled`, `HeatHazeEnabled`, `BarkCharEnabled` (Visuals). `TreeDestructionRate`
+  is now the COLLAPSE chance, ranged 0-100, and reachable from `fireset` at last
+  (`treedestruction`); all of the above are `fireset` keys and appear in `firestatus`.
+- Fixed: `TreeLog` fire measured the log along `transform.forward`; a log's long axis is its
+  local +Y. The charred clone is scaled like the original (`scaleScalar`, wild firs run
+  1.5-3x; the first draft came up at 1.0). The charred flag is pre-baked into the ZDO before
+  `Instantiate` (ZNetView execution order -20), so the Awake postfix sees it on the spawning
+  peer too; set after Instantiate it was only ever seen by other peers.
+- Builds on Linux now: `libs/` from libs-Tools plus a small Cecil publicizer for the two game
+  assemblies (none existed on disk and `assembly_publicizer.dll` has no runtimeconfig);
+  `~/.dotnet/dotnet build`, 0 errors.
+
 ## 0.21.16
 
 - **Real dirt where the ground burned, if you want it.** The `UseVanillaDirtPaint` option has been

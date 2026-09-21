@@ -33,7 +33,8 @@ On a dedicated server, **the server needs the dll too** — it runs the simulati
 
 **Spread**
 
-- Structures, standing trees and felled logs all burn, with real drops. Trees fall through vanilla's own felling and leave logs; logs leave wood.
+- Structures, standing trees and felled logs all burn. Buildings leave their drops; trees and logs burn to charcoal (see below).
+- Fire climbs a tree by the tree's health. A burning tree takes unseen fire damage — no floating numbers — and the fire front starts at the foot and climbs the trunk as the tree weakens, the bark blackening and glowing with embers below it. Flames in the crown mean a tree about to go.
 - Fire spreads by contact — structure to structure, tree to tree, structure to tree — and across open ground between things too far apart to light each other directly.
 - Spread follows the game's real wind, both direction and strength. A gale drives a long narrow tongue; a calm day burns in a lazy circle.
 - Fire spreads at the pace of its fuel. A tree must be properly alight, roughly a minute, before it torches its neighbours. Fires start small and build over about ten minutes rather than instantly raging.
@@ -43,7 +44,9 @@ On a dedicated server, **the server needs the dll too** — it runs the simulati
 
 - Standing in fire hurts, players and creatures alike, through vanilla's own burn mechanic.
 - Standing near fire keeps you warm — it holds off Cold and Freezing exactly as a campfire does, so you cannot freeze to death inside a burning forest.
-- Burnt ground leaves scars. Burnt trees regrow after about fifteen minutes if the spot is still clear.
+- A tree the fire kills is charred in place: a black, bare, ash-dusted husk of the same species — real char plates split by fissures, built from that species' own bark — with a few scattered pockets of embers that glow in the splits and fade over a couple of minutes, and thin smoke off the trunk for a while after. Three seconds later it either collapses — the charred trunk falls with the game's own felling crash, drops a little coal, smokes where it lies and crumbles to ash — or stays standing as a snag you can chop later for the same coal. Charred wood never drops wood or seeds and never catches fire again. `fireset treedestruction <0-100>` is the collapse chance; `charredember`, `charredembercover` and `charredsmokeseconds` are the look.
+- Join a server mid-blaze and you see the blaze: burning buildings and trees are sent to a connecting player as a snapshot, with how long each has burned.
+- Burnt ground leaves scars. Collapsed trees regrow after about fifteen minutes if the spot is still clear.
 - Fires remember who lit them. The whole front carries its arsonist even after crawling a long way from the first spark; natural and creature-lit fire belongs to nobody. Nothing surfaces in game yet — it feeds a companion mod's reputation system.
 - Fires survive a server restart. Burning things come back burning with their remaining time, spent ground stays spent, and trees still waiting to regrow still do.
 
@@ -95,11 +98,13 @@ Press `` ` `` to open the console.
 
 Commands run on the server no matter where you type them, authorised against the server's own admin list, and the reply comes back to your console prefixed `[server]`.
 
-Diagnostic-only: `firelistprefabs`, `firecheckprefab`, `firepurgevfx`, `firegroundignite`, `firetreeregrow`, `firetreeregrowlist`.
+Diagnostic-only: `firelistprefabs`, `firecheckprefab`, `firepurgevfx`, `firegroundignite`, `firetreeregrow`, `firetreeregrowlist`, `firedumptex` (writes the charred-wood textures this client generated as PNG under `BepInEx/config/FireFront-textures/`).
 
 ## Configuration
 
 Everything is in `BepInEx/config/com.raveniron.firefront.cfg` and everything is live-tunable with `fireset`, no restart required. The config file migrates itself between versions: when a default changes, a value you never touched follows it, and a value you chose is kept and named in the log.
+
+Every key is written to both the server's file and each client's, but most are read on one side only, and two presets (`lowspec`, `burntheworld`) silently override keys that still read true. [docs/CONFIG-KEY-MAP.md](docs/CONFIG-KEY-MAP.md) says, for all 81 keys, which side reads it and what overrides it.
 
 `fireset` keys:
 
@@ -111,8 +116,9 @@ Everything is in `BepInEx/config/com.raveniron.firefront.cfg` and everything is 
 | Putting it out | `extinguishradius`, `dousingradius`, `douseimmunity`, `rainsuppress`, `rainmultiplier`, `rainobjects`, `rainobjectmultiplier`, `firebreaks` |
 | Wind | `windbias`, `windupwindchance`, `windinfluence` |
 | Aftermath | `scorchmarks`, `scorchlifetime`, `dirtpaint`, `dirtpaintradius`, `exhaustionenabled`, `fuelregrow`, `treeregrowth`, `treeregrowthseconds`, `persistfires` |
+| Tree fire and charring | `treefire`, `treetick`, `treekillfraction`, `treedestruction`, `charreddelay`, `charredcoalmin`, `charredcoalmax`, `charredhealth`, `charredcrumble`, `charredglow`, `charredember`, `charredembercover`, `charredsmoke`, `charredsmokeseconds` |
 | Ramp | `rampenabled`, `rampduration`, `rampstart` |
-| Visuals | `vfx`, `procedural`, `maxflameheight`, `treeflames`, `crownsparks`, `tallfiremax` |
+| Visuals | `vfx`, `procedural`, `maxflameheight`, `treeflames`, `crownsparks`, `tallfiremax`, `fireshadows`, `heathaze`, `barkchar` |
 | Smouldering | `smouldering`, `smoulderafter` |
 | Presets and debug | `lowspec`, `burntheworld`, `debug` |
 
@@ -146,7 +152,8 @@ Screenshots of odd spread are genuinely useful — "this jumped further than it 
 
 Known limits:
 
-- The fire visual is homemade, not a vanilla asset. It reads as fire; it is not Valheim's own.
+- The fire visual is assembled in code from the game's own fire materials and particle recipes (flipbook flames, ember motes, lit smoke, heat shimmer, a soft-shadowed light), so it should sit next to a campfire without looking like another game — but it is not an authored asset. The charred bark is generated the same way, from each species' own bark texture, on your machine the first time a tree of that species chars.
+- Ray-traced lighting is not something any mod can add to Valheim: the game runs the built-in render pipeline with no ray-tracing support compiled in. Shadow-casting fire lights, HDR bloom, normal-mapped char, lit smoke and heat haze are the ceiling, and all of them are used.
 - Defaults are tuned aggressive. Expect fire to spread fast and hungrily unless you dial it down.
 
 ## Credits

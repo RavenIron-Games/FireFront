@@ -47,7 +47,7 @@ namespace FireFront.Commands
                 args => FireDebug(args));
 
             new Terminal.ConsoleCommand("fireset",
-                "FireFront: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|enabled> <value>",
+                "FireFront: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|charredember|charredembercover|charredsmoke|charredsmokeseconds|enabled> <value>",
                 args => FireSet(args));
 
             new Terminal.ConsoleCommand("firelistprefabs",
@@ -57,6 +57,10 @@ namespace FireFront.Commands
             new Terminal.ConsoleCommand("firepurgevfx",
                 "FireFront: emergency cleanup - destroys every live vanilla Fire-class instance in the scene",
                 args => FirePurgeVfx(args));
+
+            new Terminal.ConsoleCommand("firedumptex",
+                "FireFront: writes the charred-wood textures this client generated (albedo, normal, ember masks) as PNG under BepInEx/config/FireFront-textures/, so the look can be checked outside the game",
+                args => FireDumpTextures(args));
 
             new Terminal.ConsoleCommand("firecheckprefab",
                 "FireFront: firecheckprefab <name> - inspect a prefab's components WITHOUT spawning it, to check if it's safe for vfx",
@@ -285,7 +289,7 @@ namespace FireFront.Commands
         {
             if (args.Length < 3)
             {
-                Say(args, "Usage: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|enabled> <value>");
+                Say(args, "Usage: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|charredember|charredembercover|charredsmoke|charredsmokeseconds|enabled> <value>");
                 return;
             }
 
@@ -555,6 +559,74 @@ namespace FireFront.Commands
                     if (float.TryParse(raw, out float gld)) { FireConfig.GroundMaxSpreadDistance.Value = gld; Ok(args, key, FireConfig.GroundMaxSpreadDistance.Value); }
                     else Bad(args, raw);
                     break;
+                case "fireshadows":
+                    if (bool.TryParse(raw, out bool fsh)) { FireConfig.FireShadowsEnabled.Value = fsh; Ok(args, key, fsh); }
+                    else Bad(args, raw);
+                    break;
+                case "heathaze":
+                    if (bool.TryParse(raw, out bool hhz)) { FireConfig.HeatHazeEnabled.Value = hhz; Ok(args, key, hhz); }
+                    else Bad(args, raw);
+                    break;
+                case "barkchar":
+                    if (bool.TryParse(raw, out bool bch)) { FireConfig.BarkCharEnabled.Value = bch; Ok(args, key, bch); }
+                    else Bad(args, raw);
+                    break;
+                case "treefire":
+                    if (bool.TryParse(raw, out bool tfd)) { FireConfig.TreeFireDamageEnabled.Value = tfd; Ok(args, key, tfd); }
+                    else Bad(args, raw);
+                    break;
+                case "treetick":
+                    if (float.TryParse(raw, out float ttk)) { FireConfig.TreeFireTickInterval.Value = ttk; Ok(args, key, FireConfig.TreeFireTickInterval.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "treekillfraction":
+                    if (float.TryParse(raw, out float tkf)) { FireConfig.TreeFireKillFraction.Value = tkf; Ok(args, key, FireConfig.TreeFireKillFraction.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "treedestruction":
+                    if (float.TryParse(raw, out float tdr)) { FireConfig.TreeDestructionRate.Value = tdr; Ok(args, key, FireConfig.TreeDestructionRate.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "charreddelay":
+                    if (float.TryParse(raw, out float cdl)) { FireConfig.CharredCollapseDelaySeconds.Value = cdl; Ok(args, key, FireConfig.CharredCollapseDelaySeconds.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "charredcoalmin":
+                    if (int.TryParse(raw, out int ccn)) { FireConfig.CharredCoalMin.Value = ccn; Ok(args, key, FireConfig.CharredCoalMin.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "charredcoalmax":
+                    if (int.TryParse(raw, out int ccx)) { FireConfig.CharredCoalMax.Value = ccx; Ok(args, key, FireConfig.CharredCoalMax.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "charredhealth":
+                    if (float.TryParse(raw, out float chf)) { FireConfig.CharredTreeHealthFraction.Value = chf; Ok(args, key, FireConfig.CharredTreeHealthFraction.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "charredcrumble":
+                    if (float.TryParse(raw, out float ccr)) { FireConfig.CharredLogCrumbleSeconds.Value = ccr; Ok(args, key, FireConfig.CharredLogCrumbleSeconds.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "charredglow":
+                    if (float.TryParse(raw, out float cgl)) { FireConfig.CharredEmberGlowSeconds.Value = cgl; Ok(args, key, FireConfig.CharredEmberGlowSeconds.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "charredember":
+                    if (float.TryParse(raw, out float cei)) { FireConfig.CharredEmberIntensity.Value = cei; Ok(args, key, FireConfig.CharredEmberIntensity.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "charredembercover":
+                    if (float.TryParse(raw, out float cec)) { FireConfig.CharredEmberCoverage.Value = cec; Ok(args, key, FireConfig.CharredEmberCoverage.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "charredsmoke":
+                    if (bool.TryParse(raw, out bool csm)) { FireConfig.CharredSmokeEnabled.Value = csm; Ok(args, key, FireConfig.CharredSmokeEnabled.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "charredsmokeseconds":
+                    if (float.TryParse(raw, out float css)) { FireConfig.CharredSmokeSeconds.Value = css; Ok(args, key, FireConfig.CharredSmokeSeconds.Value); }
+                    else Bad(args, raw);
+                    break;
                 // These three are read by the simulation but were reachable from no route at all,
                 // which FireConfig's own "every value is live-settable" doc comment promised was
                 // impossible. maxkills echoes the read-back value, not the token: its bind clamps
@@ -601,6 +673,31 @@ namespace FireFront.Commands
             for (int i = 0; i < names.Count; i++)
             {
                 Say(args, $"  {names[i]}");
+            }
+        }
+
+        /// <summary>
+        /// Local-only (the textures live on this client). Forces the ember masks to exist first
+        /// so a dump on a fresh client still shows something; the per-species albedo/normal
+        /// only exist once a charred tree of that species has been drawn.
+        /// </summary>
+        private static void FireDumpTextures(Terminal.ConsoleEventArgs args)
+        {
+            if (!FireVFXController.GraphicsAvailable)
+            {
+                Say(args, "No graphics device here (headless); nothing is generated on this side.");
+                return;
+            }
+            try
+            {
+                CharredTextures.EmberMask(0);
+                string dir = System.IO.Path.Combine(BepInEx.Paths.ConfigPath, "FireFront-textures");
+                int n = CharredTextures.DumpAll(dir);
+                Say(args, $"Wrote {n} texture(s) to {dir}. Char a tree of each species first to get its albedo/normal.");
+            }
+            catch (System.Exception ex)
+            {
+                Say(args, $"Dump failed: {ex.Message}");
             }
         }
 
@@ -936,6 +1033,23 @@ namespace FireFront.Commands
                 { "treeregrowthseconds", FireConfig.TreeRegrowthSeconds },
                 { "groundleashenabled", FireConfig.GroundMaxSpreadDistanceEnabled },
                 { "groundleashdistance", FireConfig.GroundMaxSpreadDistance },
+                { "fireshadows", FireConfig.FireShadowsEnabled },
+                { "heathaze", FireConfig.HeatHazeEnabled },
+                { "barkchar", FireConfig.BarkCharEnabled },
+                { "treefire", FireConfig.TreeFireDamageEnabled },
+                { "treetick", FireConfig.TreeFireTickInterval },
+                { "treekillfraction", FireConfig.TreeFireKillFraction },
+                { "treedestruction", FireConfig.TreeDestructionRate },
+                { "charreddelay", FireConfig.CharredCollapseDelaySeconds },
+                { "charredcoalmin", FireConfig.CharredCoalMin },
+                { "charredcoalmax", FireConfig.CharredCoalMax },
+                { "charredhealth", FireConfig.CharredTreeHealthFraction },
+                { "charredcrumble", FireConfig.CharredLogCrumbleSeconds },
+                { "charredglow", FireConfig.CharredEmberGlowSeconds },
+                { "charredember", FireConfig.CharredEmberIntensity },
+                { "charredembercover", FireConfig.CharredEmberCoverage },
+                { "charredsmoke", FireConfig.CharredSmokeEnabled },
+                { "charredsmokeseconds", FireConfig.CharredSmokeSeconds },
                 { "waterblocks", FireConfig.GroundWaterBlocksSpreadEnabled },
                 { "maxkills", FireConfig.MaxKillsPerCycle },
                 { "firesmoke", FireConfig.FireSmokeEnabled },
