@@ -1200,13 +1200,23 @@ namespace FireFront.Commands
         }
 
         /// <summary>
-        /// Server-side landing for a client's forwarded fireset. Trusted-tester
-        /// surface: the client command is admin-gated and the sender id is
-        /// logged for audit; hard server-side admin validation is deliberate
-        /// scope left for a public release.
+        /// Server-side landing for a client's forwarded fireset, typed or moved from a config
+        /// manager: both routes end here. Since 0.23 the sender is checked against the server's
+        /// own adminlist, the same vanilla check the relayed commands use (ExecuteRelayed), and
+        /// nothing is applied for a peer that is not on it. The typist's local admin state is
+        /// never consulted: it is false on every server without an adminlist file, which is how
+        /// 0.21.6's client-side gate made the sync a silent no-op (docs/HANDOFF.md, 0.21.7).
         /// </summary>
         public static void ApplyRemote(long sender, string key, string raw)
         {
+            if (!ValheimBridge.IsServer()) return;
+            if (!ValheimBridge.PeerIsAdmin(sender))
+            {
+                ValheimBridge.SendStatusResponse(sender, $"FireFront: fireset {key} refused — you are not in the server's adminlist.");
+                AuthLog.Refused(sender, "fireset", $"refused fireset '{key} = {raw}' from a peer not in the adminlist");
+                return;
+            }
+
             key = key?.ToLowerInvariant();
             if (key == null || !Settable().TryGetValue(key, out BepInEx.Configuration.ConfigEntryBase entry))
             {

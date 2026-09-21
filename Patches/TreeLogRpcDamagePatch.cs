@@ -24,8 +24,10 @@ namespace FireFront.Patches
             if (hit.m_statusEffectHash == CharredTreeLifecycle.TickMarker)
             {
                 // The same two guards as HandleFireDamage, for the same reasons. The sender
-                // check is a filter, not an authenticator - ZRoutedRpc never stamps the real
-                // sender - but it stops ordinary client traffic. The finite check is the one
+                // check is a filter on its own (ZRoutedRpc never stamps the real sender); since
+                // 0.23 the server drops an RPC_Damage whose claimed sender is not the connection
+                // it arrived on (RoutedRpcSenderGuardPatch), so the filter holds wherever that
+                // guard is armed, and this stays for the case it is not. The finite check is the one
                 // that matters: this writes ZDOVars.s_health, which replicates to every peer
                 // and is SAVED with the world, and `NaN < floor` is false so the clamp in
                 // ApplyTickToZdo would wave a NaN straight through.

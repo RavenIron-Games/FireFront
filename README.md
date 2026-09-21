@@ -42,7 +42,7 @@ On a dedicated server, **the server needs the dll too** — it runs the simulati
 
 **Consequences**
 
-- Standing in fire hurts, players and creatures alike, through vanilla's own burn mechanic.
+- Standing in fire hurts, through vanilla's own burn effect. Players burn on every kind of server; creatures burn in a hosted game only, because a dedicated server has no physical world where they stand.
 - Standing near fire keeps you warm — it holds off Cold and Freezing exactly as a campfire does, so you cannot freeze to death inside a burning forest.
 - A tree the fire kills is charred in place: a black, bare, ash-dusted husk of the same species — real char plates split by fissures, built from that species' own bark — with a few scattered pockets of embers that glow in the splits and fade over a couple of minutes, and thin smoke off the trunk for a while after. Three seconds later it either collapses — the charred trunk falls with the game's own felling crash, drops a little coal, smokes where it lies and crumbles to ash — or stays standing as a snag you can chop later for the same coal. Charred wood never drops wood or seeds and never catches fire again. `fireset treedestruction <0-100>` is the collapse chance; `charredember`, `charredembercover` and `charredsmokeseconds` are the look.
 - Join a server mid-blaze and you see the blaze: burning buildings and trees are sent to a connecting player as a snapshot, with how long each has burned.
@@ -94,15 +94,15 @@ Press `` ` `` to open the console.
 | `stopfire` | Extinguish whatever is under your crosshair |
 | `clearfires` | Every active fire out, instantly |
 | `firedebug` | Toggle verbose logging |
-| `fireset <key> <value>` | Live-tune any setting, no restart |
+| `fireset <key> <value>` | Live-tune any setting, no restart; a change to the server needs you on its admin list |
 
-Commands run on the server no matter where you type them, authorised against the server's own admin list, and the reply comes back to your console prefixed `[server]`.
+Commands run on the server no matter where you type them, authorised against the server's own admin list (`fireset` included, whether typed or moved from a config manager), and the reply comes back to your console prefixed `[server]`.
 
 Diagnostic-only: `firelistprefabs`, `firecheckprefab`, `firepurgevfx`, `firegroundignite`, `firetreeregrow`, `firetreeregrowlist`, `firedumptex` (writes the charred-wood textures this client generated as PNG under `BepInEx/config/FireFront-textures/`).
 
 ## Configuration
 
-Everything is in `BepInEx/config/com.raveniron.firefront.cfg` and everything is live-tunable with `fireset`, no restart required. The config file migrates itself between versions: when a default changes, a value you never touched follows it, and a value you chose is kept and named in the log.
+Everything is in `BepInEx/config/com.raveniron.firefront.cfg` and everything is live-tunable with `fireset` by a server admin, no restart required. The config file migrates itself between versions: when a default changes, a value you never touched follows it, and a value you chose is kept and named in the log.
 
 Every key is written to both the server's file and each client's, but most are read on one side only, and two presets (`lowspec`, `burntheworld`) silently override keys that still read true. [docs/CONFIG-KEY-MAP.md](docs/CONFIG-KEY-MAP.md) says, for all 81 keys, which side reads it and what overrides it.
 

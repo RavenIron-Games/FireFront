@@ -167,6 +167,15 @@ namespace FireFront.Fire
         // client. Flushed by FlushPendingPaint once a second, grouped by zone, one Save per zone.
         private readonly List<ValheimBridge.PaintJob> _pendingPaint = new List<ValheimBridge.PaintJob>();
         private float _pendingPaintRadius = 2f;
+        // 0.23: the server sends at most one assignment per second per peer (PaintFlushInterval);
+        // ten in five seconds is twice that, and anything past it is dropped with a logged count.
+        private const int PaintAssignMaxPerWindow = 10;
+        private const float PaintAssignWindowSeconds = 5f;
+        private float _paintAssignWindowEnd;
+        private int _paintAssignInWindow;
+        // 0.23: how far from the server's last reference position for a peer an extinguish request
+        // may act. The key acts at the player; a thrown bomb lands well inside this.
+        private const float MaxExtinguishReach = 200f;
         private float _nextPaintFlush;
         private const float PaintFlushInterval = 1f;
 
@@ -929,6 +938,9 @@ namespace FireFront.Fire
             // re-serializes it verbatim when it relays - it never stamps the real sender - so a
             // modded client CAN forge this and address it to Everybody. It still stops ordinary
             // client-to-client traffic, which is worth keeping, but it cannot be the only guard.
+            // Since 0.23 the server drops a FireFront package whose claimed sender is not the
+            // connection it arrived on (ValheimBridge.ValidateRoutedSender), so the filter holds
+            // wherever that guard is armed; the clamp below stays for the case it is not.
             if (!ValheimBridge.IsFromServer(sender)) return;
 
             // THIS is the guard that matters. Without it the RPC above is a one-packet server-wide
@@ -1047,6 +1059,37 @@ namespace FireFront.Fire
         private void HandleExtinguishRequest(long sender, ZDOID targetId, Vector3 playerPos, float groundRadius)
         {
             if (!ValheimBridge.IsServer()) return;
+
+            // 0.23: the server's own settings bound the request. The client sends the radius it
+            // was configured with, and until 0.23 that was applied as sent; now the larger of the
+            // server's two radii is the ceiling, so a client's copy of the key can only make its
+            // own request smaller. The position is checked against where the server last saw the
+            // sender (ZNetPeer.m_refPos, refreshed every 2 s): the key acts at the player and a
+            // thrown bomb lands tens of metres away, so a request from across the map is refused,
+            // not moved. A hosting player never comes through here (the caller extinguishes
+            // directly on a server), so an unknown reference position means a peer the server has
+            // not placed yet, and the request is allowed on the radius check alone.
+            if (float.IsNaN(playerPos.x) || float.IsNaN(playerPos.y) || float.IsNaN(playerPos.z) ||
+                float.IsInfinity(playerPos.x) || float.IsInfinity(playerPos.y) || float.IsInfinity(playerPos.z))
+            {
+                AuthLog.Refused(sender, "extinguish", "refused an extinguish request: the position is not finite");
+                return;
+            }
+            Vector3? seenAt = ValheimBridge.PeerRefPosition(sender);
+            if (seenAt.HasValue && (seenAt.Value - playerPos).sqrMagnitude > MaxExtinguishReach * MaxExtinguishReach)
+            {
+                AuthLog.Refused(sender, "extinguish-reach", $"refused an extinguish request at ({playerPos.x:F0},{playerPos.z:F0}): " +
+                                        $"{Vector3.Distance(seenAt.Value, playerPos):F0} m from where the server last saw the player, limit {MaxExtinguishReach:F0} m");
+                return;
+            }
+            float ceiling = Mathf.Max(FireConfig.ExtinguishGroundRadius.Value, FireConfig.DousingBombRadius.Value);
+            if (float.IsNaN(groundRadius) || groundRadius < 0f) groundRadius = 0f;
+            if (groundRadius > ceiling)
+            {
+                AuthLog.Refused(sender, "extinguish-radius", $"extinguish radius {groundRadius:F1} m clamped to the server's {ceiling:F1} m " +
+                                        "(the larger of ExtinguishGroundRadius and DousingBombRadius here)");
+                groundRadius = ceiling;
+            }
 
             if (!targetId.Equals(ZDOID.None))
             {
@@ -3449,12 +3492,25 @@ namespace FireFront.Fire
         /// their zone's terrain compiler, or is the nearest player to a zone nobody has touched,
         /// in which case the job says it may create one. Queued for FlushPendingPaint. The radius
         /// travels with the cells so the server's setting governs the look for everyone.
-        /// IsFromServer is a filter, not an authenticator (see HandleFireDamage); the count cap and
-        /// the radius clamp bound one message, nothing bounds how many arrive.
+        /// IsFromServer is a filter on its own (see HandleFireDamage); since 0.23 the server drops
+        /// a FireFront package whose claimed sender is not its connection, so the filter holds
+        /// wherever that guard is armed. The count cap and the radius clamp bound one message and
+        /// the window below bounds how many arrive.
         /// </summary>
         private void HandlePaintAssign(long sender, ZPackage pkg)
         {
             if (!ValheimBridge.IsFromServer(sender)) return;
+            float now = Time.realtimeSinceStartup;
+            if (now >= _paintAssignWindowEnd)
+            {
+                _paintAssignWindowEnd = now + PaintAssignWindowSeconds;
+                _paintAssignInWindow = 0;
+            }
+            if (++_paintAssignInWindow > PaintAssignMaxPerWindow)
+            {
+                AuthLog.Refused(sender, "paint-burst", $"dropped a paint assignment: more than {PaintAssignMaxPerWindow} in {PaintAssignWindowSeconds:F0} s");
+                return;
+            }
             float radius = pkg.ReadSingle();
             int count = pkg.ReadInt();
             if (float.IsNaN(radius) || float.IsInfinity(radius) || radius <= 0f || count < 0 || count > 4096) return;

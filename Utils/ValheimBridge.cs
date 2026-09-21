@@ -4081,11 +4081,117 @@ namespace FireFront.Utils
             catch (System.Exception ex) { FireLogger.Debug($"SendFireDamageToPeer threw: {ex.Message}"); }
         }
 
-        /// <summary>True if this routed RPC came from the server rather than another client.</summary>
+        /// <summary>
+        /// True if this routed RPC claims to come from the server. On its own that is a filter:
+        /// the sender id is written by the sender and relayed verbatim. Since 0.23 the server
+        /// drops FireFront and RPC_Damage packages whose claimed sender is not their connection
+        /// (<see cref="ValidateRoutedSender"/>), so the claim is trustworthy wherever that guard
+        /// is armed, and each handler keeps its own clamps for the case it is not.
+        /// </summary>
         public static bool IsFromServer(long sender)
         {
             long server = GetServerPeerId();
             return server != 0L ? sender == server : IsServer();
+        }
+
+        // ---------------------------------------------------------------------------------
+        // 0.23: the routed-RPC sender guard, server side.
+        //
+        // ZRoutedRpc.RPC_RoutedRPC reads m_senderPeerID straight off the wire and never compares
+        // it with the connection the package arrived on; when it relays (target != itself) it
+        // re-serialises that field verbatim. So until 0.23 a modded client could write the
+        // server's own id as the sender, address the package to Everybody, and every other
+        // client's IsFromServer check would pass it. This guard runs as a prefix on
+        // RPC_RoutedRPC, on the server only, and drops any package for one of the methods below
+        // whose claimed sender is not the uid of the ZNetPeer that owns the ZRpc it came in on.
+        // A client cannot register with the server's own uid (ZNet.RPC_PeerInfo refuses it as
+        // already connected), so "matches the connection" also means "is not the server".
+        //
+        // Scoped, deliberately: the twelve FireFront methods and vanilla's RPC_Damage, whose
+        // sender the tree, log and wear-and-tear prefixes act on. FireFront polices the traffic
+        // it consumes and nothing else. Vanilla and other mods stamp their own uid
+        // (InvokeRoutedRPC writes m_id) and would pass anyway; a mod that does something
+        // stranger is not this mod's to break.
+        //
+        // Fail-open, and says so: if ZNet.m_peers cannot be reflected the guard reports itself
+        // unarmed at RPC registration and every handler's own clamps stand alone, as in 0.22.
+        // ---------------------------------------------------------------------------------
+        private static readonly HashSet<int> GuardedRoutedMethods = new HashSet<int>
+        {
+            RpcIgniteRequest.GetStableHashCode(),
+            RpcFireEvent.GetStableHashCode(),
+            RpcPaintAssign.GetStableHashCode(),
+            RpcGroundFireSync.GetStableHashCode(),
+            RpcExtinguishRequest.GetStableHashCode(),
+            RpcConfigSet.GetStableHashCode(),
+            RpcStatusRequest.GetStableHashCode(),
+            RpcStatusResponse.GetStableHashCode(),
+            RpcCommandRelay.GetStableHashCode(),
+            RpcFireDamage.GetStableHashCode(),
+            RpcGroundSyncRequest.GetStableHashCode(),
+            RpcObjectFireSync.GetStableHashCode(),
+            "RPC_Damage".GetStableHashCode(),
+        };
+
+        /// <summary>The guard can only validate when the peer list is reachable.</summary>
+        public static bool RoutedSenderGuardArmed => ZNetPeersField != null;
+
+        /// <summary>
+        /// The prefix body for ZRoutedRpc.RPC_RoutedRPC. True lets the package through to vanilla;
+        /// false drops it. The package cursor is always put back where it was.
+        /// </summary>
+        public static bool ValidateRoutedSender(ZRpc rpc, ZPackage pkg)
+        {
+            if (rpc == null || pkg == null || !IsServer()) return true;
+
+            long claimed;
+            int methodHash;
+            int pos = pkg.GetPos();
+            try
+            {
+                pkg.ReadLong();           // m_msgID
+                claimed = pkg.ReadLong(); // m_senderPeerID
+                pkg.ReadLong();           // m_targetPeerID
+                pkg.ReadZDOID();          // m_targetZDO
+                methodHash = pkg.ReadInt();
+            }
+            catch (System.Exception)
+            {
+                // Too short to be a routed package. Vanilla's own Deserialize will say so.
+                return true;
+            }
+            finally
+            {
+                pkg.SetPos(pos);
+            }
+
+            if (!GuardedRoutedMethods.Contains(methodHash)) return true;
+            if (!RoutedSenderGuardArmed) return true;
+
+            long actual = ConnectionPeerId(rpc);
+            if (actual != 0L && actual == claimed) return true;
+
+            string host = "?";
+            try { host = rpc.GetSocket()?.GetHostName() ?? "?"; } catch { }
+            AuthLog.Refused(actual, "sender",
+                $"dropped a routed RPC (method {methodHash}) from connection {host}: it claims sender {claimed}, the connection is peer {actual}");
+            return false;
+        }
+
+        /// <summary>The uid of the connected peer that owns this ZRpc, or 0 when there is none.</summary>
+        private static long ConnectionPeerId(ZRpc rpc)
+        {
+            ZNet net = ZNet.instance;
+            if (net == null || ZNetPeersField == null) return 0L;
+            try
+            {
+                var peers = ZNetPeersField.GetValue(net) as List<ZNetPeer>;
+                if (peers == null) return 0L;
+                for (int i = 0; i < peers.Count; i++)
+                    if (peers[i] != null && ReferenceEquals(peers[i].m_rpc, rpc)) return peers[i].m_uid;
+            }
+            catch { }
+            return 0L;
         }
 
         /// <summary>
@@ -4207,6 +4313,13 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.Register<ZPackage>(RpcPaintAssign, onPaintAssign);
                 ZRoutedRpc.instance.Register<ZPackage>(RpcObjectFireSync, onObjectFireSync);
                 FireLogger.Info($"[IGNITE-TRACE] All 12 FireFront RPCs registered successfully (IsServer={IsServer()}).");
+                if (IsServer())
+                {
+                    if (RoutedSenderGuardArmed)
+                        FireLogger.Info($"{AuthLog.Prefix} routed-sender guard armed: {GuardedRoutedMethods.Count} methods (12 FireFront + RPC_Damage) are checked against the connection they arrive on.");
+                    else
+                        FireLogger.Warn($"{AuthLog.Prefix} routed-sender guard NOT armed: ZNet.m_peers could not be reflected. Forged sender ids pass as they did before 0.23; every handler's own clamps still apply.");
+                }
             }
             catch (System.Exception ex)
             {

@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.23.0
+
+- **A non-admin can no longer change the server's settings.** A `fireset` forwarded from a
+  client, and the ConfigurationManager sync that lands on the same server-side setter, are
+  checked against the server's own adminlist before anything is applied: the vanilla kick/ban
+  check (`ZNet.ListContainsId` on the socket's host name) that the relayed commands already
+  use. A refused change answers `[server] FireFront: fireset <key> refused — you are not in
+  the server's adminlist.` in the sender's console and is logged on the server under `[AUTH]`.
+  The check is server-side only, on purpose: a client-side gate is false on every server
+  without an adminlist file, which is how 0.21.6 made the sync a silent no-op.
+- **The server checks who a routed RPC came from.** Valheim reads a routed RPC's sender id
+  straight off the wire and relays it verbatim, so a modified client could write the
+  server's id as the sender, address the package to everybody, and every other client's
+  "only from the server" filter would pass it. A Harmony prefix on
+  `ZRoutedRpc.RPC_RoutedRPC`, server side, now drops a package for any of FireFront's twelve
+  RPCs, or for vanilla's `RPC_Damage` (the tree, log and wear-and-tear prefixes act on its
+  sender), whose claimed sender is not the peer the connection belongs to. Scoped to those
+  thirteen methods so no other traffic is touched. A client cannot register with the
+  server's own id (vanilla refuses it as already connected), so a sender that matches its
+  connection is never the server either. Drops are logged at Warn, one line per peer per
+  kind of refusal per ten seconds, with a count of what was not logged. The guard reports
+  `[AUTH] routed-sender guard armed: 13 methods` at RPC registration; if `ZNet.m_peers`
+  cannot be reflected it says so at Warn and every handler's own clamps stand alone, as in
+  0.22.
+- **Extinguish requests are bounded by the server's settings.** The radius a client sends
+  with the key or a Dousing Bomb was applied as sent. It is now capped at the larger of the
+  server's `ExtinguishGroundRadius` and `DousingBombRadius`, and the position must be
+  within 200 m of where the server last saw the player (its reference position, refreshed
+  every 2 s). Out of reach or not finite is refused and logged; over the cap is clamped and
+  logged. docs/CONFIG-KEY-MAP.md no longer calls the server's copies of those two keys dead.
+- **Paint assignments are rate-limited on the client.** The server sends at most one per
+  second per peer; more than ten in five seconds are dropped and logged. The 4096-cell cap
+  and the radius clamp per message are unchanged.
+- The README no longer says creatures burn on a dedicated server. Players do (the server
+  tells the owning client, since 0.21.8); creatures burn in a hosted game only, because a
+  dedicated server has no physical world where they stand.
+- Struck from the roadmap as already done: restored ground-fire cells do get a
+  `FireBurnZone` (0.21.9, `9900edf`; the restore path queues them for
+  `UpgradeDarkGroundCells`).
+
+Rig evidence: not yet played. Recorded here before the tag.
+
 ## 0.22.1
 
 - **A player who joins mid-fire now sees the fire.** Object fires (structures, trees, logs)

@@ -1,6 +1,73 @@
-# FireFront — 0.22.1 (2026-09-20): late-join fire sync, real charred wood, post-fire smoke
+# FireFront — 0.23.0 (2026-09-21): Authority
 
-**Resume point.** The `wubarrk` branch carries 0.22.1 on top of 0.22.0, compiling (0 errors)
+**Resume point.** `main` carries 0.23.0, unreleased: the first release on docs/ROADMAP.md,
+built (0 errors) and reviewed (four Sonnet lenses, two Opus refuters per finding) but NOT
+yet played. The rule since 0.22.1 is that nothing merges or tags on a reading alone, so the
+next step is the rig evening below, then the CHANGELOG's "Rig evidence" line, then the tag.
+Read the 0.23.0 CHANGELOG entry first, then docs/ROADMAP.md for what comes after.
+
+## 0.23.0 (2026-09-21): what changed, and the rig evening that gates it
+
+What changed (CHANGELOG 0.23.0 has the detail): `FireDevCommands.ApplyRemote` refuses a
+sender not on the server's adminlist; `HandleExtinguishRequest` clamps the radius to the
+server's own ceiling and refuses a position more than 200 m from the peer's reference
+position; `Patches/RoutedRpcSenderGuardPatch.cs` with `ValheimBridge.ValidateRoutedSender`
+drops a FireFront or `RPC_Damage` package whose claimed sender is not its connection;
+`HandlePaintAssign` drops more than ten assignments in five seconds; `Utils/AuthLog.cs`
+gates every `[AUTH]` Warn to one line per peer, per kind of refusal, per ten seconds, with a count.
+
+Review before the rig (2026-09-21 morning): four Sonnet lenses (engine correctness against
+the shipping decompiles, bypasses by a modified client, honest traffic the checks could
+drop, docs and log lines against the code), two Opus refuters per finding. Five findings,
+all refuted by both refuters; two were tightened anyway because the observation was right
+even where the defect was not: the `[AUTH]` gate is keyed per kind of refusal as well as
+per peer, so a forged package and a refused `fireset` from the same peer in the same ten
+seconds both show, and the README row on `fireset` says a change to the server needs the
+admin list rather than "admins only" (a client can still tune its own client-read keys).
+Refuted and left alone: the 200 m reach check reads `ZNetPeer.m_refPos`, which the client
+reports, but it is vanilla's only server-side notion of where a peer is and the whole
+server already acts on it; the guard's peer scan is the same loop vanilla's `RouteRPC`
+runs on the same packet; a portal trip or respawn cannot put an input-capable player 200 m
+from the last reported position inside the 2 s refresh.
+
+**The rig evening.** Both sides on the same build. The owner's Steam id is on the rig's
+adminlist (`C:\Users\donfr\AppData\LocalLow\IronGate\Valheim\adminlist.txt`); vanilla's
+`SyncedList` re-reads that file within 10 s of an edit, so switching between the two halves
+needs no restart.
+
+1. As admin (id on the list). Server boot: `[AUTH] routed-sender guard armed: 13 methods`.
+   `fireset burntheworld true` applies (server log `fireset (remote from <peer>):
+   burntheworld = True`), then `fireset burntheworld false`. Drag a ConfigurationManager
+   slider: same. `G` on a fire and a Dousing Bomb work as before.
+2. As non-admin (remove the owner's line from adminlist.txt, wait 10 s). `fireset
+   burntheworld true` answers `[server] FireFront: fireset burntheworld refused — you are
+   not in the server's adminlist.` and the server logs `[AUTH] refused fireset
+   'burntheworld = true' ...`. A slider drag: the same refusal. `G` and the bomb still
+   work; they are not admin actions.
+3. The forged packets, from the scratch plugin `FireFrontForgeProbe.dll` (source in the
+   session scratchpad under `forgeprobe/`; it is not part of FireFront, goes into Gale's
+   `testing` profile for the evening only and comes out afterwards). `forgeprobe paint` (a
+   PaintAssign claiming to be the server, addressed to everybody): nothing at your feet;
+   server log `[AUTH] dropped a routed RPC (method ...) from connection <id>: it claims
+   sender <server uid>, the connection is peer <yours>`. `forgeprobe burst` (thirty at
+   once): one `[AUTH]` line, and the next refusal after ten seconds carries `(29 more from
+   this peer ... not logged)`. `forgeprobe tree` (an `RPC_Damage` with FireFront's tick
+   marker, claiming the server, at the tree under the crosshair): dropped the same way, no
+   `[TREE-HP]` line, health unchanged. `forgeprobe dmg` (a FireDamage of 1e9 claiming the
+   server, addressed to yourself): no burn. `forgeprobe radius` (an honest request with a
+   100 km radius): `[AUTH] extinguish radius 100000.0 m clamped to the server's 15.0 m`.
+   `forgeprobe far` (an honest request 5 km east): `[AUTH] refused an extinguish request at
+   ... 5000 m from where the server last saw the player`.
+4. Put the adminlist line back. Record the log lines in the CHANGELOG under "Rig
+   evidence", commit, tag v0.23.0, package with tools/package.ps1, hand the zip over.
+
+Not changed in 0.23 and not to be changed here: the RPC names, payloads and the
+`IsFromServer` filters (0.24 is the protocol release), and the absence of a client-side
+`fireset` gate (by design; the 0.21.7 section below).
+
+## 0.22.1 (2026-09-20): late-join fire sync, real charred wood, post-fire smoke
+
+**State at 0.22.1.** The `wubarrk` branch carries 0.22.1 on top of 0.22.0, compiling (0 errors)
 and booted headless on the real `l-1.0.15` Linux dedicated server (every patch applied, 0
 exceptions). NomadicWar play-tested `720f520` clean (four sessions, 0 exceptions); the six
 look items from that review are closed on top of it (CHANGELOG, last 0.22.1 entry). **Seen in
