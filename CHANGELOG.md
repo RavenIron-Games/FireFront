@@ -59,8 +59,10 @@
   1.5 m umber disc per 1 m cell, feathered rims overlapping LIGHTER than the discs (a
   lattice), horizontal quads cutting into slopes, a palette lighter than a Black Forest floor
   so the tiles read both ways, on `Sprites/Default`. Now a multiply-blended soot blot
-  (vanilla's `Custom/Particle (Unlit)` from the ember donor, `Blend DstColor Zero`, soft
-  particles and fog off, queue 2950) that darkens whatever is lit - grass, sun, shadow and
+  (vanilla's `Custom/Particle (Unlit)` from the ember donor, `Blend OneMinusSrcAlpha
+  SrcAlpha` on black vertices with the shader's fog on - see the last entry below for why
+  not `DstColor Zero` - every other fade in the shader off, queue 2950)
+  that darkens whatever is lit - grass, sun, shadow and
   the fire's own light survive, and two blots overlapping only get darker - laid on the
   terrain's own normal by raycast, about two blots in five cells at 1.6-2.2x the cell,
   jittered, with a noise-warped outline and pale ash flecks. The first five placements log
@@ -98,6 +100,50 @@
   player, floating at the synced height with no tilt. They queue and spawn, with the
   lifetime they have left, once the zone is loaded on that client (since 0.21.15 the
   remote-mirror path had this hole on `main` too).
+- **The six look items from that review, and one thing found under them.** The scorch blot
+  is the size the entry above says: both callers passed the ground cell x 1.5 on top of the
+  spawner's own 1.6-2.2x, so a blot was 2.4-3.3 m on a 1 m cell and burnt ground sat under
+  2.7 multiply blots on average; the callers now pass the cell, which is 1.2 blot outlines
+  (about half a blot of full soot tone) per burnt square metre. The quad is fitted to five
+  terrain rays instead of one - centre and its four corners - so its plane is the mean of
+  what it spans and it is lifted along that normal by whatever its highest corner needs
+  (4 cm minimum; a lift past 35 cm - a corner more than 31 cm above the centre plane - is a
+  hollow no flat quad can lie in, and that mark is dropped and says so in the log; a
+  heightfield bump BETWEEN the five samples can still poke through, the slope case is
+  exact). The `[SCORCH] mark N` line now prints `terrain-hits=k/5 lift=Lm`. Under the tint question sat the real defect: **the 0.22.1 decal
+  drew nothing.** `Custom/Particle (Unlit)`'s compiled fragment never outputs the texture's
+  RGB - its colour is the VERTEX colour, and the texture contributes one channel, picked by
+  `_AlphaChannel`, into alpha - so `Blend DstColor Zero` multiplied the ground by white. The
+  multiply now rides on alpha (`_DstBlend` = SrcAlpha, `_AlphaChannel` = red, the blot's tone:
+  0.30 as stored, which displays as the ground at about 30 % of its brightness at the heart),
+  and it is fogged the way vanilla's own particles are rather than darkening ground that is
+  already fog-grey: the quad's vertex colour is black, the shader's `_FejdFog` is ON so the
+  fragment's RGB is exactly the fog term, and `Blend OneMinusSrcAlpha SrcAlpha` works out to
+  `a * (1 - f) * lit + f * fog` - the multiply under the fog (review of the fix found the
+  bare `framebuffer * a` scaling the fog term too, a black blob on grey mist at 50 m). Every
+  other fade the GLSL applies to that alpha is forced to 1 with the reason for each in the
+  code: `_SkyMask` (a top-down depth
+  test that hides anything under a canopy - the ground under a burnt tree is exactly that;
+  the donor has it ON), the soft-particle depth fade (compiled under the GLOBAL keyword, not
+  the material toggle; `_SoftNearFade` -1000 saturates it whatever the gap), and the
+  near-camera fade (`_CameraFadeFactor` 0.2 on the donor faded a mark out as the player
+  walked up to it). The `[SHADER-DIAG] scorch decal material` line reads every value back.
+  The charred twin of a pine or fir now takes the bark-confined ember mask, not the plain one
+  that lit the dead atlas' branch cards, and the post-burn glow is driven per material slot
+  exactly as the live burn is: leaf and non-emissive slots get no block, a slot whose mask is
+  not ready gets a black mask AND a black colour in the same block, and atlas clones keep a
+  black mask at the material level for good (a coverage change no longer points them at the
+  plain mask). The live-burn glow fades over 30-90 m on the very ramp the charred twin uses
+  (`FireVFXController.EmberDistanceFactor`), instead of stepping to 30 % at 70 m, so a tree
+  that turns from burning to charred at 50 m keeps its brightness; the 70 m step stays as the
+  emitter cost LOD only. And retired ember-mask sets (a coverage change parks the old set,
+  about 5.5 MB, because a destroyed texture samples white) are now freed: once every mask of
+  the new generation exists - all four plain variants and all four of every parked atlas -
+  and ten seconds of Time.time have passed (forty of the longest consumer tick), so every
+  block has been re-bound; the argument that no block can then hold a colour against a dead
+  mask is written above `CharredTextures.ReapRetired`, and the charred controller now writes
+  one explicit black block when a tree's glow ends or is switched off, which closes the two
+  holes that argument had. `firestatus` reports `retired masks N`.
 
 ## 0.22.0
 

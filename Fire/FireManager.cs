@@ -1586,7 +1586,7 @@ namespace FireFront.Fire
                    $"treeregrowth {FireConfig.EffectiveTreeRegrowthEnabled} (after {FireConfig.TreeRegrowthSeconds.Value}s, pending {_pendingRegrowth.Count}), " +
                    $"treefire {FireConfig.TreeFireDamageEnabled.Value} (tick {FireConfig.TreeFireTickInterval.Value}s, kill at {(FireConfig.TreeFireKillFraction.Value * 100f):F0}%), " +
                    $"charred (collapse {FireConfig.TreeDestructionRate.Value:F0}% after {FireConfig.CharredCollapseDelaySeconds.Value}s, coal {FireConfig.CharredCoalMin.Value}-{FireConfig.CharredCoalMax.Value}, " +
-                   $"health {(FireConfig.CharredTreeHealthFraction.Value * 100f):F0}%, crumble {FireConfig.CharredLogCrumbleSeconds.Value}s, glow {FireConfig.CharredEmberGlowSeconds.Value}s x{FireConfig.CharredEmberIntensity.Value:F2} cover {FireConfig.CharredEmberCoverage.Value:F2}, smoke {FireConfig.EffectiveCharredSmokeEnabled} {FireConfig.CharredSmokeSeconds.Value}s; charred {_treesCharredCount}, collapsed {_treesCollapsedCount}), " +
+                   $"health {(FireConfig.CharredTreeHealthFraction.Value * 100f):F0}%, crumble {FireConfig.CharredLogCrumbleSeconds.Value}s, glow {FireConfig.CharredEmberGlowSeconds.Value}s x{FireConfig.CharredEmberIntensity.Value:F2} cover {FireConfig.CharredEmberCoverage.Value:F2}, smoke {FireConfig.EffectiveCharredSmokeEnabled} {FireConfig.CharredSmokeSeconds.Value}s, retired masks {CharredTextures.RetiredMaskCount}; charred {_treesCharredCount}, collapsed {_treesCollapsedCount}), " +
                    $"firelook (shadows {FireConfig.EffectiveFireShadowsEnabled}, haze {FireConfig.EffectiveHeatHazeEnabled}, barkchar {FireConfig.EffectiveBarkCharEnabled}), " +
                    $"pendingignite {_pendingIgniteResolutions.Count}, " +
                    $"firebreaks {FireConfig.EffectiveGroundFirebreaksEnabled}, " +
@@ -3555,12 +3555,17 @@ namespace FireFront.Fire
                 // time and that, on a dedicated server, none of them has ever seen: the decal is
                 // not networked, and the only machine that drew one was the one simulating. The
                 // client already holds everything needed to draw its own. It recorded this cell's
-                // height when it ignited, and this is the moment the cell went out.
+                // height when it ignited, and this is the moment the cell went out. The size
+                // passed is the CELL, unscaled: the spawner grows it to its documented 1.6-2.2x
+                // itself. Until 2026-09-20 this site (and LeaveScorchMark) passed the cell x 1.5
+                // on top of that, which NomadicWar caught from the changelog's own numbers - a
+                // 2.4-3.3 m blot per 1 m cell, 2.7 multiply blots deep over every burnt square
+                // metre, burnt ground pushed toward black.
                 if (FireConfig.EffectiveScorchMarksEnabled &&
                     _remoteGroundCells.TryGetValue(key, out float scorchY))
                 {
                     QueueScorchMark(CellCenter(key, scorchY),
-                        FireConfig.GroundCellSize.Value * 1.5f,
+                        FireConfig.GroundCellSize.Value,
                         FireConfig.ScorchMarkLifetimeSeconds.Value);
                 }
 
@@ -3645,7 +3650,7 @@ namespace FireFront.Fire
         private readonly Dictionary<(int x, int z), int> _pendingScorchIndex = new Dictionary<(int x, int z), int>();
         private const int PendingScorchCap = 4000;          // distinct real marks (thinned, one per cell): the Apocalypse preset's ground counts to reach
         private const int PendingScorchScanPerFrame = 256;  // entries checked for a loaded zone per frame
-        private const int PendingScorchSpawnsPerFrame = 8;  // a raycast and a quad each: a full cap fills in ~8 s at 60 fps
+        private const int PendingScorchSpawnsPerFrame = 8;  // five terrain raycasts and a quad each: a full cap fills in ~8 s at 60 fps
         private const float PendingScorchMinVisible = 15f;  // or half the mark's own lifetime, whichever is less; under that is a blink, not a scar
         private int _pendingScorchCursor; // the drain's
         private int _pendingScorchEvict;  // the cap's, separate: a burst of evictions must not push the drain past entries it never checked
@@ -3687,7 +3692,10 @@ namespace FireFront.Fire
         /// ground VFX queue drains a few per frame. A mark spawns with the lifetime it has left;
         /// one under its own floor is dropped instead of flashing. Marks switched off while they
         /// waited are dropped, and so is one whose loaded zone turns out to have no terrain under
-        /// it (SpawnScorchMark answers false), rather than floating it at the synced height.
+        /// it, or terrain too rough for a flat quad to lie on (SpawnScorchMark answers false for
+        /// both), rather than floating it at the synced height or a third of a metre up. The
+        /// spawn budget above is sized for the five terrain rays a mark now casts (centre and
+        /// four corners): at most 40 a frame, against a heightfield.
         /// </summary>
         private void DrainPendingScorch()
         {
@@ -3897,7 +3905,9 @@ namespace FireFront.Fire
             // 1,875 invisible GameObjects per five minutes at stock settings. Clients now spawn
             // their own from the sync stream instead; see the expiry loop in HandleGroundFireSync.
             if (!FireConfig.EffectiveScorchMarksEnabled || ValheimBridge.IsDedicatedServer()) return;
-            float size = FireConfig.GroundCellSize.Value * 1.5f;
+            // The cell, unscaled - the spawner applies the 1.6-2.2x. See the remote expiry
+            // path in HandleGroundFireSync for the 1.5 that used to sit here and what it did.
+            float size = FireConfig.GroundCellSize.Value;
             QueueScorchMark(position, size, FireConfig.ScorchMarkLifetimeSeconds.Value);
         }
 

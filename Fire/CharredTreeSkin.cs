@@ -84,6 +84,8 @@ namespace FireFront.Fire
         public static Color EmberCool => new Color(1f, 0.20f, 0.03f, 1f) * (EmberPeakHdr * 0.55f);
 
         private static readonly Dictionary<Material, Material> s_clones = new Dictionary<Material, Material>();
+        /// <summary>Clones of the atlas species (Pine, Fir): their material-level mask is black and stays black, see <see cref="OnEmberMasksRebuilt"/>.</summary>
+        private static readonly HashSet<Material> s_atlasClones = new HashSet<Material>();
         private static Texture s_ash;
         private static Texture s_deadPine;
         private static Texture s_deadFir;
@@ -241,8 +243,18 @@ namespace FireFront.Fire
                 // Ember cracks. A null _EmissiveTex binds Unity's default WHITE texture and the
                 // whole tree would glow uniformly, so a mask is ALWAYS assigned - black when the
                 // generator could not run - and the emission colour stays black until the
-                // property block says otherwise.
-                if (c.HasProperty(P_EmissiveTex)) c.SetTexture(P_EmissiveTex, s_emberMask != null ? s_emberMask : Texture2D.blackTexture);
+                // property block says otherwise. An atlas species gets BLACK here, never the
+                // plain mask: its embers must stay on the bark block of the atlas, and that
+                // bark-confined mask is per atlas and per tree, so it rides in the per-slot block
+                // (SetEmber). A plain mask on the shared material would light the dead atlas'
+                // branch cards on every charred pine or fir whose block is momentarily absent
+                // (NomadicWar's PR #3 review, 2026-09-20: the charred twin bound the plain mask).
+                if (c.HasProperty(P_EmissiveTex))
+                {
+                    bool atlas = IsAtlasMaterial(src);
+                    c.SetTexture(P_EmissiveTex, !atlas && s_emberMask != null ? s_emberMask : Texture2D.blackTexture);
+                    if (atlas) s_atlasClones.Add(c);
+                }
                 c.SetColor(P_EmissionColor, Color.black); // per-tree value comes from the property block
 
                 // Dead wood does not sway like a live crown.
@@ -270,12 +282,13 @@ namespace FireFront.Fire
         /// <summary>
         /// Re-skins every mesh renderer under <paramref name="root"/> (every LOD — LODGroup only
         /// toggles visibility, each LOD has its own material array) and silences leaf-particle
-        /// emitters. Returns the renderers touched so the caller can drive the ember fade.
+        /// emitters. Returns the material slots, classified, so the caller can drive the ember
+        /// fade per slot exactly as the live burn does.
         /// </summary>
-        public static List<Renderer> Apply(GameObject root, Color ember, int emberVariant = 0)
+        public static CharSlot[] Apply(GameObject root, Color ember, int emberVariant = 0)
         {
-            var touched = new List<Renderer>();
-            if (root == null) return touched;
+            var slots = new List<CharSlot>();
+            if (root == null) return slots.ToArray();
             EnsureDonors();
 
             Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
@@ -299,45 +312,61 @@ namespace FireFront.Fire
                 for (int j = 0; j < mats.Length; j++)
                 {
                     if (mats[j] == null) continue;
+                    // Classified from the VANILLA material, before the swap: Atlas has to be the
+                    // live atlas, the dictionary key the live burn's bark-confined mask was built
+                    // under, so a pine that burned and then charred keeps the very same mask (the
+                    // dead atlas on the clone shares that UV layout). The clone is new Material(src),
+                    // same shader, so Emissive reads the same off either.
+                    slots.Add(ClassifySlot(r, j, mats[j]));
                     Material clone = CharredCloneOf(mats[j]);
                     if (clone != null && clone != mats[j]) { mats[j] = clone; changed = true; }
                 }
                 if (changed) r.sharedMaterials = mats;
-
-                touched.Add(r);
             }
 
-            SetEmber(touched, ember, emberVariant);
-            return touched;
+            CharSlot[] result = slots.ToArray();
+            SetEmber(result, ember, emberVariant);
+            return result;
         }
 
         /// <summary>
-        /// Per-tree ember glow, through the property block only — no material is touched. The
-        /// mask variant rides along so two charred trees side by side glow in different places,
-        /// and so a rebuilt mask set (coverage changed) is picked up on the next fade tick.
+        /// Per-tree ember glow, through per-slot property blocks only — no material is touched.
+        /// The mask variant rides along so two charred trees side by side glow in different
+        /// places, and so a rebuilt mask set (coverage changed) is picked up on the next fade
+        /// tick. Allocation-free per call.
         /// </summary>
-        public static void SetEmber(List<Renderer> renderers, Color ember, int emberVariant = 0)
+        /// <remarks>
+        /// Per SLOT, not per renderer, for the same reason the live burn is: a per-renderer block
+        /// lands on every material of the renderer, so the plain mask went onto a pine's atlas
+        /// slot (its dead branch cards lit), onto the alpha-killed leaf slot, and the colour onto
+        /// shaders with no emission slot at all (Custom/StaticRock on the swamp log, a silent
+        /// no-op). Now: leaf and non-emissive slots get no block; an atlas slot takes the mask
+        /// confined to its bark block; and a slot whose mask is not ready yet is explicitly black
+        /// through a black mask, never "whatever was there" - a colour through an unbound slot
+        /// samples Unity's default white and lights the whole mesh (NomadicWar, 2026-09-20).
+        /// </remarks>
+        public static void SetEmber(CharSlot[] slots, Color ember, int emberVariant = 0)
         {
-            if (renderers == null) return;
-            Texture2D mask = null;
-            if (FireVFXController.GraphicsAvailable)
+            if (slots == null) return;
+            bool graphics = FireVFXController.GraphicsAvailable;
+            for (int i = 0; i < slots.Length; i++)
             {
-                try { mask = CharredTextures.EmberMask(emberVariant); } catch (System.Exception) { }
-            }
-            if (mask == null) ember = Color.black; // never drive a colour through an unbound (white) slot
-            for (int i = 0; i < renderers.Count; i++)
-            {
-                Renderer r = renderers[i];
-                if (r == null) continue;
-                s_mpb.Clear();
-                if (r.HasPropertyBlock()) r.GetPropertyBlock(s_mpb);
-                s_mpb.SetColor(P_EmissionColor, ember);
-                if (mask != null)
+                CharSlot s = slots[i];
+                if (s.Renderer == null) continue;
+                if (s.Foliage || !s.Emissive) continue;
+                Texture2D mask = null;
+                if (graphics)
                 {
-                    s_mpb.SetTexture(P_EmissiveTex, mask);
-                    s_mpb.SetTexture(P_EmissionMap, mask);
+                    try { mask = s.Atlas != null ? CharredTextures.EmberMaskForAtlas(s.Atlas, emberVariant) : CharredTextures.EmberMask(emberVariant); }
+                    catch (System.Exception) { mask = null; }
                 }
-                r.SetPropertyBlock(s_mpb);
+                s_mpb.Clear();
+                // Both texture names: the shader reads the one it declares and ignores the other.
+                Texture bound = mask != null ? mask : Texture2D.blackTexture;
+                s_mpb.SetTexture(P_EmissiveTex, bound);
+                s_mpb.SetTexture(P_EmissionMap, bound);
+                s_mpb.SetColor(P_EmissionColor, mask != null ? ember : Color.black);
+                s.Renderer.SetPropertyBlock(s_mpb, s.Slot);
             }
         }
 
@@ -370,12 +399,35 @@ namespace FireFront.Fire
             public bool Vegetation;
             public bool Foliage;
             public Color BaseTint;
-            /// <summary>The trunk+foliage atlas of a Pine/Fir material, so its live-burn embers stay on the bark half; null for every other material.</summary>
+            /// <summary>The trunk+foliage atlas of a Pine/Fir material, so its embers (live burn and charred alike) stay on the bark half; null for every other material.</summary>
             public Texture Atlas;
+            /// <summary>The shader declares an emissive mask slot (_EmissiveTex or _EmissionMap). A slot without one is never sent an ember colour.</summary>
+            public bool Emissive;
         }
 
         /// <summary>Atlas species: one Custom/Vegetation material carries trunk AND needles, and its needle cards must never emit.</summary>
         private static bool IsAtlasMaterial(Material m) => m != null && (m.name == "PineTree_01" || m.name == "Pine_tree");
+
+        /// <summary>
+        /// One slot, classified from the material it carries. Shared by the live burn
+        /// (<see cref="CollectCharSlots"/>, vanilla materials) and the charred skin
+        /// (<see cref="Apply"/>, the vanilla material a moment before its clone goes in) so the
+        /// two paths never disagree about what a slot is.
+        /// </summary>
+        private static CharSlot ClassifySlot(Renderer r, int slot, Material m)
+        {
+            bool vegetation = m.shader != null && m.shader.name == VegetationShader;
+            return new CharSlot
+            {
+                Renderer = r,
+                Slot = slot,
+                Vegetation = vegetation,
+                Foliage = vegetation && IsFoliage(m),
+                BaseTint = m.HasProperty(P_Color) ? m.GetColor(P_Color) : Color.white,
+                Atlas = vegetation && IsAtlasMaterial(m) && m.HasProperty(P_MainTex) ? m.GetTexture(P_MainTex) : null,
+                Emissive = m.HasProperty(P_EmissiveTex) || m.HasProperty(P_EmissionMap),
+            };
+        }
 
         /// <summary>
         /// Live-burn bark char: darkens the trunk and lights ember cracks in proportion to
@@ -458,18 +510,8 @@ namespace FireFront.Fire
                 Material[] mats = renderers[i].sharedMaterials; // once, here - not per tick
                 for (int j = 0; j < mats.Length; j++)
                 {
-                    Material m = mats[j];
-                    if (m == null) continue;
-                    bool vegetation = m.shader != null && m.shader.name == VegetationShader;
-                    list.Add(new CharSlot
-                    {
-                        Renderer = renderers[i],
-                        Slot = j,
-                        Vegetation = vegetation,
-                        Foliage = vegetation && IsFoliage(m),
-                        BaseTint = m.HasProperty(P_Color) ? m.GetColor(P_Color) : Color.white,
-                        Atlas = vegetation && IsAtlasMaterial(m) && m.HasProperty(P_MainTex) ? m.GetTexture(P_MainTex) : null,
-                    });
+                    if (mats[j] == null) continue;
+                    list.Add(ClassifySlot(renderers[i], j, mats[j]));
                 }
             }
             return list.ToArray();
@@ -478,6 +520,11 @@ namespace FireFront.Fire
         /// <summary>
         /// A new mask set exists (CharredEmberCoverage changed): every cached clone is re-pointed
         /// at it. Live trees pick up their own variant on their next fade tick through the block.
+        /// The atlas clones (Pine, Fir) are left alone: their material-level mask is black on
+        /// purpose, because the plain mask covers the whole atlas and would light the dead
+        /// needle and branch cards of any pine or fir whose per-slot block is momentarily absent.
+        /// Their real, bark-confined mask only ever lives in the block, and SetEmber refreshes it
+        /// per atlas on the next tick.
         /// </summary>
         public static void OnEmberMasksRebuilt(Texture2D mask0)
         {
@@ -485,7 +532,7 @@ namespace FireFront.Fire
             foreach (KeyValuePair<Material, Material> kv in s_clones)
             {
                 Material c = kv.Value;
-                if (c == null) continue;
+                if (c == null || s_atlasClones.Contains(c)) continue;
                 if (c.HasProperty(P_EmissiveTex) && c.GetTexture(P_EmissiveTex) != null) c.SetTexture(P_EmissiveTex, mask0);
                 if (c.HasProperty(P_EmissionMap) && c.GetTexture(P_EmissionMap) != null) c.SetTexture(P_EmissionMap, mask0);
             }
@@ -499,6 +546,7 @@ namespace FireFront.Fire
                 if (kv.Value != null) Object.Destroy(kv.Value);
             }
             s_clones.Clear();
+            s_atlasClones.Clear();
             s_emberMask = null;
             s_donorsResolved = false;
             CharredTextures.ReleaseAll();

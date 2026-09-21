@@ -2,7 +2,10 @@
 
 **Resume point.** The `wubarrk` branch carries 0.22.1 on top of 0.22.0, compiling (0 errors)
 and booted headless on the real `l-1.0.15` Linux dedicated server (every patch applied, 0
-exceptions) but NOT yet run with a client. Read the 0.22.1 and 0.22.0 CHANGELOG entries first.
+exceptions). NomadicWar play-tested `720f520` clean (four sessions, 0 exceptions); the six
+look items from that review are closed on top of it (CHANGELOG, last 0.22.1 entry) and NOT
+yet seen in game - the scorch decal in particular has never drawn until this build. Read the
+0.22.1 and 0.22.0 CHANGELOG entries first.
 
 **Headless boot check on this box (one command, ~40 s):** the Steam-installed Linux dedicated
 server plus `~/valheim-testbed/boot-check.sh` (libs-Tools' `DEDICATED-SERVER-TESTBED` lineage):
@@ -28,9 +31,26 @@ clock stops on an empty server, and everything visual is client-side.
   alpha 255, always bound, atlas needles excluded, distance fade) - if any trunk still glows
   end to end, `firedumptex` and look at `FireFront_EmberMask_0.png`: it must be BLACK between
   the pockets. Burning pines must show embers on the bark only, never the canopy.
-- Scorch marks: `[SCORCH] mark 1..5` lines with `terrain-hit=True` and `shader=Custom/Particle
-  (Unlit) blend=2/0`; on the ground, soft dark blots with no grid. If `blend=n/a` the
-  alpha-disc fallback is in use (no ember donor found).
+- Scorch marks: `[SCORCH] mark 1..5` lines with `terrain-hits=5/5 lift=0.04m` (more lift on
+  a bumpy patch; a Debug `too rough ... mark dropped` line is a hollow, not a bug) and
+  `shader=Custom/Particle (Unlit) blend=10/5`; on the ground, soft dark blots 1.6-2.2 m
+  across with no grid. THIS is the first build in which the multiply decal can draw at all -
+  0.22.1 as reviewed multiplied the ground by white (the shader outputs vertex colour, not
+  the texture; CHANGELOG, last 0.22.1 entry) - so one blot on flat ground is the check. The
+  `[SHADER-DIAG] scorch decal material` line must read `blend 10/5 ... alphaChannel 0, cull
+  0, skyMask 0, softParticles 0 (SOFTPARTICLES_ON off, nearFade -1000, fadeFactor 1),
+  cameraFadeFactor 1000, fejdFog 1`. If `blend=n/a` the alpha-disc fallback is in use (no
+  ember donor found). Blots must stay visible under a canopy and while walking right up to
+  them - those were the two donor fades that would have hidden them - and in mist at 50 m
+  they must fade into the grey like everything else, not sit on it as black blobs (that is
+  what the black vertices + `_FejdFog` are for).
+- Charred pine/fir (the atlas species): embers on the bark only, never on the bare branch
+  cards of the dead atlas; then `fireset charredembercover 0.6` mid-glow: after ~10 s of the
+  new masks existing, `firestatus` should show `retired masks 0` and a Debug `[CHARRED] freed
+  retired mask set generation N (M textures)`, with NO tree lighting up whole at that moment
+  (that is the destroyed-texture-samples-white failure the reaper is argued against).
+- Walk away from a burning tree and from a charred one side by side: both glows fade on the
+  same ramp between 30 and 90 m; nothing steps at 70 m any more except the far emitters.
 - The charred trunk should be black plates with a few glowing pockets, not a lit lattice;
   `fireset charredember 1` makes it the Ashlands strength, `fireset charredembercover 0.6`
   spreads the pockets (masks rebuild in a few ms; watch for `ember masks built`).

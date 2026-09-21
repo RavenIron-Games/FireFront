@@ -55,6 +55,15 @@ namespace FireFront.Fire
             public readonly Texture2D[] Masks = new Texture2D[Variants];
             public readonly Task<Color32[]>[] Tasks = new Task<Color32[]>[Variants];
         }
+        /// <summary>A mask of a superseded generation, parked until <see cref="ReapRetired"/> can show that nothing draws through it with a colour.</summary>
+        private sealed class RetiredMask
+        {
+            public Texture2D Tex;
+            public int Generation;
+            /// <summary>The atlas this mask was confined to (null for a plain mask): its CURRENT set must be complete before this one may go.</summary>
+            public Texture Atlas;
+            public bool FromAtlas;
+        }
 
         private static ProceduralTextures.CrackField s_crack;
         private static float[] s_height;
@@ -64,7 +73,11 @@ namespace FireFront.Fire
         private static Texture2D[] s_emberMasks;
         private static Task<Color32[]>[] s_maskTasks;
         private static int s_generation; // bumps on every coverage change; a set built for an older generation is retired
-        private static readonly List<Texture2D> s_retiredMasks = new List<Texture2D>();
+        private static readonly List<RetiredMask> s_retiredMasks = new List<RetiredMask>();
+        /// <summary>How long a retired set stays parked after its replacement is complete; <see cref="ReapRetired"/> says why this long.</summary>
+        private const float ReapGraceSeconds = 10f;
+        private static float s_replacementReadyAt = -1f; // Time.time at which the current generation was first seen complete; -1 while it is not
+        private static int s_reapFrame = -1;
         private static float s_maskCoverage = -1f;
         /// <summary>Per-atlas mask sets (pine, fir): the standard masks confined to the atlas' opaque bark block, so needle cards never light during a live burn.</summary>
         private static readonly Dictionary<Texture, AtlasSet> s_atlasMasks = new Dictionary<Texture, AtlasSet>();
@@ -76,6 +89,9 @@ namespace FireFront.Fire
         private static readonly HashSet<Texture> s_failed = new HashSet<Texture>();
         private static bool s_blitFailureLogged;
         private static bool s_taskFailureLogged;
+
+        /// <summary>Retired mask textures still parked, about 1.4 MB each (512² RGBA32 with mips); for `firestatus`. Zero once <see cref="ReapRetired"/> has freed them.</summary>
+        public static int RetiredMaskCount => s_retiredMasks.Count;
 
         private static Fields BuildFields()
         {
@@ -150,43 +166,16 @@ namespace FireFront.Fire
         /// Ember mask <paramref name="variant"/> for the current CharredEmberCoverage, or null
         /// while it is still being built (or if it cannot be). Built one variant at a time, on a
         /// worker thread, on demand. A coverage change starts a new generation; the previous set
-        /// is NOT destroyed: material clones and property blocks still point at it, and a
-        /// destroyed texture samples as white - exactly the whole-tree glow this mask exists to
-        /// prevent. It is parked and freed on unload.
+        /// is NOT destroyed on the spot: material clones and property blocks still point at it,
+        /// and a destroyed texture samples as white - exactly the whole-tree glow this mask exists
+        /// to prevent. It is parked and freed later by <see cref="ReapRetired"/>, once every
+        /// consumer has had ample time to re-bind to the new set.
         /// </summary>
         public static Texture2D EmberMask(int variant)
         {
-            float coverage = Mathf.Clamp01(FireConfig.CharredEmberCoverage.Value);
-            if (s_emberMasks == null || !Mathf.Approximately(coverage, s_maskCoverage))
-            {
-                if (s_emberMasks != null)
-                    for (int v = 0; v < s_emberMasks.Length; v++) if (s_emberMasks[v] != null) s_retiredMasks.Add(s_emberMasks[v]);
-                s_emberMasks = new Texture2D[Variants];
-                s_maskTasks = new Task<Color32[]>[Variants];
-                s_maskCoverage = coverage;
-                s_generation++;
-            }
-            int i = variant % Variants; if (i < 0) i += Variants;
-            if (s_emberMasks[i] != null) return s_emberMasks[i];
-            if (!TryGetFields()) return null;
-
-            Task<Color32[]> task = s_maskTasks[i];
-            if (task == null)
-            {
-                ProceduralTextures.CrackField crack = s_crack;
-                int pocketSeed = Seed + 100 + i * 17, maskSeed = Seed + i * 17;
-                s_maskTasks[i] = Task.Run(() => ProceduralTextures.EmberMask(Size, Size, crack,
-                    ProceduralTextures.PocketField(Size, Size, coverage, pocketSeed), maskSeed));
-                return null;
-            }
-            if (!task.IsCompleted) return null;
-            if (task.IsFaulted) { LogTaskFailure("ember mask", task.Exception); return null; }
-
-            s_emberMasks[i] = MakeTexture(task.Result, Size, Size, linear: true, name: "FireFront_EmberMask_" + i);
-            s_maskTasks[i] = null;
-            FireLogger.Debug($"[CHARRED] ember mask {i} built ({Size}², coverage {coverage:F2}, generation {s_generation})");
-            if (i == 0) CharredTreeSkin.OnEmberMasksRebuilt(s_emberMasks[0]);
-            return s_emberMasks[i];
+            RefreshGeneration();
+            ReapRetired();
+            return AdvancePlain(variant);
         }
 
         /// <summary>
@@ -199,15 +188,86 @@ namespace FireFront.Fire
         /// </summary>
         public static Texture2D EmberMaskForAtlas(Texture atlas, int variant)
         {
-            Texture2D plain = EmberMask(variant); // also starts, or advances, the base set
+            RefreshGeneration();
+            ReapRetired();
+            return AdvanceAtlas(atlas, variant);
+        }
+
+        /// <summary>
+        /// Notices a CharredEmberCoverage change: bumps the generation, starts an empty plain set
+        /// and parks every mask of the old one - the plain set AND every per-atlas set, whether
+        /// or not anybody asks for that atlas again - so nothing stale can sit in
+        /// <see cref="s_atlasMasks"/> out of the reaper's sight.
+        /// </summary>
+        private static void RefreshGeneration()
+        {
+            float coverage = Mathf.Clamp01(FireConfig.CharredEmberCoverage.Value);
+            if (s_emberMasks != null && Mathf.Approximately(coverage, s_maskCoverage)) return;
+            if (s_emberMasks != null)
+            {
+                for (int v = 0; v < s_emberMasks.Length; v++) Retire(s_emberMasks[v], s_generation, null);
+                foreach (KeyValuePair<Texture, AtlasSet> kv in s_atlasMasks) RetireAtlasSet(kv.Key, kv.Value);
+                s_atlasMasks.Clear();
+            }
+            s_emberMasks = new Texture2D[Variants];
+            s_maskTasks = new Task<Color32[]>[Variants]; // a build in flight for the old generation completes into nothing
+            s_maskCoverage = coverage;
+            s_generation++;
+        }
+
+        private static void Retire(Texture2D tex, int generation, Texture atlas)
+        {
+            if (tex == null) return;
+            s_retiredMasks.Add(new RetiredMask { Tex = tex, Generation = generation, Atlas = atlas, FromAtlas = !ReferenceEquals(atlas, null) });
+            s_replacementReadyAt = -1f; // anything newly parked restarts the grace, whatever its generation
+        }
+
+        private static void RetireAtlasSet(Texture atlas, AtlasSet set)
+        {
+            if (set == null) return;
+            for (int v = 0; v < Variants; v++) Retire(set.Masks[v], set.Generation, atlas);
+        }
+
+        /// <summary>The plain mask of the current generation for <paramref name="variant"/>: returns it, or starts / advances its build and answers null.</summary>
+        private static Texture2D AdvancePlain(int variant)
+        {
+            int i = variant % Variants; if (i < 0) i += Variants;
+            if (s_emberMasks[i] != null) return s_emberMasks[i];
+            if (!TryGetFields()) return null;
+
+            Task<Color32[]> task = s_maskTasks[i];
+            if (task == null)
+            {
+                ProceduralTextures.CrackField crack = s_crack;
+                float coverage = s_maskCoverage;
+                int pocketSeed = Seed + 100 + i * 17, maskSeed = Seed + i * 17;
+                s_maskTasks[i] = Task.Run(() => ProceduralTextures.EmberMask(Size, Size, crack,
+                    ProceduralTextures.PocketField(Size, Size, coverage, pocketSeed), maskSeed));
+                return null;
+            }
+            if (!task.IsCompleted) return null;
+            if (task.IsFaulted) { LogTaskFailure("ember mask", task.Exception); return null; }
+
+            s_emberMasks[i] = MakeTexture(task.Result, Size, Size, linear: true, name: "FireFront_EmberMask_" + i);
+            s_maskTasks[i] = null;
+            FireLogger.Debug($"[CHARRED] ember mask {i} built ({Size}², coverage {s_maskCoverage:F2}, generation {s_generation})");
+            if (i == 0) CharredTreeSkin.OnEmberMasksRebuilt(s_emberMasks[0]);
+            return s_emberMasks[i];
+        }
+
+        /// <summary>The per-atlas mask of the current generation; <see cref="EmberMaskForAtlas"/> says what null and the plain mask mean here.</summary>
+        private static Texture2D AdvanceAtlas(Texture atlas, int variant)
+        {
+            Texture2D plain = AdvancePlain(variant); // also starts, or advances, the base set
             if (plain == null) return null;
             if (atlas == null || !FireVFXController.GraphicsAvailable) return plain;
             int i = variant % Variants; if (i < 0) i += Variants;
 
             if (!s_atlasMasks.TryGetValue(atlas, out AtlasSet set) || set == null || set.Generation != s_generation)
             {
-                if (set != null)
-                    for (int v = 0; v < Variants; v++) if (set.Masks[v] != null) s_retiredMasks.Add(set.Masks[v]);
+                // RefreshGeneration empties the table at every bump, so a stale set cannot be
+                // met here any more; if one ever is, it goes the same way as the rest.
+                RetireAtlasSet(atlas, set);
                 set = new AtlasSet { Generation = s_generation };
                 s_atlasMasks[atlas] = set;
             }
@@ -233,6 +293,116 @@ namespace FireFront.Fire
             set.Tasks[i] = null;
             FireLogger.Debug($"[CHARRED] atlas ember mask {i} built for {atlas.name}");
             return set.Masks[i];
+        }
+
+        /// <summary>
+        /// Frees retired mask sets once that is provably harmless. Main thread only, at most once
+        /// per frame, reached through the two entry points every consumer ticks through - so the
+        /// memory comes back seconds after a coverage change instead of at unload (until 0.22.1
+        /// it never came back: ~5.5 MB per change, ~17 MB with pine and fir burning).
+        /// </summary>
+        /// <remarks>
+        /// Why not free at the bump: a destroyed texture that a material or property block still
+        /// names samples as Unity's default WHITE, and on Custom/Vegetation `_EmissiveTex` and
+        /// Standard `_EmissionMap` that lights the WHOLE mesh with `_EmissionColor` - the pink
+        /// whole-tree glow NomadicWar saw in game on 2026-09-20. So a set is freed only when
+        ///
+        /// (i)   the CURRENT generation is complete: all <see cref="Variants"/> plain masks exist,
+        ///       and for every atlas with a mask parked here its current set is complete too (an
+        ///       atlas that has been destroyed, or that could never be read back, counts as
+        ///       complete: AdvanceAtlas answers the plain mask for it, which is current). Masks
+        ///       are built on demand, so this method asks for every variant it is still waiting
+        ///       on; otherwise a variant that no tree in view happens to use would hold the
+        ///       whole set forever;
+        /// (ii)  <see cref="ReapGraceSeconds"/> of Time.time have passed since (i) first held,
+        ///       with nothing parked since (any new retirement restarts the clock);
+        /// (iii) the destroy runs here, on the main thread, from a consumer's own tick.
+        ///
+        /// Why that is enough - every reader of a mask, and what its block holds by then:
+        ///
+        /// (a) The cached material clones (CharredTreeSkin.CharredCloneOf) bind mask 0 or
+        ///     blackTexture at clone time with `_EmissionColor` black at the material level, and
+        ///     OnEmberMasksRebuilt re-points them the moment mask 0 of a new generation lands,
+        ///     which is before (i). A material-level texture is only sampled when the block on
+        ///     the renderer carries no texture of its own, and then the colour is the material's
+        ///     black or a block colour that (b) wrote as black. White times black is black.
+        /// (b) A charred twin (CharredTreeController → CharredTreeSkin.SetEmber, every 0.25 s
+        ///     while age &lt;= CharredEmberGlowSeconds + 1) writes per slot and per tick EITHER
+        ///     the current mask of its variant (bark-confined for an atlas slot) together with
+        ///     a non-black colour, OR Texture2D.blackTexture together with black (mask still
+        ///     null) - always both, in one block. A non-black colour therefore never sits in a
+        ///     block without the texture that was current at that same write, and once (i)
+        ///     holds every tick binds the current set. A twin that streams in mid-way asks on
+        ///     its first SetEmber (from Apply) and gets the current set or black. A twin whose
+        ///     glow has ended stops ticking with the LAST colour it wrote: EmberAt clamps t to 1
+        ///     from age = glowSeconds and multiplies by (1-t)² = 0, so every tick in the window
+        ///     (glow, glow+1] writes exactly (0,0,0,0), and its parked texture, reaped or not,
+        ///     is multiplied by black. And the controller does not rely on that timing: on
+        ///     leaving the window (or when CharredEmberGlowSeconds is set to 0 mid-glow, or a
+        ///     hitch skipped the whole window - age runs on the world clock, the tick on
+        ///     Time.time) it writes one explicit black block (_emberDark), which also re-binds
+        ///     the slot to a current mask or blackTexture.
+        /// (c) A live burner (FireVFXController → ApplyBurnChar, every 0.2 s until the burner is
+        ///     destroyed, whose OnDestroy removes the blocks) CLEARS and rebuilds each slot's
+        ///     block on every tick: no emissive entries at all while the current plain mask is
+        ///     null, else the current plain or per-atlas mask with the ember colour, or
+        ///     blackTexture with black. It never carries a texture from one tick to the next,
+        ///     so one tick past (i) no burner names a retired texture.
+        /// (d) `firedumptex` regenerates from the seed and reads no texture back.
+        ///
+        /// The grace: a block can only name a retired mask through a write that ran BEFORE (i),
+        /// and the longest consumer tick is 0.25 s. Time.time advances at most
+        /// Time.maximumDeltaTime (a third of a second by default) per frame, so ten seconds of
+        /// it is at least thirty frames - thirty Update calls, so thirty re-binds, for every
+        /// enabled consumer - and a paused game (timeScale 0) freezes the grace along with the
+        /// ticks it protects. Ten seconds is forty times the longest tick and costs nothing but
+        /// holding the old set ten seconds longer.
+        ///
+        /// A generation that can never complete (the generator threw, no graphics device) keeps
+        /// its predecessors parked, as they always were; <see cref="ReleaseAll"/> frees them on
+        /// unload.
+        /// </remarks>
+        private static void ReapRetired()
+        {
+            if (s_retiredMasks.Count == 0) return;
+            if (Time.frameCount == s_reapFrame) return;
+            s_reapFrame = Time.frameCount;
+
+            if (!ReplacementComplete()) { s_replacementReadyAt = -1f; return; }
+            if (s_replacementReadyAt < 0f) { s_replacementReadyAt = Time.time; return; }
+            if (Time.time - s_replacementReadyAt < ReapGraceSeconds) return;
+
+            var freed = new Dictionary<int, int>();
+            for (int k = 0; k < s_retiredMasks.Count; k++)
+            {
+                RetiredMask r = s_retiredMasks[k];
+                if (r.Tex != null) Object.Destroy(r.Tex);
+                freed.TryGetValue(r.Generation, out int n);
+                freed[r.Generation] = n + 1;
+            }
+            s_retiredMasks.Clear();
+            s_replacementReadyAt = -1f;
+            foreach (KeyValuePair<int, int> kv in freed)
+                FireLogger.Debug($"[CHARRED] freed retired mask set generation {kv.Key} ({kv.Value} textures)");
+        }
+
+        /// <summary>
+        /// Condition (i) of <see cref="ReapRetired"/>, asking for - and so starting - every build
+        /// it is still waiting on. Plain masks first: an atlas mask cannot start without its
+        /// plain twin, so there is nothing to ask on the atlas side until those exist.
+        /// </summary>
+        private static bool ReplacementComplete()
+        {
+            bool complete = true;
+            for (int v = 0; v < Variants; v++) if (AdvancePlain(v) == null) complete = false;
+            if (!complete) return false;
+            for (int k = 0; k < s_retiredMasks.Count; k++)
+            {
+                RetiredMask r = s_retiredMasks[k];
+                if (!r.FromAtlas) continue;
+                for (int v = 0; v < Variants; v++) if (AdvanceAtlas(r.Atlas, v) == null) complete = false;
+            }
+            return complete;
         }
 
         /// <summary>
@@ -458,8 +628,9 @@ namespace FireFront.Fire
                 s_emberMasks = null;
             }
             s_maskTasks = null; // a build still in flight completes into nothing and is collected
-            for (int i = 0; i < s_retiredMasks.Count; i++) if (s_retiredMasks[i] != null) Object.Destroy(s_retiredMasks[i]);
+            for (int i = 0; i < s_retiredMasks.Count; i++) if (s_retiredMasks[i].Tex != null) Object.Destroy(s_retiredMasks[i].Tex);
             s_retiredMasks.Clear();
+            s_replacementReadyAt = -1f; s_reapFrame = -1;
         }
 
         /// <summary>Plugin unload: everything here is ours to free.</summary>

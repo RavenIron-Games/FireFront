@@ -80,6 +80,7 @@ namespace FireFront.Fire
         private float _nextBarkUpdate;
         private float _nextDistanceCheck;
         private bool _far;
+        private float _cameraDistance; // refreshed with _far, once a second; the bark pass reads it
         private float _noiseSeed;
 
         private const float CostHeightCeiling = 14f;   // particle budget stops growing past this
@@ -105,6 +106,35 @@ namespace FireFront.Fire
         private static readonly Gradient s_cold = MakeGradient(new Color(2.0f, 0f, 0f), new Color(1.0f, 0.30f, 0f));
 
         public static bool GraphicsAvailable => SystemInfo.graphicsDeviceType != GraphicsDeviceType.Null;
+
+        /// <summary>
+        /// How much of the ember glow survives the distance to the camera: whole to 30 m, a third
+        /// from 90 m, a straight ramp between. The ember mask is a texture, and past its last mip
+        /// level the sampler averages it toward its mean; a mean glow spread over a whole trunk is
+        /// the neon rod the first in-game run showed, so the glow is faded out over the range in
+        /// which the cracks stop resolving. The one source of truth for the live burn's bark pass
+        /// and the charred twin's CurrentEmber alike: review of PR #3 caught the two disagreeing
+        /// (a step to 30 % at 70 m against a ramp over 30 to 90 m), which made a tree that went
+        /// from burning to charred at 50 m jump in brightness.
+        /// </summary>
+        public static float EmberDistanceFactor(float distance) => Mathf.Lerp(1f, EmberFarFloor, Mathf.Clamp01((distance - EmberFadeStart) / (EmberFadeEnd - EmberFadeStart)));
+
+        private const float EmberFadeStart = 30f;
+        private const float EmberFadeEnd = 90f;
+        private const float EmberFarFloor = 0.3f;
+
+        /// <summary>
+        /// Distance from the main camera to <paramref name="position"/>. False when there is no
+        /// camera (loading, or a headless peer), and each caller then keeps whatever it had:
+        /// nothing is drawn without a camera, so no fade is the right answer there.
+        /// </summary>
+        public static bool TryDistanceToMainCamera(Vector3 position, out float distance)
+        {
+            Camera cam = global::Utils.GetMainCamera();
+            if (cam == null) { distance = 0f; return false; }
+            distance = Vector3.Distance(cam.transform.position, position);
+            return true;
+        }
 
         public float Progress => _progress;
         public float FrontHeight => _frontHeight;
@@ -720,8 +750,13 @@ namespace FireFront.Fire
             {
                 _nextBarkUpdate = Time.time + BarkUpdateInterval;
                 float pulse = 0.7f + 0.3f * Mathf.PerlinNoise(Time.time * 2.5f, _noiseSeed);
-                if (_smoulder) pulse *= 0.5f;
-                if (_far) pulse *= 0.3f; // past the mask's last mip the glow averages over the whole trunk; the flames carry the fire from there
+                if (_smoulder) pulse *= 0.5f; // a smoulder's cracks are dimmer at any distance; this stays on top of the ramp
+                // Past the mask's last mip the glow averages over the whole trunk, so it fades with
+                // distance on the same ramp the charred twin uses (EmberDistanceFactor holds the
+                // why); the flames carry the fire from there. The distance is up to a second stale,
+                // which a ramp over 60 m cannot show. _far keeps its step: it is the emitter and
+                // smoke cost LOD, not a look.
+                pulse *= EmberDistanceFactor(_cameraDistance);
                 CharredTreeSkin.ApplyBurnChar(_barkSlots, _progress, pulse, CharredTextures.VariantFor(_id));
             }
         }
@@ -807,9 +842,8 @@ namespace FireFront.Fire
 
         private void UpdateDistanceLod()
         {
-            Camera cam = global::Utils.GetMainCamera();
-            if (cam == null) return;
-            float d = Vector3.Distance(cam.transform.position, transform.position);
+            if (!TryDistanceToMainCamera(transform.position, out float d)) return;
+            _cameraDistance = d;
             bool far = d > FarDistance;
             if (far == _far) return;
             _far = far;

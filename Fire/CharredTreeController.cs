@@ -17,7 +17,7 @@ namespace FireFront.Fire
         private ZNetView _nview;
         private TreeBase _tree;
         private TreeLog _log;
-        private List<Renderer> _renderers;
+        private CharredTreeSkin.CharSlot[] _slots;
         private CharredSmoke _smoke;
         private int _emberVariant;
         private float _noiseSeed;
@@ -25,6 +25,7 @@ namespace FireFront.Fire
         private bool _done;
         private bool _skinned;
         private bool _smokeTried;
+        private bool _emberDark; // the closing black has been written; nothing to write until the glow is back
 
         private const float CheckInterval = 0.25f;
 
@@ -50,7 +51,7 @@ namespace FireFront.Fire
             try
             {
                 _emberVariant = CharredTextures.VariantFor(_nview.GetZDO().m_uid);
-                _renderers = CharredTreeSkin.Apply(gameObject, CurrentEmber(), _emberVariant);
+                _slots = CharredTreeSkin.Apply(gameObject, CurrentEmber(), _emberVariant);
                 // m_text is a localisation token ("$prop_beech"); Localize replaces tokens inside
                 // a longer string, so this reads "Charred Beech" in whatever language is set.
                 HoverText hover = GetComponent<HoverText>();
@@ -91,14 +92,10 @@ namespace FireFront.Fire
             if (_nview == null || !_nview.IsValid()) return Color.black;
             long at = _nview.GetZDO().GetLong(CharredTreeLifecycle.CharredAtHash, CharredTreeLifecycle.NowTicks);
             Color c = CharredTreeSkin.EmberAt(CharredTreeLifecycle.SecondsSince(at), FireConfig.CharredEmberGlowSeconds.Value, _noiseSeed);
-            // Distance: the mask averages toward its mean past the last mip, and a mean glow on a
-            // whole trunk is the neon rod the first in-game run saw. Full to 30 m, a third at 90 m.
-            Camera cam = global::Utils.GetMainCamera();
-            if (cam != null)
-            {
-                float d = Vector3.Distance(cam.transform.position, transform.position);
-                c *= Mathf.Lerp(1f, 0.3f, Mathf.Clamp01((d - 30f) / 60f));
-            }
+            // Distance: the same ramp the live burn's bark pass runs on (EmberDistanceFactor holds
+            // the why - the mask averages toward its mean past its last mip), so a tree that turns
+            // from burning to charred at any distance keeps its brightness.
+            if (FireVFXController.TryDistanceToMainCamera(transform.position, out float d)) c *= FireVFXController.EmberDistanceFactor(d);
             return c;
         }
 
@@ -111,11 +108,27 @@ namespace FireFront.Fire
             if (_nview == null || !_nview.IsValid()) return;
             if (!_skinned) TrySkin();
 
-            // Cosmetic first, and independent of ownership: every peer fades its own view.
-            if (_renderers != null && FireConfig.CharredEmberGlowSeconds.Value > 0f)
+            // Cosmetic first, and independent of ownership: every peer fades its own view. The
+            // glow is written while it is alive, and then ONE explicit black once it is over (or
+            // when the glow is switched off mid-way): the last block a tree ever gets must carry
+            // black, because a retired mask set is freed after a coverage change, and a destroyed
+            // texture samples white - a non-black colour frozen in a block would then light the
+            // whole tree. The fade reaches exactly zero on its own, but a hitch straddling the
+            // last second, or CharredEmberGlowSeconds set to 0 while a tree glowed, used to leave
+            // the last bright colour in place forever; see CharredTextures.ReapRetired.
+            if (_slots != null)
             {
-                float age = CharredAge();
-                if (age <= FireConfig.CharredEmberGlowSeconds.Value + 1f) CharredTreeSkin.SetEmber(_renderers, CurrentEmber(), _emberVariant);
+                float glow = FireConfig.CharredEmberGlowSeconds.Value;
+                if (glow > 0f && CharredAge() <= glow + 1f)
+                {
+                    CharredTreeSkin.SetEmber(_slots, CurrentEmber(), _emberVariant);
+                    _emberDark = false;
+                }
+                else if (!_emberDark)
+                {
+                    CharredTreeSkin.SetEmber(_slots, Color.black, _emberVariant);
+                    _emberDark = true;
+                }
             }
             if (_smoke != null) _smoke.Tick(CharredAge());
 

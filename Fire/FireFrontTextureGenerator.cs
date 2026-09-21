@@ -126,29 +126,103 @@ namespace FireFront.Fire
 
         /// <summary>
         /// The ground scorch decal: vanilla's unlit particle material (the ember donor's
-        /// "Custom/Particle (Unlit)") re-blended to MULTIPLY (Blend DstColor Zero), so the mark
-        /// darkens whatever is already lit on the terrain - grass detail, sun, shadow and the
-        /// fire's own light survive - instead of painting an umber disc over it. Its own clone,
-        /// never the ember material (that one is additive and shared by every spark system).
-        /// Null when no donor exists; the caller then keeps the alpha-blended fallback.
+        /// "Custom/Particle (Unlit)") re-blended to MULTIPLY (framebuffer times the blot's red
+        /// channel, then fogged), so the mark darkens whatever is already lit on the terrain -
+        /// grass detail, sun, shadow and the fire's own light survive - instead of painting an
+        /// umber disc over it. Its own clone, never the ember material (that one is additive
+        /// and shared by every spark system). Null when no donor exists; the caller then keeps
+        /// the alpha-blended fallback.
         /// </summary>
+        /// <remarks>
+        /// Every value below comes from the shader's compiled GLSL (1.0.15 bundle, dumped
+        /// 2026-09-20: libs-Tools/1.0/ASSET-DATA/shaders/particle_unlit_frag.glsl), because the
+        /// property names lie about what the fragment does:
+        ///
+        /// The fragment NEVER writes the texture's RGB. Its colour is the vertex colour
+        /// (`rgb = _SrcBlend == 3 ? a * COLOR.rgb : COLOR.rgb`), and the texture contributes ONE
+        /// channel, picked by _AlphaChannel (0 R, 1 G, 2 B, 3 A), into alpha:
+        /// `a = tex[_AlphaChannel] * COLOR.a`. So "Blend DstColor Zero" (0.22.1) multiplied the
+        /// ground by the vertex colour - white on a quad without a colour stream - and drew
+        /// nothing at all; the soot texture was ignored. The multiply has to come from the
+        /// destination factor instead: DstBlend = SrcAlpha gives framebuffer * a, and with
+        /// _AlphaChannel = Red, a IS the blot: 1 at the rim, 0.30 at the heart as stored (sRGB,
+        /// so the sampler hands the shader 0.07 - which, displayed, is the ground at about 30 %
+        /// of its brightness; G and B carry a warm tint and are never read). The donor's
+        /// _AlphaChannel = 3 would read our alpha-255 texture as a = 1 everywhere.
+        ///
+        /// Fog, and why the vertices are BLACK and the source factor is OneMinusSrcAlpha rather
+        /// than Zero: the ground under the mark is already fogged when this pass runs (deferred
+        /// opaques are fogged before transparents), so a bare framebuffer * a scales the fog
+        /// term too, and at fog range every mark is a black blob on grey. The shader's own fog
+        /// (`rgb = _FejdFog ? lerp(COLOR.rgb, fogRGB, f) : COLOR.rgb`, the same term every
+        /// vanilla particle uses) fixes it exactly when COLOR.rgb is black: the fragment's RGB
+        /// is then f * fog, and Blend OneMinusSrcAlpha SrcAlpha gives
+        ///   (1 - a) * f * fog + a * ((1 - f) * lit + f * fog) = a * (1 - f) * lit + f * fog,
+        /// the multiply applied under the fog instead of on top of it; with f = 0 it is
+        /// framebuffer * a again. So `_FejdFog` is ON, the quad's vertex colour is black, and
+        /// the `_SrcBlend == 3` premultiply branch stays off (10 != 3).
+        ///
+        /// Everything else in the shader can only SHRINK that alpha, and every one of them is
+        /// a fade toward "no mark", so each is forced to 1:
+        ///  - _SkyMask (donor: ON): `a = min(a, skyFactor)`, where skyFactor is 0 for anything
+        ///    farther from DepthCamera (a top-down depth render 50 m above the player, once a
+        ///    second) than the first occluder it saw. Under a canopy or a roof the ground is
+        ///    exactly that, so the mark would vanish in a forest. Off.
+        ///  - Soft particles: only compiled under the GLOBAL keyword SOFTPARTICLES_ON
+        ///    (Valheim's Default quality has softParticles on), never under _SoftParticles,
+        ///    which is not a uniform in any variant. `a *= saturate((sceneZ - fragZ -
+        ///    _SoftNearFade) * _SoftFadeFactor)`: the donor's nearFade 0.5 m against a decal
+        ///    4 cm off the ground is a negative bracket, alpha 0. _SoftNearFade = -1000 makes
+        ///    the bracket >= 1000 whatever the depth gap, times factor 1, saturates to 1 - and
+        ///    that holds even if the material-level DisableKeyword loses to the global.
+        ///  - _CameraFadeFactor (donor 0.2): `a *= saturate(eyeDepth * factor)`, an ease-in
+        ///    over the first 1/factor metres from the camera - the mark would fade out as the
+        ///    player walks up to it. 0 would kill it outright; 1000 saturates past 1 mm.
+        ///  - _FejdFog: on, see above (the fog keyword variants are byte-identical to the
+        ///    no-keyword one - fog is gated by this uniform alone).
+        ///  - _Color / _TintColor: the shader declares neither, so those writes are no-ops
+        ///    today. They stay because the donor material carries stale saved values from an
+        ///    earlier shader (_TintColor alpha 0.5), and a future donor on a shader that does
+        ///    declare them would inherit a half-strength tint silently.
+        /// Vertex colour: COLOR.a scales the alpha and COLOR.rgb is the fog carrier, so the
+        /// quad mesh must reach the shader with black, alpha 1 - ValheimBridge builds that
+        /// quad (GetOrCreateQuadMesh(blackVertices: true)) for any material carrying
+        /// <see cref="ScorchMultiplyMaterialName"/>; nothing rides on Unity's missing-stream
+        /// default.
+        /// </remarks>
+        /// <summary>The multiply decal's material name; ValheimBridge picks the black-vertex quad by it.</summary>
+        public const string ScorchMultiplyMaterialName = "FireFront_scorch";
+
         public static Material GetOrCreateScorchMultiplyMaterial(Texture2D soot)
         {
             if (s_cloneCache.TryGetValue("scorch", out Material cached) && cached != null) return cached;
             Material ember = CloneDonor(EmberDonors, "ember");
             if (ember == null || ember.shader == null || ember.shader.name != "Custom/Particle (Unlit)") return null;
-            Material m = new Material(ember) { name = "FireFront_scorch" };
+            Material m = new Material(ember) { name = ScorchMultiplyMaterialName };
             m.SetTexture("_MainTex", soot);
-            m.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.DstColor);
-            m.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.Zero);
-            if (m.HasProperty("_Cull")) m.SetFloat("_Cull", 0f);          // a decal on a slope is seen from either side of its own plane
-            if (m.HasProperty("_SoftParticles")) m.SetFloat("_SoftParticles", 0f); // soft particles fade by depth difference: a decal 3 cm off the ground would vanish
+            m.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha); // out = (1-a) * f*fog + a * dst: the multiply, fogged
+            m.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            m.SetFloat("_AlphaChannel", 0f);                                            // a = soot.R: the blot's grey, 1 outside, ~0.3 at the heart
+            if (m.HasProperty("_Cull")) m.SetFloat("_Cull", 0f);                        // a decal on a slope is seen from either side of its own plane
+            if (m.HasProperty("_SkyMask")) m.SetFloat("_SkyMask", 0f);                  // DepthCamera occlusion: hides the ground itself under any canopy
+            if (m.HasProperty("_SoftParticles")) m.SetFloat("_SoftParticles", 0f);      // inspector toggle only; the real gate is the global keyword below
             m.DisableKeyword("SOFTPARTICLES_ON");
-            if (m.HasProperty("_CameraFadingEnabled")) m.SetFloat("_CameraFadingEnabled", 0f);
-            if (m.HasProperty("_FejdFog")) m.SetFloat("_FejdFog", 0f);   // fog on a multiply pass lightens the mark toward fog colour
+            if (m.HasProperty("_SoftNearFade")) m.SetFloat("_SoftNearFade", -1000f);    // depth-gap fade saturates to 1 for any gap, in case the keyword stays on
+            if (m.HasProperty("_SoftFadeFactor")) m.SetFloat("_SoftFadeFactor", 1f);
+            if (m.HasProperty("_CameraFadeFactor")) m.SetFloat("_CameraFadeFactor", 1000f); // near-camera fade saturates past 1 mm; 0 would fade the mark to nothing
+            if (m.HasProperty("_FejdFog")) m.SetFloat("_FejdFog", 1f);                  // the fog term rides on the black vertex colour; see the remarks
+            if (m.HasProperty("_Color")) m.SetColor("_Color", Color.white);             // not declared by this shader (no-op); insurance against a tinted future donor
+            if (m.HasProperty("_TintColor")) m.SetColor("_TintColor", Color.white);
             m.renderQueue = 2950; // after every opaque and alpha-tested thing on the ground, before the game's transparent effects
             s_cloneCache["scorch"] = m;
-            FireLogger.Info($"[SHADER-DIAG] scorch decal material: \"{m.shader.name}\" from the ember donor, blend DstColor/Zero, queue {m.renderQueue}.");
+            FireLogger.Info($"[SHADER-DIAG] scorch decal material: \"{m.shader.name}\" from the ember donor, " +
+                            $"blend {m.GetFloat("_SrcBlend"):0}/{m.GetFloat("_DstBlend"):0} (OneMinusSrcAlpha/SrcAlpha = framebuffer x soot.R under the fog), " +
+                            $"alphaChannel {m.GetFloat("_AlphaChannel"):0}, cull {m.GetFloat("_Cull"):0}, skyMask {m.GetFloat("_SkyMask"):0}, " +
+                            $"softParticles {m.GetFloat("_SoftParticles"):0} (SOFTPARTICLES_ON {(m.IsKeywordEnabled("SOFTPARTICLES_ON") ? "on" : "off")}, " +
+                            $"nearFade {m.GetFloat("_SoftNearFade"):0}, fadeFactor {m.GetFloat("_SoftFadeFactor"):0}), " +
+                            $"cameraFadeFactor {m.GetFloat("_CameraFadeFactor"):0}, fejdFog {m.GetFloat("_FejdFog"):0}, " +
+                            $"tint {(m.HasProperty("_Color") ? m.GetColor("_Color").ToString() : "n/a")}/{(m.HasProperty("_TintColor") ? m.GetColor("_TintColor").ToString() : "n/a")}, " +
+                            $"queue {m.renderQueue}.");
             return m;
         }
 
