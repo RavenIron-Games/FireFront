@@ -1,5 +1,13 @@
 # FireFront — 1.0.0 (2026-09-23): released
 
+**Unreleased on main (2026-09-23): the build no longer embeds the build machine's folders.**
+Every shipped DLL through 1.0.0 carried the absolute PDB path (C:\Users\<name>\…) in its PE
+debug directory. The csproj now sets DeterministicSourcePaths and always names the repo root
+as a SourceRoot, so the DLL carries /_/…/FireFront.pdb and neither the DLL nor the PDB names a
+local path; the IL is unchanged. At the next cut, say in the changelog that the DLL no longer
+carries an absolute build path that included the build machine's user name (quote no path),
+and name the commit the DLL was built from: the md5 follows the commit and no longer the checkout folder (the PDB's Source Link URL carries the commit).
+
 **Resume point.** `main` carries 1.0.0, tagged v1.0.0: 0.24.0's code with the version string
 changed, the README pass, and the 1.0 rig evening recorded in the CHANGELOG. Work after 1.0 is
 the list in docs/ROADMAP.md ("The shorter road": moved after 1.0), including per-fire arson
