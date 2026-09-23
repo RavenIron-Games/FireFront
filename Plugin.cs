@@ -12,7 +12,7 @@ namespace FireFront
     {
         public const string GUID = "com.raveniron.firefront";
         public const string NAME = "FireFront";
-        public const string VERSION = "1.0.0";
+        public const string VERSION = "1.0.1";
 
         /// <summary>
         /// FireFront's wire compatibility number, exchanged at connect with <see cref="VERSION"/>

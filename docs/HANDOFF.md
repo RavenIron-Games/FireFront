@@ -1,14 +1,35 @@
+# FireFront — 1.0.1 (2026-09-23): no FireFront fire in the Ashlands
+
+**Resume point.** `main` carries 1.0.1, tagged v1.0.1. Two changes on top of 1.0.0:
+
+- **`FireInAshlands`** (`[Fire]`, default false, `fireset ashlands`). The owner found the
+  Ashlands unplayable on 1.0.0: vanilla's cinder and lava fire hits wood there constantly
+  (CinderSpawner.CanSpawnCinder is always true in the Ashlands; Fire.DoDamage sends m_fire with
+  HitType.CinderFire and no attacker through RPC_Damage), and FireFront ignited on every hit.
+  The one gate is `FireManager.AshlandsBarsFireAt`, the game's own WorldGenerator.IsAshlands
+  (pure maths on x and z, so it answers headless; the edge is z = -8000 straight south of the
+  centre). It is checked in TryIgnite, TryIgniteGroundCell, the ignite RPC (by the ZDO's
+  position, before ComponentFromZdoid builds an instance), PromoteFromQueue, both restore
+  cases, and the ignite, startfire and firegroundignite commands. No Effective* accessor, so
+  neither preset reopens the Ashlands. The three damage patches still forward every hit from a
+  client on purpose: a client owns most objects near it, so gating the patches on the player's
+  own copy of the setting would make a server's "on" do nothing.
+- **The build path (PR #6).** Every shipped DLL through 1.0.0 carried the absolute PDB path in
+  its PE debug directory. The csproj now sets DeterministicSourcePaths and always names the
+  repo root as a SourceRoot, so the DLL carries /_/…/FireFront.pdb and neither the DLL nor the
+  PDB names a local path; the IL is unchanged. The md5 follows the commit, not the checkout
+  folder (the PDB's Source Link URL carries the commit).
+
+Played on the rig 2026-09-23 (CHANGELOG 1.0.1 has the evidence). The server log shows the
+gate working: `[ASHLANDS]` Info lines, and with `fireset debug true` one `[ASHLANDS] refused`
+line per refusal. Storm10 was on 1.0.0 at the time of the release.
+
+Work after 1.0 is the list in docs/ROADMAP.md ("The shorter road": moved after 1.0),
+including per-fire arson attribution. Problems found in play are fixed as they come.
+
 # FireFront — 1.0.0 (2026-09-23): released
 
-**Unreleased on main (2026-09-23): the build no longer embeds the build machine's folders.**
-Every shipped DLL through 1.0.0 carried the absolute PDB path (C:\Users\<name>\…) in its PE
-debug directory. The csproj now sets DeterministicSourcePaths and always names the repo root
-as a SourceRoot, so the DLL carries /_/…/FireFront.pdb and neither the DLL nor the PDB names a
-local path; the IL is unchanged. At the next cut, say in the changelog that the DLL no longer
-carries an absolute build path that included the build machine's user name (quote no path),
-and name the commit the DLL was built from: the md5 follows the commit and no longer the checkout folder (the PDB's Source Link URL carries the commit).
-
-**Resume point.** `main` carries 1.0.0, tagged v1.0.0: 0.24.0's code with the version string
+**State at 1.0.0.** `main` carried 1.0.0, tagged v1.0.0: 0.24.0's code with the version string
 changed, the README pass, and the 1.0 rig evening recorded in the CHANGELOG. Work after 1.0 is
 the list in docs/ROADMAP.md ("The shorter road": moved after 1.0), including per-fire arson
 attribution. Problems found in play are fixed as they come.

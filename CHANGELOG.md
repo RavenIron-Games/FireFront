@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.1
+
+- **FireFront no longer sets the Ashlands alight.** The Ashlands' own fire (cinders, lava,
+  burning ground) touches wood there all the time, and FireFront caught from every touch, so
+  the whole biome burned and could not be played. A new setting, `FireInAshlands`
+  (`fireset ashlands`), is off by default. With it off, FireFront starts no fire in the
+  Ashlands by any path: vanilla fire, spread from outside, a client's ignite request, console
+  commands, or a fire save written by 1.0.0, whose Ashlands fires are dropped at load. The
+  Ashlands' own fire works as it does without FireFront. It is a new key, so the default
+  reaches installs that already have a config file; `burntheworld` does not change it; the
+  server's copy is the one read. While the server refuses fire there it logs at most one
+  `[ASHLANDS]` line a minute, and `ignite`, `startfire` and `firegroundignite` say why they
+  did nothing.
+- **The DLL no longer carries the build machine's folder.** Every DLL through 1.0.0 carried an
+  absolute build path that included the build machine's user name. The build now maps source
+  paths to a neutral root, so the DLL's checksum follows the commit it was built from, not the
+  folder it was built in. This DLL was built from the commit tagged v1.0.1.
+
+Rig evidence (2026-09-23, owner on the dedicated test rig, this source built just before the
+commit). In the Ashlands at about (51, -9126): `startfire` lit nothing, and the server refused
+13 ignite requests the client forwarded for four Ashlands objects, logging its `[ASHLANDS]`
+line. `fireset ashlands true`, typed on the client, set the server's value and `startfire`
+then lit an Ashlands tree; `fireset ashlands false` turned it off again and the next
+`startfire` lit nothing. At spawn, `startfire` lit a beech as before. No errors from the
+mod in the session.
+
 ## 1.0.0
 
 The first release. The code is 0.24.0's with the version string changed; the wire protocol

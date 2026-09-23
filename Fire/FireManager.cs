@@ -1189,6 +1189,34 @@ namespace FireFront.Fire
         // ---------------------------------------------------------------
 
         /// <summary>
+        /// True when FireFront must start no fire at this point: FireInAshlands is off and
+        /// the point is in the Ashlands. The test is the game's own (WorldGenerator.IsAshlands),
+        /// pure maths on x and z, so a headless server answers it exactly as a client does.
+        /// Vanilla's own Ashlands fire is untouched; this only stops FireFront catching from it.
+        /// No Effective* accessor on purpose: WatchTheWorldBurn must not reopen the Ashlands.
+        /// </summary>
+        public static bool AshlandsBarsFireAt(Vector3 position) =>
+            FireConfig.FireInAshlands != null && !FireConfig.FireInAshlands.Value &&
+            WorldGenerator.IsAshlands(position.x, position.z);
+
+        // The Ashlands' own fire touches wood there many times a second, so a refusal is
+        // counted, not logged: one Info line at most per minute, and only while it happens.
+        private const float AshlandsReportSeconds = 60f;
+        private int _ashlandsRefused;
+        private float _ashlandsNextReport;
+
+        private void NoteAshlandsRefusal(string what, Vector3 at)
+        {
+            _ashlandsRefused++;
+            FireLogger.Debug($"[ASHLANDS] refused {what} at ({at.x:F0}, {at.z:F0}): FireInAshlands is false.");
+            if (Time.time < _ashlandsNextReport) return;
+            FireLogger.Info($"[ASHLANDS] FireFront started no fire in the Ashlands: {_ashlandsRefused} " +
+                            "ignition attempt(s) refused since the last report (FireInAshlands = false).");
+            _ashlandsRefused = 0;
+            _ashlandsNextReport = Time.time + AshlandsReportSeconds;
+        }
+
+        /// <summary>
         /// Request ignition with no known igniter — spread, dev commands, and any older
         /// caller. Attribution-aware callers (the ignition patches, the ignite RPC) use
         /// the overload below; spread deliberately passes nothing because it joins an
@@ -1208,6 +1236,11 @@ namespace FireFront.Fire
             if (!ValheimBridge.IsAlive(target)) return;
             if (!ValheimBridge.IsBurnable(target)) return;
 
+            // Every object ignition passes here (the damage patches on the server, the ignite
+            // RPC, spread, commands, the restore), so this one check covers them all.
+            Vector3 targetPos = ValheimBridge.PositionOf(target);
+            if (AshlandsBarsFireAt(targetPos)) { NoteAshlandsRefusal(ValheimBridge.NameOf(target), targetPos); return; }
+
             ZDOID? idOrNull = ValheimBridge.ZDOIDOf(target);
             if (!idOrNull.HasValue) return; // can't track what we can't identify
             ZDOID id = idOrNull.Value;
@@ -1219,7 +1252,6 @@ namespace FireFront.Fire
             // The budget is PER EVENT now, not global — a blaze on the far side
             // of the map no longer starves this one. That global cap was the
             // tester's "the first big fire denies any other from existing".
-            Vector3 targetPos = ValheimBridge.PositionOf(target);
             int eventId = EventForPosition(targetPos, igniterPlayerId);
             int effectiveMax = Mathf.Max(1, Mathf.RoundToInt(FireConfig.EffectiveMaxConcurrentBurning * GetRampFraction(eventId)));
 
@@ -1438,6 +1470,8 @@ namespace FireFront.Fire
                             if (remaining <= 0f) { skipped++; break; }
                             var key = new GroundCellKey(InvariantNumbers.ParseInt(f[1]), InvariantNumbers.ParseInt(f[2]));
                             float y = InvariantNumbers.ParseFloat(f[3]);
+                            // A save written by 1.0.0 can hold Ashlands fire; it is dropped, not restored.
+                            if (AshlandsBarsFireAt(CellCenter(key, y))) { skipped++; break; }
                             _groundBurning[key] = new GroundCellState { ExpireAt = now + remaining, Y = y, YIsReal = true };
                             _groundIgnitedSinceFlush.Add((key, y)); // clients learn of it at the next flush
                             // Queued rather than built here: the restore installs the whole fire at
@@ -1479,6 +1513,7 @@ namespace FireFront.Fire
                             }
 
                             var at = new Vector3(InvariantNumbers.ParseFloat(f[3]), InvariantNumbers.ParseFloat(f[4]), InvariantNumbers.ParseFloat(f[5]));
+                            if (AshlandsBarsFireAt(at)) { skipped++; break; } // TryIgnite would refuse it; skip the lookup
                             if (!ResolveBurnerAt(at, prefabName, out ZDOID id))
                             {
                                 skipped++; // gone since the save, moved, or too ambiguous to name safely
@@ -1632,7 +1667,7 @@ namespace FireFront.Fire
                    $"lowspec {FireConfig.LowSpecPreset.Value}, burntheworld {FireConfig.ApocalypseActive}, " +
                    $"fires {_events.Count}, " +
                    $"trees {FireConfig.BurnTreesAndLogs.Value}, " +
-                   $"burnbuildings {FireConfig.BurnPlayerBuildings.Value}, " +
+                   $"burnbuildings {FireConfig.BurnPlayerBuildings.Value}, ashlands {FireConfig.FireInAshlands.Value}, " +
                    $"vfx '{FireConfig.VfxPrefabName.Value}', procedural {FireConfig.UseProceduralVfx.Value}, " +
                    $"treeflames {FireConfig.TreeFlameScaling.Value} (max {FireConfig.EffectiveMaxFlameHeight}m, tallcap {FireConfig.EffectiveTallFireMaxConcurrent}, sparks {FireConfig.EffectiveCrownSparksEnabled}), " +
                    $"hurts {FireConfig.FireHurtsEnabled.Value} (playerOnly {FireConfig.FireHurtsPlayerOnly.Value}, {FireConfig.FireDamagePerTick.Value}dmg/{FireConfig.FireDamageTickInterval.Value}s), " +
@@ -1866,6 +1901,10 @@ namespace FireFront.Fire
                 _groundExhausted.TryGetValue(key, out float exhaustedUntil) && Time.time < exhaustedUntil) return;
 
             Vector3 approxCenter = CellCenter(key, y);
+
+            // Every ground ignition passes here (seeding round a burning object, cell-to-cell
+            // spread, firegroundignite); the restore is gated separately.
+            if (AshlandsBarsFireAt(approxCenter)) { NoteAshlandsRefusal($"ground cell ({key.X},{key.Z})", approxCenter); return; }
 
             // Real firebreak support: a dirt path or tilled/cultivated strip has
             // no grass fuel on it, so ground fire shouldn't cross it. Checked
@@ -2232,6 +2271,13 @@ namespace FireFront.Fire
             }
 
             FireLogger.Debug($"[IGNITE-TRACE] Server received ignite request from peer {sender} for ZDOID={id}, igniter={igniterPlayerId}.");
+            // Refused by the ZDO's own position, before ComponentFromZdoid can build an
+            // instance headless and claim it, for a target TryIgnite would refuse anyway.
+            if (ValheimBridge.TryGetZdoPosition(id, out Vector3 requestedAt) && AshlandsBarsFireAt(requestedAt))
+            {
+                NoteAshlandsRefusal($"ZDOID={id} (asked by peer {sender})", requestedAt);
+                return;
+            }
             Component target = ValheimBridge.ComponentFromZdoid(id);
             if (target != null)
             {
@@ -2957,8 +3003,13 @@ namespace FireFront.Fire
                 Component target = ValheimBridge.ComponentFromZdoid(next);
                 if (target == null || !ValheimBridge.IsAlive(target) || !ValheimBridge.IsBurnable(target)) continue;
 
+                // Queued before FireInAshlands was switched off, or queued from outside: the
+                // drain calls StartBurning directly, so it checks for itself.
+                Vector3 queuedAt = ValheimBridge.PositionOf(target);
+                if (AshlandsBarsFireAt(queuedAt)) continue;
+
                 // A queued item rejoins whichever blaze is nearest it now.
-                int evId = EventForPosition(ValheimBridge.PositionOf(target), 0L);
+                int evId = EventForPosition(queuedAt, 0L);
                 int evMax = Mathf.Max(1, Mathf.RoundToInt(FireConfig.EffectiveMaxConcurrentBurning * GetRampFraction(evId)));
                 if (BurningCountForEvent(evId) >= evMax) continue;
 

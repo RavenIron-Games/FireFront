@@ -41,6 +41,7 @@ On a dedicated server, **the server needs the dll too** — it runs the simulati
 - Spread follows the game's real wind, both direction and strength. A gale drives a long narrow tongue; a calm day burns in a lazy circle.
 - Fire spreads at the pace of its fuel. A tree must be properly alight, roughly a minute, before it torches its neighbours. Fires start small and build over about ten minutes rather than instantly raging.
 - Burnt ground is spent for about 90 seconds, so the front advances instead of churning in place.
+- FireFront starts no fire in the Ashlands by default. The Ashlands' own fire touches wood there all the time, and catching from every touch made the biome unplayable. A server that wants it back turns on `FireInAshlands` (`fireset ashlands true`). Either way the Ashlands' own fire works as it does without FireFront.
 
 **Consequences**
 
@@ -110,13 +111,13 @@ To test rain on a dedicated server, `fireweather force Rain` and then `fireweath
 
 Everything is in `BepInEx/config/com.raveniron.firefront.cfg`. Every setting except `ExtinguishKey` can be changed live with `fireset`, no restart required. Settings the server reads change there only for its admins. Visual settings are read by each player's own game, so `fireset` changes them for whoever types it and nobody else, admin or not; the server does not send its values to players. `ExtinguishKey` (default `G`) is each player's own keybind, set in their own file. The config file migrates itself between versions: when a default changes, a value you never touched follows it, and a value you chose is kept and named in the log.
 
-Every key is written to both the server's file and each client's, but most are read on one side only, and two presets (`lowspec`, `burntheworld`) silently override keys that still read true. [docs/CONFIG-KEY-MAP.md](docs/CONFIG-KEY-MAP.md) says, for all 81 keys, which side reads it and what overrides it.
+Every key is written to both the server's file and each client's, but most are read on one side only, and two presets (`lowspec`, `burntheworld`) silently override keys that still read true. [docs/CONFIG-KEY-MAP.md](docs/CONFIG-KEY-MAP.md) says, for all 82 keys, which side reads it and what overrides it.
 
 `fireset` keys:
 
 | Area | Keys |
 |---|---|
-| Core | `enabled`, `burnduration`, `firematurity`, `spreadradius`, `maxburning`, `queuesize`, `spreadinterval`, `trees`, `burnbuildings`, `maxkills` |
+| Core | `enabled`, `burnduration`, `firematurity`, `spreadradius`, `maxburning`, `queuesize`, `spreadinterval`, `trees`, `burnbuildings`, `ashlands`, `maxkills` |
 | Ground fire | `groundenabled`, `groundcellsize`, `groundradius`, `groundburnduration`, `groundmax`, `groundvfxmax`, `grounddamagemax`, `groundleashenabled`, `groundleashdistance` |
 | Damage and warmth | `firehurts`, `firehurtsplayeronly`, `firehurtsradius`, `firedamage`, `firetickinterval`, `firewarmth`, `firewarmthradius` |
 | Putting it out | `extinguishradius`, `dousingradius`, `douseimmunity`, `rainsuppress`, `rainmultiplier`, `rainobjects`, `rainobjectmultiplier`, `firebreaks`, `waterblocks` |

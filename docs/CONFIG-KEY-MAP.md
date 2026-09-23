@@ -1,14 +1,14 @@
 # FireFront config key map
 
-Which side reads each of the 81 keys in `com.raveniron.firefront.cfg`, how the console reaches it, and which preset can silently override it.
+Which side reads each of the 82 keys in `com.raveniron.firefront.cfg`, how the console reaches it, and which preset can silently override it.
 
-Produced 2026-09-20 against the branch at `c4ab08c` (0.22.1 plus that day's fixes, before the merge with `main` 0.21.16, which adds no keys). Six Sonnet agents classified the keys from the code; six Opus agents re-derived every classification independently and corrected four. Line numbers in the citations at the bottom are from that commit and will drift; the side and the override do not drift unless the code does.
+Produced 2026-09-20 against the branch at `c4ab08c` (0.22.1 plus that day's fixes, before the merge with `main` 0.21.16, which adds no keys). Six Sonnet agents classified the keys from the code; six Opus agents re-derived every classification independently and corrected four. Line numbers in the citations at the bottom are from that commit and will drift; the side and the override do not drift unless the code does. `FireInAshlands` was added in 1.0.1 and entered by hand from the code.
 
 ## How to read it
 
-Every BepInEx install writes all 81 keys to its own file, client and server alike, but most keys are read on one side only:
+Every BepInEx install writes all 82 keys to its own file, client and server alike, but most keys are read on one side only:
 
-- **server** (43 keys): read by the simulation, i.e. the dedicated server, or the host of a hosted game. The client's copy does nothing.
+- **server** (44 keys): read by the simulation, i.e. the dedicated server, or the host of a hosted game. The client's copy does nothing.
 - **client** (17 keys): read by the machine drawing the fire. The server's copy does nothing.
 - **both** (21 keys): each side reads its own copy for a different purpose. Notes below the table say which.
 
@@ -31,6 +31,7 @@ Two presets override keys that still read true in the file: `LowSpecPreset` (Low
 | Fire | `BurnDurationSeconds` | both | `burnduration` |  |  |
 | Fire | `BurnPlayerBuildings` | both | `burnbuildings` |  |  |
 | Fire | `BurnTreesAndLogs` | both | `trees` |  |  |
+| Fire | `FireInAshlands` | server | `ashlands` |  | client copy is dead |
 | Fire | `FireKeepsYouWarm` | both | `firewarmth` |  |  |
 | Fire | `FireRampDurationSeconds` | server | `rampduration` |  | client copy is dead |
 | Fire | `FireRampEnabled` | server | `rampenabled` | LowSpec + Apocalypse | client copy is dead |
@@ -247,6 +248,15 @@ File and line per reader, at `c4ab08c`. Status-line echoes and the `fireset` set
 - Fire/FireManager.cs:3876,3891 - BuildCandidateList(): gates whether trees/logs are scanned into the cached spread-candidate pool - server (called only from SpreadPass)
 - Fire/FireManager.cs:3950 - IgniteBurnablesNear(): passed to ValheimBridge.CollectBurnableZdosNear as a filter - server (called only from StartFire, server-gated)
 - Fire/FireManager.cs:1558 - StatusLine() echo - status line, does not count
+
+</details>
+<details><summary><code>FireInAshlands</code> (server)</summary>
+
+- Fire/FireManager.cs:1198 - AshlandsBarsFireAt(), the only reader; every caller below runs on the server
+-   -> TryIgnite line 1242 (every object ignition), TryIgniteGroundCell line 1907 (every ground ignition), HandleIgniteRequest line 2276 (by the ZDO's position, before an instance is built), PromoteFromQueue line 3009, RestorePersistedFires lines 1474 (ground) and 1516 (objects)
+-   -> Commands/FireDevCommands.cs:118, 136, 177, 774 - ignite (relayed, and typed on the host), startfire, firegroundignite; each runs after the relay, on the server
+- The three RPC_Damage patches do not read it: a client forwards every hit and the server decides, because a client's own copy is not the server's setting
+- Fire/FireManager.cs:1670 - StatusLine() echo - status line, does not count
 
 </details>
 <details><summary><code>FireKeepsYouWarm</code> (both)</summary>

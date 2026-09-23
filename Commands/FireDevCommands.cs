@@ -47,7 +47,7 @@ namespace FireFront.Commands
                 args => FireDebug(args));
 
             new Terminal.ConsoleCommand("fireset",
-                "FireFront: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|charredember|charredembercover|charredsmoke|charredsmokeseconds|enabled> <value>",
+                "FireFront: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|ashlands|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|charredember|charredembercover|charredsmoke|charredsmokeseconds|enabled> <value>",
                 args => FireSet(args));
 
             new Terminal.ConsoleCommand("firelistprefabs",
@@ -115,6 +115,7 @@ namespace FireFront.Commands
                 Component relayed = ValheimBridge.ComponentFromZdoid(new ZDOID(zUser, zId));
                 if (relayed == null) { Say(args, "That target no longer exists on the server."); return; }
                 if (!ValheimBridge.IsBurnable(relayed)) { Say(args, $"Not burnable: {ValheimBridge.NameOf(relayed)}"); return; }
+                if (FireManager.AshlandsBarsFireAt(ValheimBridge.PositionOf(relayed))) { Say(args, AshlandsRefusal("ignite")); return; }
 
                 FireManager.Instance.TryIgnite(relayed);
                 Say(args, FireManager.Instance.IsBurning(relayed)
@@ -132,6 +133,7 @@ namespace FireFront.Commands
             if (ValheimBridge.IsServer())
             {
                 if (!RequireAdmin(args)) return;
+                if (FireManager.AshlandsBarsFireAt(ValheimBridge.PositionOf(target))) { Say(args, AshlandsRefusal("ignite")); return; }
 
                 FireManager.Instance.TryIgnite(target);
                 Say(args, FireManager.Instance.IsBurning(target)
@@ -172,6 +174,7 @@ namespace FireFront.Commands
             Vector3? posOrNull = ValheimBridge.LocalPlayerPosition();
             if (posOrNull == null) { Say(args, "No local player."); return; }
             Vector3 pos = posOrNull.Value;
+            if (FireManager.AshlandsBarsFireAt(pos)) { Say(args, AshlandsRefusal("startfire")); return; }
 
             float radius = args.TryParameterFloat(1, 5f);
             float radiusSqr = radius * radius;
@@ -202,6 +205,11 @@ namespace FireFront.Commands
 
             Say(args, $"startfire: attempted {hit} targets within {radius}m. {FireManager.Instance.StatusLine()}");
         }
+
+        // Said by the server that refused, so it names the server's setting.
+        private static string AshlandsRefusal(string command) =>
+            $"{command}: this spot is in the Ashlands, where FireFront starts no fire while " +
+            "FireInAshlands is false. An admin can allow it with: fireset ashlands true";
 
         private static int TryIgniteIfInRange(Component target, Vector3 pos, float radiusSqr)
         {
@@ -289,7 +297,7 @@ namespace FireFront.Commands
         {
             if (args.Length < 3)
             {
-                Say(args, "Usage: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|charredember|charredembercover|charredsmoke|charredsmokeseconds|enabled> <value>");
+                Say(args, "Usage: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|ashlands|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|charredember|charredembercover|charredsmoke|charredsmokeseconds|enabled> <value>");
                 return;
             }
 
@@ -531,6 +539,10 @@ namespace FireFront.Commands
                     if (bool.TryParse(raw, out bool bb)) { FireConfig.BurnPlayerBuildings.Value = bb; Ok(args, key, bb); }
                     else Bad(args, raw);
                     break;
+                case "ashlands":
+                    if (bool.TryParse(raw, out bool fa)) { FireConfig.FireInAshlands.Value = fa; Ok(args, key, fa); }
+                    else Bad(args, raw);
+                    break;
                 case "douseimmunity":
                     if (InvariantNumbers.TryParseFloat(raw, out float di)) { FireConfig.DouseImmunitySeconds.Value = di; Ok(args, key, FireConfig.DouseImmunitySeconds.Value); }
                     else Bad(args, raw);
@@ -758,6 +770,8 @@ namespace FireFront.Commands
 
             Vector3? posOrNull = ValheimBridge.LocalPlayerPosition();
             if (posOrNull == null) { Say(args, "No local player."); return; }
+
+            if (FireManager.AshlandsBarsFireAt(posOrNull.Value)) { Say(args, AshlandsRefusal("firegroundignite")); return; }
 
             float radius = args.TryParameterFloat(1, FireConfig.GroundSpreadRadius.Value);
             FireManager.Instance.IgniteGroundNear(posOrNull.Value, radius);
@@ -1003,6 +1017,7 @@ namespace FireFront.Commands
                 { "spreadinterval", FireConfig.SpreadCheckInterval },
                 { "trees", FireConfig.BurnTreesAndLogs },
                 { "burnbuildings", FireConfig.BurnPlayerBuildings },
+                { "ashlands", FireConfig.FireInAshlands },
                 { "vfx", FireConfig.VfxPrefabName },
                 { "procedural", FireConfig.UseProceduralVfx },
                 { "groundenabled", FireConfig.GroundSpreadEnabled },

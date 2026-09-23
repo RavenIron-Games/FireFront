@@ -21,6 +21,7 @@ namespace FireFront.Config
         public static ConfigEntry<bool> BurnTreesAndLogs;
         public static ConfigEntry<float> TreeDestructionRate;
         public static ConfigEntry<bool> BurnPlayerBuildings;
+        public static ConfigEntry<bool> FireInAshlands;
         public static ConfigEntry<string> VfxPrefabName;
         public static ConfigEntry<bool> UseProceduralVfx;
         public static ConfigEntry<bool> FireSmokeEnabled;
@@ -410,6 +411,18 @@ namespace FireFront.Config
                 "safe. Note the terrain firebreak already protects a base on leveled/pathed " +
                 "ground from SPREAD — this switch is the stronger guarantee that also covers " +
                 "deliberate arson.");
+
+            // 1.0.1. A new key, so its default reaches installs that already have a config
+            // file. Deliberately no Effective* accessor: neither preset may turn it on.
+            FireInAshlands = config.Bind(
+                "Fire", "FireInAshlands", false,
+                "FireFront starts fire in the Ashlands. Off by default: the Ashlands' own fire " +
+                "(cinders, lava, burning ground) touches wood there all the time, and with " +
+                "FireFront catching from every touch the biome burned end to end and could not " +
+                "be played. With this off, FireFront starts no fire in the Ashlands by any path " +
+                "(vanilla fire, spread from outside, console commands, a restored save), and the " +
+                "Ashlands' own fire works as it does without FireFront. WatchTheWorldBurn does " +
+                "not change it. Read by the server; set it there.");
 
             VfxPrefabName = config.Bind(
                 "Visuals", "VfxPrefabName", "",
