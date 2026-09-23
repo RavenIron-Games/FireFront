@@ -12,7 +12,16 @@ namespace FireFront
     {
         public const string GUID = "com.raveniron.firefront";
         public const string NAME = "FireFront";
-        public const string VERSION = "0.23.0";
+        public const string VERSION = "0.24.0";
+
+        /// <summary>
+        /// FireFront's wire compatibility number, exchanged at connect with <see cref="VERSION"/>
+        /// (Fire/VersionCheck.cs). Two builds with the same number work together; two with
+        /// different numbers do not, and both sides say so. Change it when, and only when, any
+        /// FireFront RPC's name, argument list or payload layout changes. 1 = 0.24.0, the first
+        /// build that sends it; anything older sends nothing.
+        /// </summary>
+        public const int WireProtocol = 1;
 
         public static Plugin Instance { get; private set; }
 

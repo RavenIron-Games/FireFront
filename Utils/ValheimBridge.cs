@@ -3868,6 +3868,7 @@ namespace FireFront.Utils
         private const string RpcFireDamage = "FireFront_FireDamage";
         private const string RpcGroundSyncRequest = "FireFront_GroundSyncRequest";
         private const string RpcObjectFireSync = "FireFront_ObjectFireSync";
+        private const string RpcVersion = "FireFront_Version"; // 0.24: Fire/VersionCheck.cs
 
         /// <summary>Client → server: run this whitelisted dev command there; replies stream back on the status-response channel.</summary>
         public static void SendCommandRelayToServer(string commandLine)
@@ -4130,6 +4131,7 @@ namespace FireFront.Utils
             RpcFireDamage.GetStableHashCode(),
             RpcGroundSyncRequest.GetStableHashCode(),
             RpcObjectFireSync.GetStableHashCode(),
+            RpcVersion.GetStableHashCode(),
             "RPC_Damage".GetStableHashCode(),
         };
 
@@ -4283,7 +4285,8 @@ namespace FireFront.Utils
             System.Action<long, float> onFireDamage,
             System.Action<long> onGroundSyncRequest,
             System.Action<long, ZPackage> onPaintAssign,
-            System.Action<long, ZPackage> onObjectFireSync)
+            System.Action<long, ZPackage> onObjectFireSync,
+            System.Action<long, string, int> onVersion)
         {
             if (ZRoutedRpc.instance == null)
             {
@@ -4312,11 +4315,12 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.Register(RpcGroundSyncRequest, onGroundSyncRequest);
                 ZRoutedRpc.instance.Register<ZPackage>(RpcPaintAssign, onPaintAssign);
                 ZRoutedRpc.instance.Register<ZPackage>(RpcObjectFireSync, onObjectFireSync);
-                FireLogger.Info($"[IGNITE-TRACE] All 12 FireFront RPCs registered successfully (IsServer={IsServer()}).");
+                ZRoutedRpc.instance.Register<string, int>(RpcVersion, onVersion);
+                FireLogger.Info($"[IGNITE-TRACE] All 13 FireFront RPCs registered successfully (IsServer={IsServer()}).");
                 if (IsServer())
                 {
                     if (RoutedSenderGuardArmed)
-                        FireLogger.Info($"{AuthLog.Prefix} routed-sender guard armed: {GuardedRoutedMethods.Count} methods (12 FireFront + RPC_Damage) are checked against the connection they arrive on.");
+                        FireLogger.Info($"{AuthLog.Prefix} routed-sender guard armed: {GuardedRoutedMethods.Count} methods ({GuardedRoutedMethods.Count - 1} FireFront + RPC_Damage) are checked against the connection they arrive on.");
                     else
                         FireLogger.Warn($"{AuthLog.Prefix} routed-sender guard NOT armed: ZNet.m_peers could not be reflected. Forged sender ids pass as they did before 0.23; every handler's own clamps still apply.");
                 }
@@ -4382,6 +4386,73 @@ namespace FireFront.Utils
         /// that drove the batched terrain-paint rewrite earlier.
         /// </summary>
         /// <summary>Client -> server: "tell me every ground cell you have alight right now."</summary>
+        /// <summary>Client -> server: this build's version and wire protocol (Fire/VersionCheck.cs).</summary>
+        public static void SendVersionToServer(string version, int protocol)
+        {
+            if (ZRoutedRpc.instance == null) return;
+            try { ZRoutedRpc.instance.InvokeRoutedRPC(GetServerPeerId(), RpcVersion, version, protocol); }
+            catch (System.Exception ex) { FireLogger.Debug($"SendVersionToServer threw: {ex.Message}"); }
+        }
+
+        /// <summary>Server -> one peer: the answer to its version check.</summary>
+        public static void SendVersionTo(long peer, string version, int protocol)
+        {
+            if (ZRoutedRpc.instance == null) return;
+            try { ZRoutedRpc.instance.InvokeRoutedRPC(peer, RpcVersion, version, protocol); }
+            catch (System.Exception ex) { FireLogger.Debug($"SendVersionTo threw: {ex.Message}"); }
+        }
+
+        /// <summary>The uid of every connected peer that has finished its handshake.</summary>
+        public static void CollectReadyPeerIds(List<long> into)
+        {
+            ZNet net = ZNet.instance;
+            if (net == null || ZNetPeersField == null) return;
+            try
+            {
+                var peers = ZNetPeersField.GetValue(net) as List<ZNetPeer>;
+                if (peers == null) return;
+                for (int i = 0; i < peers.Count; i++)
+                    if (peers[i] != null && peers[i].m_uid != 0L && peers[i].IsReady()) into.Add(peers[i].m_uid);
+            }
+            catch { }
+        }
+
+        /// <summary>True once a connected peer's character has spawned (vanilla's CharacterID RPC sets it).</summary>
+        public static bool PeerHasCharacter(long peerId)
+        {
+            try
+            {
+                ZNetPeer peer = ZNet.instance?.GetPeer(peerId);
+                return peer != null && !peer.m_characterID.IsNone();
+            }
+            catch { return false; }
+        }
+
+        /// <summary>The socket host name (a platform id such as Steam_7656...) of a connected peer, or null.</summary>
+        public static string PeerHostName(long peerId)
+        {
+            try { return ZNet.instance?.GetPeer(peerId)?.m_rpc?.GetSocket()?.GetHostName(); }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// Server -> one peer, through two channels VANILLA registers on every client, so it
+        /// reaches a client with an old FireFront or none: the per-connection "RemotePrint"
+        /// (ZNet.RPC_PeerInfo registers it; prints to the client's console) and the routed
+        /// "ShowMessage" (MessageHud.Awake registers it; int MessageType, 2 = Center).
+        /// </summary>
+        public static void TellPeerDirectly(long peerId, string text)
+        {
+            try
+            {
+                ZNetPeer peer = ZNet.instance?.GetPeer(peerId);
+                peer?.m_rpc?.Invoke("RemotePrint", text);
+            }
+            catch (System.Exception ex) { FireLogger.Debug($"TellPeerDirectly RemotePrint threw: {ex.Message}"); }
+            try { ZRoutedRpc.instance?.InvokeRoutedRPC(peerId, "ShowMessage", (int)MessageHud.MessageType.Center, text); }
+            catch (System.Exception ex) { FireLogger.Debug($"TellPeerDirectly ShowMessage threw: {ex.Message}"); }
+        }
+
         public static void RequestGroundSnapshot()
         {
             if (ZRoutedRpc.instance == null) return;

@@ -106,7 +106,7 @@ namespace FireFront.Commands
             // for a player who was in adminlist.txt in all three id forms.
             if (ValheimBridge.IsServer() && args.Length >= 3)
             {
-                if (!long.TryParse(args[1], out long zUser) || !uint.TryParse(args[2], out uint zId))
+                if (!InvariantNumbers.TryParseLong(args[1], out long zUser) || !InvariantNumbers.TryParseUInt(args[2], out uint zId))
                 {
                     Say(args, $"Couldn't parse ZDOID: '{args[1]} {args[2]}'.");
                     return;
@@ -150,7 +150,7 @@ namespace FireFront.Commands
                 if (id.HasValue)
                 {
                     Say(args, "FireFront: sent to server — replies appear as [server] lines. (ignite)");
-                    ValheimBridge.SendCommandRelayToServer($"ignite {id.Value.UserID} {id.Value.ID}");
+                    ValheimBridge.SendCommandRelayToServer($"ignite {InvariantNumbers.Format(id.Value.UserID)} {InvariantNumbers.Format(id.Value.ID)}");
                 }
                 else
                 {
@@ -304,23 +304,23 @@ namespace FireFront.Commands
             switch (key)
             {
                 case "burnduration":
-                    if (float.TryParse(raw, out float bd)) { FireConfig.BurnDurationSeconds.Value = bd; Ok(args, key, bd); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float bd)) { FireConfig.BurnDurationSeconds.Value = bd; Ok(args, key, bd); }
                     else Bad(args, raw);
                     break;
                 case "spreadradius":
-                    if (float.TryParse(raw, out float sr)) { FireConfig.SpreadRadius.Value = sr; Ok(args, key, FireConfig.SpreadRadius.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float sr)) { FireConfig.SpreadRadius.Value = sr; Ok(args, key, FireConfig.SpreadRadius.Value); }
                     else Bad(args, raw);
                     break;
                 case "maxburning":
-                    if (int.TryParse(raw, out int mb)) { FireConfig.MaxConcurrentBurning.Value = mb; Ok(args, key, mb); }
+                    if (InvariantNumbers.TryParseInt(raw, out int mb)) { FireConfig.MaxConcurrentBurning.Value = mb; Ok(args, key, mb); }
                     else Bad(args, raw);
                     break;
                 case "queuesize":
-                    if (int.TryParse(raw, out int qs)) { FireConfig.QueueSize.Value = qs; Ok(args, key, FireConfig.QueueSize.Value); }
+                    if (InvariantNumbers.TryParseInt(raw, out int qs)) { FireConfig.QueueSize.Value = qs; Ok(args, key, FireConfig.QueueSize.Value); }
                     else Bad(args, raw);
                     break;
                 case "spreadinterval":
-                    if (float.TryParse(raw, out float si)) { FireConfig.SpreadCheckInterval.Value = si; Ok(args, key, si); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float si)) { FireConfig.SpreadCheckInterval.Value = si; Ok(args, key, si); }
                     else Bad(args, raw);
                     break;
                 case "smouldering":
@@ -328,7 +328,7 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "smoulderafter":
-                    if (float.TryParse(raw, out float sma)) { FireConfig.SmoulderAfterFraction.Value = sma; Ok(args, key, FireConfig.SmoulderAfterFraction.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float sma)) { FireConfig.SmoulderAfterFraction.Value = sma; Ok(args, key, FireConfig.SmoulderAfterFraction.Value); }
                     else Bad(args, raw);
                     break;
                 case "burntheworld":
@@ -378,11 +378,11 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "maxflameheight":
-                    if (float.TryParse(raw, out float mfh)) { FireConfig.MaxFlameHeight.Value = mfh; Ok(args, key, mfh); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float mfh)) { FireConfig.MaxFlameHeight.Value = mfh; Ok(args, key, mfh); }
                     else Bad(args, raw);
                     break;
                 case "tallfiremax":
-                    if (int.TryParse(raw, out int tfm)) { FireConfig.TallFireMaxConcurrent.Value = tfm; Ok(args, key, tfm); }
+                    if (InvariantNumbers.TryParseInt(raw, out int tfm)) { FireConfig.TallFireMaxConcurrent.Value = tfm; Ok(args, key, tfm); }
                     else Bad(args, raw);
                     break;
                 case "procedural":
@@ -394,27 +394,27 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "groundcellsize":
-                    if (float.TryParse(raw, out float gcs)) { FireConfig.GroundCellSize.Value = gcs; Ok(args, key, FireConfig.GroundCellSize.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float gcs)) { FireConfig.GroundCellSize.Value = gcs; Ok(args, key, FireConfig.GroundCellSize.Value); }
                     else Bad(args, raw);
                     break;
                 case "groundradius":
-                    if (float.TryParse(raw, out float gr)) { FireConfig.GroundSpreadRadius.Value = gr; Ok(args, key, FireConfig.GroundSpreadRadius.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float gr)) { FireConfig.GroundSpreadRadius.Value = gr; Ok(args, key, FireConfig.GroundSpreadRadius.Value); }
                     else Bad(args, raw);
                     break;
                 case "groundburnduration":
-                    if (float.TryParse(raw, out float gbd)) { FireConfig.GroundBurnDurationSeconds.Value = gbd; Ok(args, key, gbd); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float gbd)) { FireConfig.GroundBurnDurationSeconds.Value = gbd; Ok(args, key, gbd); }
                     else Bad(args, raw);
                     break;
                 case "groundmax":
-                    if (int.TryParse(raw, out int gm)) { FireConfig.GroundMaxConcurrent.Value = gm; Ok(args, key, gm); }
+                    if (InvariantNumbers.TryParseInt(raw, out int gm)) { FireConfig.GroundMaxConcurrent.Value = gm; Ok(args, key, gm); }
                     else Bad(args, raw);
                     break;
                 case "groundvfxmax":
-                    if (int.TryParse(raw, out int gvm)) { FireConfig.GroundVfxMaxConcurrent.Value = gvm; Ok(args, key, gvm); }
+                    if (InvariantNumbers.TryParseInt(raw, out int gvm)) { FireConfig.GroundVfxMaxConcurrent.Value = gvm; Ok(args, key, gvm); }
                     else Bad(args, raw);
                     break;
                 case "grounddamagemax":
-                    if (int.TryParse(raw, out int gdm)) { FireConfig.GroundDamageMaxConcurrent.Value = gdm; Ok(args, key, gdm); }
+                    if (InvariantNumbers.TryParseInt(raw, out int gdm)) { FireConfig.GroundDamageMaxConcurrent.Value = gdm; Ok(args, key, gdm); }
                     else Bad(args, raw);
                     break;
                 case "firehurts":
@@ -426,7 +426,7 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "firehurtsradius":
-                    if (float.TryParse(raw, out float fhr)) { FireConfig.FireHurtsObjectRadius.Value = fhr; Ok(args, key, FireConfig.FireHurtsObjectRadius.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float fhr)) { FireConfig.FireHurtsObjectRadius.Value = fhr; Ok(args, key, FireConfig.FireHurtsObjectRadius.Value); }
                     else Bad(args, raw);
                     break;
 
@@ -436,19 +436,19 @@ namespace FireFront.Commands
                     break;
 
                 case "firewarmthradius":
-                    if (float.TryParse(raw, out float fwr)) { FireConfig.FireWarmthRadius.Value = fwr; Ok(args, key, FireConfig.FireWarmthRadius.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float fwr)) { FireConfig.FireWarmthRadius.Value = fwr; Ok(args, key, FireConfig.FireWarmthRadius.Value); }
                     else Bad(args, raw);
                     break;
                 case "firedamage":
-                    if (float.TryParse(raw, out float fd)) { FireConfig.FireDamagePerTick.Value = fd; Ok(args, key, FireConfig.FireDamagePerTick.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float fd)) { FireConfig.FireDamagePerTick.Value = fd; Ok(args, key, FireConfig.FireDamagePerTick.Value); }
                     else Bad(args, raw);
                     break;
                 case "firetickinterval":
-                    if (float.TryParse(raw, out float fti)) { FireConfig.FireDamageTickInterval.Value = fti; Ok(args, key, FireConfig.FireDamageTickInterval.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float fti)) { FireConfig.FireDamageTickInterval.Value = fti; Ok(args, key, FireConfig.FireDamageTickInterval.Value); }
                     else Bad(args, raw);
                     break;
                 case "extinguishradius":
-                    if (float.TryParse(raw, out float exr)) { FireConfig.ExtinguishGroundRadius.Value = exr; Ok(args, key, FireConfig.ExtinguishGroundRadius.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float exr)) { FireConfig.ExtinguishGroundRadius.Value = exr; Ok(args, key, FireConfig.ExtinguishGroundRadius.Value); }
                     else Bad(args, raw);
                     break;
                 case "rainsuppress":
@@ -456,7 +456,7 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "rainmultiplier":
-                    if (float.TryParse(raw, out float rm)) { FireConfig.RainGroundBurnDurationMultiplier.Value = rm; Ok(args, key, FireConfig.RainGroundBurnDurationMultiplier.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float rm)) { FireConfig.RainGroundBurnDurationMultiplier.Value = rm; Ok(args, key, FireConfig.RainGroundBurnDurationMultiplier.Value); }
                     else Bad(args, raw);
                     break;
                 case "rainobjects":
@@ -464,7 +464,7 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "rainobjectmultiplier":
-                    if (float.TryParse(raw, out float rom)) { FireConfig.RainObjectBurnDurationMultiplier.Value = rom; Ok(args, key, FireConfig.RainObjectBurnDurationMultiplier.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float rom)) { FireConfig.RainObjectBurnDurationMultiplier.Value = rom; Ok(args, key, FireConfig.RainObjectBurnDurationMultiplier.Value); }
                     else Bad(args, raw);
                     break;
                 case "scorchmarks":
@@ -476,11 +476,11 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "dirtpaintradius":
-                    if (float.TryParse(raw, out float dpr)) { FireConfig.DirtPaintRadius.Value = dpr; Ok(args, key, FireConfig.DirtPaintRadius.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float dpr)) { FireConfig.DirtPaintRadius.Value = dpr; Ok(args, key, FireConfig.DirtPaintRadius.Value); }
                     else Bad(args, raw);
                     break;
                 case "scorchlifetime":
-                    if (float.TryParse(raw, out float sl)) { FireConfig.ScorchMarkLifetimeSeconds.Value = sl; Ok(args, key, FireConfig.ScorchMarkLifetimeSeconds.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float sl)) { FireConfig.ScorchMarkLifetimeSeconds.Value = sl; Ok(args, key, FireConfig.ScorchMarkLifetimeSeconds.Value); }
                     else Bad(args, raw);
                     break;
                 case "rampenabled":
@@ -488,11 +488,11 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "rampduration":
-                    if (float.TryParse(raw, out float rd)) { FireConfig.FireRampDurationSeconds.Value = rd; Ok(args, key, FireConfig.FireRampDurationSeconds.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float rd)) { FireConfig.FireRampDurationSeconds.Value = rd; Ok(args, key, FireConfig.FireRampDurationSeconds.Value); }
                     else Bad(args, raw);
                     break;
                 case "rampstart":
-                    if (float.TryParse(raw, out float rst)) { FireConfig.FireRampStartFraction.Value = rst; Ok(args, key, FireConfig.FireRampStartFraction.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float rst)) { FireConfig.FireRampStartFraction.Value = rst; Ok(args, key, FireConfig.FireRampStartFraction.Value); }
                     else Bad(args, raw);
                     break;
                 case "enabled":
@@ -504,7 +504,7 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "fuelregrow":
-                    if (float.TryParse(raw, out float fregrow)) { FireConfig.GroundFuelRegrowSeconds.Value = fregrow; Ok(args, key, FireConfig.GroundFuelRegrowSeconds.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float fregrow)) { FireConfig.GroundFuelRegrowSeconds.Value = fregrow; Ok(args, key, FireConfig.GroundFuelRegrowSeconds.Value); }
                     else Bad(args, raw);
                     break;
                 case "windbias":
@@ -512,15 +512,15 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "windupwindchance":
-                    if (float.TryParse(raw, out float wuc)) { FireConfig.WindUpwindIgniteChance.Value = wuc; Ok(args, key, FireConfig.WindUpwindIgniteChance.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float wuc)) { FireConfig.WindUpwindIgniteChance.Value = wuc; Ok(args, key, FireConfig.WindUpwindIgniteChance.Value); }
                     else Bad(args, raw);
                     break;
                 case "windinfluence":
-                    if (float.TryParse(raw, out float wi)) { FireConfig.WindInfluence.Value = wi; Ok(args, key, FireConfig.WindInfluence.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float wi)) { FireConfig.WindInfluence.Value = wi; Ok(args, key, FireConfig.WindInfluence.Value); }
                     else Bad(args, raw);
                     break;
                 case "dousingradius":
-                    if (float.TryParse(raw, out float dbr)) { FireConfig.DousingBombRadius.Value = dbr; Ok(args, key, FireConfig.DousingBombRadius.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float dbr)) { FireConfig.DousingBombRadius.Value = dbr; Ok(args, key, FireConfig.DousingBombRadius.Value); }
                     else Bad(args, raw);
                     break;
                 case "persistfires":
@@ -532,11 +532,11 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "douseimmunity":
-                    if (float.TryParse(raw, out float di)) { FireConfig.DouseImmunitySeconds.Value = di; Ok(args, key, FireConfig.DouseImmunitySeconds.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float di)) { FireConfig.DouseImmunitySeconds.Value = di; Ok(args, key, FireConfig.DouseImmunitySeconds.Value); }
                     else Bad(args, raw);
                     break;
                 case "firematurity":
-                    if (float.TryParse(raw, out float fm)) { FireConfig.SpreadMaturityFraction.Value = fm; Ok(args, key, FireConfig.SpreadMaturityFraction.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float fm)) { FireConfig.SpreadMaturityFraction.Value = fm; Ok(args, key, FireConfig.SpreadMaturityFraction.Value); }
                     else Bad(args, raw);
                     break;
                 case "firebreaks":
@@ -548,7 +548,7 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "treeregrowthseconds":
-                    if (float.TryParse(raw, out float trs)) { FireConfig.TreeRegrowthSeconds.Value = trs; Ok(args, key, FireConfig.TreeRegrowthSeconds.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float trs)) { FireConfig.TreeRegrowthSeconds.Value = trs; Ok(args, key, FireConfig.TreeRegrowthSeconds.Value); }
                     else Bad(args, raw);
                     break;
                 case "groundleashenabled":
@@ -556,7 +556,7 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "groundleashdistance":
-                    if (float.TryParse(raw, out float gld)) { FireConfig.GroundMaxSpreadDistance.Value = gld; Ok(args, key, FireConfig.GroundMaxSpreadDistance.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float gld)) { FireConfig.GroundMaxSpreadDistance.Value = gld; Ok(args, key, FireConfig.GroundMaxSpreadDistance.Value); }
                     else Bad(args, raw);
                     break;
                 case "fireshadows":
@@ -576,47 +576,47 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "treetick":
-                    if (float.TryParse(raw, out float ttk)) { FireConfig.TreeFireTickInterval.Value = ttk; Ok(args, key, FireConfig.TreeFireTickInterval.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float ttk)) { FireConfig.TreeFireTickInterval.Value = ttk; Ok(args, key, FireConfig.TreeFireTickInterval.Value); }
                     else Bad(args, raw);
                     break;
                 case "treekillfraction":
-                    if (float.TryParse(raw, out float tkf)) { FireConfig.TreeFireKillFraction.Value = tkf; Ok(args, key, FireConfig.TreeFireKillFraction.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float tkf)) { FireConfig.TreeFireKillFraction.Value = tkf; Ok(args, key, FireConfig.TreeFireKillFraction.Value); }
                     else Bad(args, raw);
                     break;
                 case "treedestruction":
-                    if (float.TryParse(raw, out float tdr)) { FireConfig.TreeDestructionRate.Value = tdr; Ok(args, key, FireConfig.TreeDestructionRate.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float tdr)) { FireConfig.TreeDestructionRate.Value = tdr; Ok(args, key, FireConfig.TreeDestructionRate.Value); }
                     else Bad(args, raw);
                     break;
                 case "charreddelay":
-                    if (float.TryParse(raw, out float cdl)) { FireConfig.CharredCollapseDelaySeconds.Value = cdl; Ok(args, key, FireConfig.CharredCollapseDelaySeconds.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float cdl)) { FireConfig.CharredCollapseDelaySeconds.Value = cdl; Ok(args, key, FireConfig.CharredCollapseDelaySeconds.Value); }
                     else Bad(args, raw);
                     break;
                 case "charredcoalmin":
-                    if (int.TryParse(raw, out int ccn)) { FireConfig.CharredCoalMin.Value = ccn; Ok(args, key, FireConfig.CharredCoalMin.Value); }
+                    if (InvariantNumbers.TryParseInt(raw, out int ccn)) { FireConfig.CharredCoalMin.Value = ccn; Ok(args, key, FireConfig.CharredCoalMin.Value); }
                     else Bad(args, raw);
                     break;
                 case "charredcoalmax":
-                    if (int.TryParse(raw, out int ccx)) { FireConfig.CharredCoalMax.Value = ccx; Ok(args, key, FireConfig.CharredCoalMax.Value); }
+                    if (InvariantNumbers.TryParseInt(raw, out int ccx)) { FireConfig.CharredCoalMax.Value = ccx; Ok(args, key, FireConfig.CharredCoalMax.Value); }
                     else Bad(args, raw);
                     break;
                 case "charredhealth":
-                    if (float.TryParse(raw, out float chf)) { FireConfig.CharredTreeHealthFraction.Value = chf; Ok(args, key, FireConfig.CharredTreeHealthFraction.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float chf)) { FireConfig.CharredTreeHealthFraction.Value = chf; Ok(args, key, FireConfig.CharredTreeHealthFraction.Value); }
                     else Bad(args, raw);
                     break;
                 case "charredcrumble":
-                    if (float.TryParse(raw, out float ccr)) { FireConfig.CharredLogCrumbleSeconds.Value = ccr; Ok(args, key, FireConfig.CharredLogCrumbleSeconds.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float ccr)) { FireConfig.CharredLogCrumbleSeconds.Value = ccr; Ok(args, key, FireConfig.CharredLogCrumbleSeconds.Value); }
                     else Bad(args, raw);
                     break;
                 case "charredglow":
-                    if (float.TryParse(raw, out float cgl)) { FireConfig.CharredEmberGlowSeconds.Value = cgl; Ok(args, key, FireConfig.CharredEmberGlowSeconds.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float cgl)) { FireConfig.CharredEmberGlowSeconds.Value = cgl; Ok(args, key, FireConfig.CharredEmberGlowSeconds.Value); }
                     else Bad(args, raw);
                     break;
                 case "charredember":
-                    if (float.TryParse(raw, out float cei)) { FireConfig.CharredEmberIntensity.Value = cei; Ok(args, key, FireConfig.CharredEmberIntensity.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float cei)) { FireConfig.CharredEmberIntensity.Value = cei; Ok(args, key, FireConfig.CharredEmberIntensity.Value); }
                     else Bad(args, raw);
                     break;
                 case "charredembercover":
-                    if (float.TryParse(raw, out float cec)) { FireConfig.CharredEmberCoverage.Value = cec; Ok(args, key, FireConfig.CharredEmberCoverage.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float cec)) { FireConfig.CharredEmberCoverage.Value = cec; Ok(args, key, FireConfig.CharredEmberCoverage.Value); }
                     else Bad(args, raw);
                     break;
                 case "charredsmoke":
@@ -624,7 +624,7 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "charredsmokeseconds":
-                    if (float.TryParse(raw, out float css)) { FireConfig.CharredSmokeSeconds.Value = css; Ok(args, key, FireConfig.CharredSmokeSeconds.Value); }
+                    if (InvariantNumbers.TryParseFloat(raw, out float css)) { FireConfig.CharredSmokeSeconds.Value = css; Ok(args, key, FireConfig.CharredSmokeSeconds.Value); }
                     else Bad(args, raw);
                     break;
                 // These three are read by the simulation but were reachable from no route at all,
@@ -636,7 +636,7 @@ namespace FireFront.Commands
                     else Bad(args, raw);
                     break;
                 case "maxkills":
-                    if (int.TryParse(raw, out int mkc)) { FireConfig.MaxKillsPerCycle.Value = mkc; Ok(args, key, FireConfig.MaxKillsPerCycle.Value); }
+                    if (InvariantNumbers.TryParseInt(raw, out int mkc)) { FireConfig.MaxKillsPerCycle.Value = mkc; Ok(args, key, FireConfig.MaxKillsPerCycle.Value); }
                     else Bad(args, raw);
                     break;
                 case "firesmoke":
@@ -1073,11 +1073,28 @@ namespace FireFront.Commands
             return _settable;
         }
 
+        /// <summary>
+        /// A numeric entry's value in the form BepInEx's invariant parser reads as meant; any other
+        /// entry's value untouched (a prefab name may legitimately hold a comma).
+        /// </summary>
+        private static string NormalizeForEntry(BepInEx.Configuration.ConfigEntryBase entry, string raw)
+        {
+            System.Type t = entry?.SettingType;
+            if (t == typeof(float) || t == typeof(double) || t == typeof(int) || t == typeof(long))
+                return InvariantNumbers.Normalize(raw);
+            return raw;
+        }
+
         /// <summary>Forward a locally-typed fireset to the server, where the value actually matters.</summary>
         internal static void ForwardToServerIfClient(string key, string raw)
         {
             if (ValheimBridge.IsServer()) return;
-            if (!Settable().ContainsKey(key)) return;
+            if (!Settable().TryGetValue(key, out BepInEx.Configuration.ConfigEntryBase target)) return;
+
+            // 0.24: the server applies this with BepInEx's own parser, which is invariant, so a
+            // decimal comma typed on a comma-decimal machine ("1,5") would land there as 15.
+            // Sent in the invariant form instead; InvariantNumbers has the rule.
+            raw = NormalizeForEntry(target, raw);
 
             // NEVER skipped as a duplicate. An earlier draft cached the last value sent per key and
             // dropped a repeat, which looked harmless and was not: the cache recorded what THIS
@@ -1241,6 +1258,8 @@ namespace FireFront.Commands
             }
             try
             {
+                // 0.24: the same rewrite the sender now applies, for a sender older than 0.24.
+                raw = NormalizeForEntry(entry, raw);
                 entry.SetSerializedValue(raw);
                 FireLogger.Info($"fireset (remote from {sender}): {key} = {entry.BoxedValue}");
                 ValheimBridge.SendStatusResponse(sender, $"FireFront: fireset {key} = {entry.BoxedValue} on the server.");

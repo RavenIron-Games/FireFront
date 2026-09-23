@@ -27,7 +27,7 @@ Fire is wind-driven, doused by rain, stopped by water (and by dirt paths in a ho
 
 Drop `FireFront.dll` into `BepInEx/plugins/` and launch. Nothing needs configuring to play.
 
-On a dedicated server, **the server needs the dll too** — it runs the simulation and your client only draws it. Update server and client together: a mixed pair can leave ignition silently doing nothing.
+On a dedicated server, **the server needs the dll too** — it runs the simulation and your client only draws it. Update server and client together. Since 0.24 a mismatch is not silent: at connect the two compare versions, and if they do not work together the player sees it on screen and both logs say which versions met. A client or server older than 0.24 is detected too.
 
 ## Features
 
@@ -155,6 +155,10 @@ Known limits:
 - The fire visual is assembled in code from the game's own fire materials and particle recipes (flipbook flames, ember motes, lit smoke, heat shimmer, a soft-shadowed light), so it should sit next to a campfire without looking like another game — but it is not an authored asset. The charred bark is generated the same way, from each species' own bark texture, on your machine the first time a tree of that species chars.
 - Ray-traced lighting is not something any mod can add to Valheim: the game runs the built-in render pipeline with no ray-tracing support compiled in. Shadow-casting fire lights, HDR bloom, normal-mapped char, lit smoke and heat haze are the ceiling, and all of them are used.
 - Defaults are tuned aggressive. Expect fire to spread fast and hungrily unless you dial it down.
+
+## Licence
+
+MIT; see [LICENSE](LICENSE). Use it, fork it, repackage it, ship it in a modpack; keep the copyright notice with it.
 
 ## Credits
 

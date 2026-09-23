@@ -727,7 +727,7 @@ namespace FireFront.Fire
             if (routedRpc != null && !ReferenceEquals(routedRpc, _registeredRpcInstance))
             {
                 _registeredRpcInstance = routedRpc; // guarded by reference, so a reconnect's fresh instance re-registers
-                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest, HandlePaintAssign, HandleObjectFireSync);
+                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest, HandlePaintAssign, HandleObjectFireSync, VersionCheck.OnVersion);
 
                 // A fresh ZRoutedRpc means a fresh world, so everything this machine was drawing on
                 // behalf of the old one is stale. FireManager lives on the plugin's own GameObject
@@ -737,6 +737,7 @@ namespace FireFront.Fire
                 // so a player who logged out once and came back could never see fire in those cells
                 // again for the rest of the process, and the dictionary grew every session.
                 ResetRemoteMirror();
+                VersionCheck.ResetForNewConnection();
                 _wantGroundSnapshot = true; // asked for below, once the connection can carry it
                 _snapshotRequestsSent = 0;
                 _objectSnapshotReceived = false;
@@ -753,6 +754,9 @@ namespace FireFront.Fire
             // which is where people actually use it) has nowhere to go; this delivers it once the
             // connection and the admin list exist. No-op when there is nothing held.
             FireFront.Commands.FireDevCommands.FlushPendingConfigSync();
+
+            // 0.24: this build's version to the server, same moment and same wait as the snapshot.
+            VersionCheck.ClientTick();
 
             // The request cannot go out at registration time: the RPC instance exists several
             // seconds before there is a server peer to address. Same wait the config sync uses.
@@ -792,6 +796,10 @@ namespace FireFront.Fire
             // simulation with no warning. Gate it explicitly instead of relying
             // on that accident.
             if (!ValheimBridge.IsServer()) return;
+
+            // 0.24: notice connected peers that never sent their version (FireFront 0.23 or older,
+            // or none). Above the Enabled gate on purpose: a mismatch matters with fire off too.
+            VersionCheck.ServerTick();
 
             // Restore persisted fire state exactly once, before the first cycle
             // ever runs — and gate all SAVES behind this flag too, or the empty
@@ -1320,14 +1328,18 @@ namespace FireFront.Fire
 
             float now = Time.time;
             var sb = new System.Text.StringBuilder(256);
-            sb.Append("version\t").Append(FirePersistence.FormatVersion).Append('\n');
+            // 0.24: every number is written in the invariant culture (InvariantNumbers). Before,
+            // StringBuilder.Append(float) used the machine's culture, so a store written on a
+            // comma-decimal machine held "1,5", and a store moved between machines was misread.
+            // The reader accepts both, so no format version bump is needed and nothing is lost.
+            sb.Append("version\t").Append(InvariantNumbers.Format(FirePersistence.FormatVersion)).Append('\n');
 
             if (_fireStartTime >= 0f && _fireOrigin.HasValue)
             {
                 Vector3 o = _fireOrigin.Value;
-                sb.Append("meta\t").Append((now - _fireStartTime) + _restoredRampAge).Append('\t')
-                  .Append(o.x).Append('\t').Append(o.y).Append('\t').Append(o.z).Append('\t')
-                  .Append(_fireIgniterPlayerId).Append('\n');
+                sb.Append("meta\t").Append(InvariantNumbers.Format((now - _fireStartTime) + _restoredRampAge)).Append('\t')
+                  .Append(InvariantNumbers.Format(o.x)).Append('\t').Append(InvariantNumbers.Format(o.y)).Append('\t').Append(InvariantNumbers.Format(o.z)).Append('\t')
+                  .Append(InvariantNumbers.Format(_fireIgniterPlayerId)).Append('\n');
             }
 
             foreach (KeyValuePair<ZDOID, BurningState> kv in _burning)
@@ -1342,29 +1354,29 @@ namespace FireFront.Fire
                 Vector3 at = ValheimBridge.TryGetZdoPosition(kv.Key, out Vector3 livePos)
                     ? livePos
                     : kv.Value.Position;
-                sb.Append("obj\t").Append(kv.Key.UserID).Append('\t').Append(kv.Key.ID).Append('\t')
-                  .Append(at.x).Append('\t').Append(at.y).Append('\t').Append(at.z).Append('\t')
-                  .Append(kv.Value.ExpireAt - now).Append('\t')
-                  .Append(now - kv.Value.IgnitedAt).Append('\t')      // burn age, so restored burners keep their spread maturity
+                sb.Append("obj\t").Append(InvariantNumbers.Format(kv.Key.UserID)).Append('\t').Append(InvariantNumbers.Format(kv.Key.ID)).Append('\t')
+                  .Append(InvariantNumbers.Format(at.x)).Append('\t').Append(InvariantNumbers.Format(at.y)).Append('\t').Append(InvariantNumbers.Format(at.z)).Append('\t')
+                  .Append(InvariantNumbers.Format(kv.Value.ExpireAt - now)).Append('\t')
+                  .Append(InvariantNumbers.Format(now - kv.Value.IgnitedAt)).Append('\t')      // burn age, so restored burners keep their spread maturity
                   .Append(kv.Value.PrefabName).Append('\n');           // field 8, 0.21.6: half of what the entry is keyed on now.
                 // Fields 1-2 still carry the ZDOID and are DIAGNOSTIC ONLY - a ZDOID is reassigned
                 // on every world load. Kept so a store stays readable by an older build.
             }
             foreach (KeyValuePair<GroundCellKey, GroundCellState> kv in _groundBurning)
             {
-                sb.Append("ground\t").Append(kv.Key.X).Append('\t').Append(kv.Key.Z).Append('\t')
-                  .Append(kv.Value.Y).Append('\t').Append(kv.Value.ExpireAt - now).Append('\n');
+                sb.Append("ground\t").Append(InvariantNumbers.Format(kv.Key.X)).Append('\t').Append(InvariantNumbers.Format(kv.Key.Z)).Append('\t')
+                  .Append(InvariantNumbers.Format(kv.Value.Y)).Append('\t').Append(InvariantNumbers.Format(kv.Value.ExpireAt - now)).Append('\n');
             }
             foreach (KeyValuePair<GroundCellKey, float> kv in _groundExhausted)
             {
-                sb.Append("spent\t").Append(kv.Key.X).Append('\t').Append(kv.Key.Z).Append('\t')
-                  .Append(kv.Value - now).Append('\n');
+                sb.Append("spent\t").Append(InvariantNumbers.Format(kv.Key.X)).Append('\t').Append(InvariantNumbers.Format(kv.Key.Z)).Append('\t')
+                  .Append(InvariantNumbers.Format(kv.Value - now)).Append('\n');
             }
             foreach (PendingRegrowth entry in _pendingRegrowth)
             {
-                sb.Append("regrow\t").Append(entry.Position.x).Append('\t').Append(entry.Position.y).Append('\t')
-                  .Append(entry.Position.z).Append('\t').Append(entry.RegrowAt - now).Append('\t')
-                  .Append(entry.Attempts).Append('\t').Append(entry.PrefabName).Append('\n');
+                sb.Append("regrow\t").Append(InvariantNumbers.Format(entry.Position.x)).Append('\t').Append(InvariantNumbers.Format(entry.Position.y)).Append('\t')
+                  .Append(InvariantNumbers.Format(entry.Position.z)).Append('\t').Append(InvariantNumbers.Format(entry.RegrowAt - now)).Append('\t')
+                  .Append(InvariantNumbers.Format(entry.Attempts)).Append('\t').Append(entry.PrefabName).Append('\n');
             }
 
             FirePersistence.Write(sb.ToString());
@@ -1399,7 +1411,7 @@ namespace FireFront.Fire
                     switch (f[0])
                     {
                         case "version":
-                            if (int.Parse(f[1]) != FirePersistence.FormatVersion)
+                            if (InvariantNumbers.ParseInt(f[1]) != FirePersistence.FormatVersion)
                             {
                                 FireLogger.Warn($"[PERSIST] store version {f[1]} != {FirePersistence.FormatVersion} — ignoring the store.");
                                 return;
@@ -1412,20 +1424,20 @@ namespace FireFront.Fire
                             // server's uptime would back-date below 0 and collide
                             // with the -1 "no fire" sentinel.
                             _fireStartTime = now;
-                            _restoredRampAge = float.Parse(f[1]);
+                            _restoredRampAge = InvariantNumbers.ParseFloat(f[1]);
                             // The store writes version, meta, obj, ground, spent, regrow in that
                             // order, so this lands before the first re-ignition creates an event.
                             _restoringRampAge = _restoredRampAge;
-                            _fireOrigin = new Vector3(float.Parse(f[2]), float.Parse(f[3]), float.Parse(f[4]));
-                            _fireIgniterPlayerId = long.Parse(f[5]);
+                            _fireOrigin = new Vector3(InvariantNumbers.ParseFloat(f[2]), InvariantNumbers.ParseFloat(f[3]), InvariantNumbers.ParseFloat(f[4]));
+                            _fireIgniterPlayerId = InvariantNumbers.ParseLong(f[5]);
                             break;
 
                         case "ground":
                         {
-                            float remaining = float.Parse(f[4]);
+                            float remaining = InvariantNumbers.ParseFloat(f[4]);
                             if (remaining <= 0f) { skipped++; break; }
-                            var key = new GroundCellKey(int.Parse(f[1]), int.Parse(f[2]));
-                            float y = float.Parse(f[3]);
+                            var key = new GroundCellKey(InvariantNumbers.ParseInt(f[1]), InvariantNumbers.ParseInt(f[2]));
+                            float y = InvariantNumbers.ParseFloat(f[3]);
                             _groundBurning[key] = new GroundCellState { ExpireAt = now + remaining, Y = y, YIsReal = true };
                             _groundIgnitedSinceFlush.Add((key, y)); // clients learn of it at the next flush
                             // Queued rather than built here: the restore installs the whole fire at
@@ -1441,16 +1453,16 @@ namespace FireFront.Fire
 
                         case "spent":
                         {
-                            float remaining = float.Parse(f[3]);
+                            float remaining = InvariantNumbers.ParseFloat(f[3]);
                             if (remaining <= 0f) { skipped++; break; }
-                            _groundExhausted[new GroundCellKey(int.Parse(f[1]), int.Parse(f[2]))] = now + remaining;
+                            _groundExhausted[new GroundCellKey(InvariantNumbers.ParseInt(f[1]), InvariantNumbers.ParseInt(f[2]))] = now + remaining;
                             spent++;
                             break;
                         }
 
                         case "obj":
                         {
-                            float remaining = float.Parse(f[6]);
+                            float remaining = InvariantNumbers.ParseFloat(f[6]);
                             if (remaining <= 0f) { skipped++; break; }
 
                             // Field 8 is the prefab name (0.21.6). Without it this line came from a
@@ -1466,7 +1478,7 @@ namespace FireFront.Fire
                                 break;
                             }
 
-                            var at = new Vector3(float.Parse(f[3]), float.Parse(f[4]), float.Parse(f[5]));
+                            var at = new Vector3(InvariantNumbers.ParseFloat(f[3]), InvariantNumbers.ParseFloat(f[4]), InvariantNumbers.ParseFloat(f[5]));
                             if (!ResolveBurnerAt(at, prefabName, out ZDOID id))
                             {
                                 skipped++; // gone since the save, moved, or too ambiguous to name safely
@@ -1486,7 +1498,7 @@ namespace FireFront.Fire
                                 // those burners as already mature, matching how they
                                 // behaved when they were saved.
                                 st.IgnitedAt = f.Length > 7
-                                    ? now - float.Parse(f[7])
+                                    ? now - InvariantNumbers.ParseFloat(f[7])
                                     : now - FireConfig.BurnDurationSeconds.Value;
                                 _burning[id] = st;
                                 objects++;
@@ -1499,8 +1511,8 @@ namespace FireFront.Fire
                         {
                             bool added = EnqueueRegrowth(new PendingRegrowth
                             {
-                                Position = new Vector3(float.Parse(f[1]), float.Parse(f[2]), float.Parse(f[3])),
-                                RegrowAt = now + Mathf.Max(1f, float.Parse(f[4])),
+                                Position = new Vector3(InvariantNumbers.ParseFloat(f[1]), InvariantNumbers.ParseFloat(f[2]), InvariantNumbers.ParseFloat(f[3])),
+                                RegrowAt = now + Mathf.Max(1f, InvariantNumbers.ParseFloat(f[4])),
                                 // Deliberately NOT int.Parse(f[5]): before 0.21.5 this counted every
                                 // IsAreaReady deferral, which headless meant "every cycle", so a
                                 // carried-over count is near its cap for a reason that no longer

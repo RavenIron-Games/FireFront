@@ -42,7 +42,7 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 # Store files at the zip root; the DLL under plugins\ — the BepInEx layout mod
 # managers map onto BepInEx/plugins (and Hexium requires; a root-level DLL was
 # refused 2026-08-27).
-Copy-Item "$root\manifest.json", "$root\README.md", "$root\CHANGELOG.md", "$root\icon.png" -Destination $stage
+Copy-Item "$root\manifest.json", "$root\README.md", "$root\CHANGELOG.md", "$root\LICENSE", "$root\icon.png" -Destination $stage
 New-Item -ItemType Directory -Force -Path "$stage\plugins" | Out-Null
 Copy-Item $dll -Destination "$stage\plugins"
 

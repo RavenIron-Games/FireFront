@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.24.0
+
+- **Client and server compare versions at connect.** Nothing put FireFront's version on the
+  wire before, so a mixed pair failed silently: ignition doing nothing, fire the server
+  simulated that the client never drew. A new routed RPC, `FireFront_Version`, carries the
+  plugin version and a wire protocol number both ways once the client can reach the server
+  (Fire/VersionCheck.cs). Same version: one Info line on each side. Same protocol, different
+  version: a Warn and a top-left message, since they work together. Different protocol: a
+  Warn and a centre-screen message saying fire will not show or sync correctly. The protocol
+  number (`Plugin.WireProtocol`, 1 as of this release) changes only when an RPC's name,
+  arguments or payload layout change.
+- **Older builds on either side are caught too.** A client whose server never answers (a
+  server on 0.23 or older, or none) tells the player after three tries 10 s apart. A server
+  gives every connected peer 60 s; one that never sent its version gets a Warn in the server
+  log and, once that player's character has spawned, a console line plus a centre-screen
+  message on the client, through two channels
+  vanilla registers on every client (`RemotePrint` and the routed `ShowMessage`), so it works
+  with no FireFront or an old one on the far side. The new RPC is in the 0.23 sender guard
+  (`[AUTH] routed-sender guard armed: 14 methods`); the boot line reads `All 13 FireFront
+  RPCs`.
+- On-screen version notices wait for the player's character to spawn, plus 3 s; the log and
+  console lines are written at once. Found by the review before release: the reply arrives
+  within one round trip, several seconds before the character exists, and a top-left message
+  needs the character while a centre message under the loading screen is never seen.
+- **Numbers mean the same thing on every language setting.** There was not one invariant
+  culture in the tree. The fire save file was written and read with the machine's culture, so
+  a store written on an English machine and read on a German one put `1.5` back as `15`, and
+  `fireset spreadradius 1,5` typed on a German client reached the server's BepInEx parser,
+  which is invariant, as 15. Every number FireFront writes as text or reads from text now
+  goes through `Utils/InvariantNumbers.cs`: written in the invariant culture at round-trip
+  precision, read in the invariant culture with two allowances for old files and for typing
+  (a single comma with no dot is a decimal comma; the Unicode minus reads as `-`), and
+  thousands separators, NaN and the infinities refused rather than guessed. The save file
+  keeps format version 1: a store written by any earlier build, on any culture, reads as its
+  writer meant it, so an upgrade loses nothing. The server applies the same rewrite to a
+  forwarded `fireset`, for clients older than 0.24. Vanilla's own console argument parser
+  (`startfire 12,5`) was already invariant and is untouched.
+- **The off-game harness covers it**: 1,680 new checks run the reader and writer under ten
+  cultures (invariant, en-US, de-DE, fr-FR, ru-RU, sv-SE, tr-TR, pt-BR, es-ES, fi-FI),
+  including every culture reading every other culture's pre-0.24 save file. The harness runs
+  on .NET with ICU culture data, which formats sv-SE and fi-FI negatives with U+2212: stricter
+  than the Mono the game runs on.
+- A texture-generator name match lowercased with the machine's culture, which on a Turkish
+  machine turns `I` into dotless `ı`; it lowercases invariantly now.
+- **MIT licence**, in the repository and in the zip (`LICENSE`). Copyright Raven Iron Games and
+  FireFront contributors.
+- docs/ROADMAP.md is rewritten to the shorter road agreed on 2026-09-23: 1.0 is 0.23, this
+  release, the licence and a README pass; the rest moves after 1.0.
+
+Rig evidence (2026-09-23, owner on the dedicated test rig, both sides on 0.24.0, en-US).
+Server boot: `All 13 FireFront RPCs registered`, `[AUTH] routed-sender guard armed: 14 methods
+(13 FireFront + RPC_Damage)`. On join, server: `[VERSION] peer <id> (Steam_...) runs FireFront
+0.24.0, same as this server.`; client: `[VERSION] the server runs FireFront 0.24.0, same as this
+game.`; nothing on screen. `fireset burnduration 240,5` typed with a decimal comma read `fireset
+burnduration = 240.5 on this machine` and `[server] FireFront: fireset burnduration = 240.5 on
+the server.` (before 0.24 an en-US machine read it as 2405, clamped to 600); `fireset
+spreadradius 1,5` came back as 2, the key's minimum, where before 0.24 it would have been 15.
+Zero exceptions on either side. Not played, by the owner's decision: a 0.23 client against a
+0.24 server and the reverse (the two mismatch warnings), and a de-DE process reading the fire
+save file; the last is covered by the harness's 1,680 checks, which run the same code.
+The shipped build adds the notice-timing fix above, found by review after this session; it
+changes only what a player sees when versions differ.
+
 ## 0.23.0
 
 - **A non-admin can no longer change the server's settings.** A `fireset` forwarded from a

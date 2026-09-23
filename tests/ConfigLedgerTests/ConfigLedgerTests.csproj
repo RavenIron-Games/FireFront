@@ -23,5 +23,7 @@
          names is a key this build actually binds. That join is a pair of bare strings written in
          two different files; a typo in either stamps the version and never migrates again. -->
     <Compile Include="..\..\Config\FireConfig.cs" Link="Config\FireConfig.cs" />
+    <!-- 0.24: the culture-invariant number reader and writer. Pure; run under ten cultures. -->
+    <Compile Include="..\..\Utils\InvariantNumbers.cs" Link="Utils\InvariantNumbers.cs" />
   </ItemGroup>
 </Project>

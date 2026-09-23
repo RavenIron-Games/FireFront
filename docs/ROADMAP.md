@@ -19,9 +19,20 @@ And 1.0 comes with the things a new admin looks for: a licence, an admin guide, 
 
 Fire spreads, climbs trees by their health, chars them, leaves soot and, on request, real dirt; it runs headless, survives restarts, remembers who lit it, and a late joiner sees it. All of that is play-verified on the rig. Not yet verified: the same things with a real second client; anything under load; anything on a non-English machine; and the packaging side of a public release.
 
+## The shorter road (decided 2026-09-23)
+
+After 0.23 shipped, the owner chose a shorter road to 1.0 over the seven releases below. 1.0 is:
+
+- **0.23 Authority**, shipped and played (v0.23.0).
+- **0.24 as cut**: the connect-time version check with one wire protocol number, and culture-invariant numbers everywhere, the fire save file included. Plus the **MIT licence**, which came forward from 0.29.
+- **The README pass** from 0.29, with the one-sentence disclosure about arson attribution.
+- **1.0 Verify, then tag**, re-running the checks that apply: non-admin refusal, a version mismatch in both directions, a German-culture server reading a save written in English, and the README read with the dedicated server as reference.
+
+Moved after 1.0, in the order written below: from 0.24, the server-to-client config broadcast, per-payload wire versions and the sidecar downgrade story; all of 0.25 to 0.28; and the rest of 0.29 (dead-side key descriptions, the admin guide, localisation tokens, the compatibility position, CI and checksums, the tester pipeline). Condition 2 of "What 1.0 means" is therefore met by its last clause only at 1.0: mismatched versions are told so at connect; the per-key descriptions and preset override logs come in 1.x.
+
 ## The releases
 
-Seven before 1.0. Each is one rig evening to test. If the calendar slips, the cut line is stated at the end.
+Seven before 1.0 as first written; see "The shorter road" above for what 1.0 now holds. Each is one rig evening to test.
 
 ### 0.23 Authority
 
@@ -38,6 +49,8 @@ Everything after this ships new RPC surface, and it should be tested against the
 Rig test: the five refusals above from a non-admin client, then the same five as admin.
 
 ### 0.24 The connect-time exchange
+
+Cut on 2026-09-23 to the version check (one protocol number for the whole wire, not one per payload) and the culture-invariant numbers; the licence came forward from 0.29. The config broadcast and the sidecar downgrade story moved after 1.0.
 
 The version handshake and three dead-copy no-ops are consequences of one missing channel. Build the channel once.
 
@@ -92,6 +105,8 @@ Rig test: `fireset burntheworld true` on a ten-player-sized forest with the capt
 
 ### 0.29 The release itself
 
+On the shorter road only the README pass and the licence are in 1.0; the licence shipped in 0.24.
+
 What a new admin or a store reviewer will look for, done once, after the code has stopped moving.
 
 - The README truth pass with the dedicated server as the reference: the feature list is stale at 0.19.6 (docs/HANDOFF.md:233-235), arson attribution surfaces only through the companion mod, presets and their overrides.
@@ -109,6 +124,8 @@ Rig test: a clean install on a fresh world by someone who has never run the mod,
 ### 1.0 Verify, then tag
 
 No new code. Re-run the blocking checks only, not seven prior checklists in one sitting: non-admin refusal, the connect-time exchange with a version mismatch, zone-gated effects, an off-origin firebreak, the README read with the dedicated server as reference. Tag when all five pass on the rig with both of us present.
+
+On the shorter road (2026-09-23) the 1.0 evening covers only what has never been seen in play, since the README pass changes no code: a 0.23 client joining a 1.0 server (the centre-screen warning after the character spawns), a 1.0 client joining a 0.23 server (the "did not answer" warning), and a de-DE process (the rig-only culture probe) restoring a fire across a restart. Non-admin refusal was played on 0.23 and matching versions and the decimal comma on 0.24, on code 1.0 does not change. 1.0 is the 0.24 code with the version string changed; the wire protocol stays 1, so 0.24 and 1.0 work together.
 
 ## The cut line
 

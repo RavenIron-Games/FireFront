@@ -439,7 +439,7 @@ namespace FireFront.Fire
                     ParticleSystemRenderer r = renderers[i];
                     if (r == null || r.sharedMaterial == null || r.sharedMaterial.mainTexture == null) continue;
                     if (!r.gameObject.activeSelf) continue; // never the low-LOD stand-ins
-                    if (r.gameObject.name.ToLower().Contains(emitterKeyword.ToLower()) && r.sharedMaterial.mainTexture is Texture2D t2d)
+                    if (r.gameObject.name.ToLowerInvariant().Contains(emitterKeyword.ToLowerInvariant()) && r.sharedMaterial.mainTexture is Texture2D t2d)
                         return t2d;
                 }
             }

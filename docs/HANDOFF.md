@@ -1,6 +1,37 @@
+# FireFront — 0.24.0 (2026-09-23): the connect-time version check, invariant numbers, MIT
+
+**Resume point.** `main` carries 0.24.0, tagged v0.24.0: the version exchange
+(Fire/VersionCheck.cs), culture-invariant numbers everywhere (Utils/InvariantNumbers.cs, with
+1,680 harness checks), and the MIT licence. Played on the rig 2026-09-23 as far as the owner
+chose (matching versions, the decimal comma; CHANGELOG "Rig evidence"); the steps below marked
+there as not played are the 1.0 evening. Next: the README pass (docs only), then the 1.0
+evening (docs/ROADMAP.md, "1.0 Verify, then tag": only the never-played checks), then the tag.
+The shipped build adds one fix found by review after the rig session: on-screen version
+notices wait for the character to spawn (display only; the matching-version path is unchanged).
+
+## 0.24.0 (2026-09-23): the rig evening that gates it
+
+1. Both sides on 0.24.0. Server log on the owner's join: `[VERSION] peer <id> (Steam_...) runs
+   FireFront 0.24.0, same as this server.`; client log: `[VERSION] the server runs FireFront
+   0.24.0, same as this game.` No message on screen.
+2. An old client: 0.23.0's DLL in Gale's `testing` profile, 0.24.0 on the server. About 60 s
+   after joining: a centre-screen message and a console line, `FireFront: this server runs
+   FireFront 0.24.0. Your game has an older FireFront, or none...`; server log `[VERSION] peer
+   ... has not answered FireFront's version check in 60 s`.
+3. An old server: 0.23.0 on the server, 0.24.0 on the client. About 30 s after joining: a
+   centre-screen message, `FireFront: the server did not answer the version check...`.
+4. Numbers on a German machine: the rig-only `FireFrontCultureProbe.dll` (session scratchpad,
+   `cultureprobe/`; not part of FireFront) sets the process culture to de-DE at load. On the
+   server, with a fire burning at the previous shutdown (the store is written in the invariant
+   culture from 0.24, or in en-US before): restored fires come back where they were (`[PERSIST]`
+   restore line, positions sane). On the client: `fireset spreadradius 1,5` and `fireset
+   spreadradius 2.5` both read `1.5` / `2.5` on this machine and on the server; before 0.24 the
+   German client would have stored 25 locally and the server 15. Put the value back after.
+5. Remove both probes from the profile and the server; record the lines under "Rig evidence".
+
 # FireFront — 0.23.0 (2026-09-21): Authority
 
-**Resume point.** `main` carries 0.23.0, tagged v0.23.0: the first release on
+**State at 0.23.0.** `main` carries 0.23.0, tagged v0.23.0: the first release on
 docs/ROADMAP.md, reviewed (four Sonnet lenses, two Opus refuters per finding) and played on
 the rig 2026-09-23 with every check below passing; the CHANGELOG's "Rig evidence" paragraph
 has the log lines. One defect was found in play and fixed the same evening (the `fireset`
