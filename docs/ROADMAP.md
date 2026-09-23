@@ -123,6 +123,8 @@ Rig test: a clean install on a fresh world by someone who has never run the mod,
 
 ### 1.0 Verify, then tag
 
+Shipped 2026-09-23 as v1.0.0; CHANGELOG 1.0.0 has the rig evidence.
+
 No new code. Re-run the blocking checks only, not seven prior checklists in one sitting: non-admin refusal, the connect-time exchange with a version mismatch, zone-gated effects, an off-origin firebreak, the README read with the dedicated server as reference. Tag when all five pass on the rig with both of us present.
 
 On the shorter road (2026-09-23) the 1.0 evening covers only what has never been seen in play, since the README pass changes no code: a 0.23 client joining a 1.0 server (the centre-screen warning after the character spawns), a 1.0 client joining a 0.23 server (the "did not answer" warning), and a de-DE process (the rig-only culture probe) restoring a fire across a restart. Non-admin refusal was played on 0.23 and matching versions and the decimal comma on 0.24, on code 1.0 does not change. 1.0 is the 0.24 code with the version string changed; the wire protocol stays 1, so 0.24 and 1.0 work together.

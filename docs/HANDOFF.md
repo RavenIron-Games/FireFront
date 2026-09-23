@@ -1,6 +1,13 @@
+# FireFront — 1.0.0 (2026-09-23): released
+
+**Resume point.** `main` carries 1.0.0, tagged v1.0.0: 0.24.0's code with the version string
+changed, the README pass, and the 1.0 rig evening recorded in the CHANGELOG. Work after 1.0 is
+the list in docs/ROADMAP.md ("The shorter road": moved after 1.0), including per-fire arson
+attribution. Problems found in play are fixed as they come.
+
 # FireFront — 0.24.0 (2026-09-23): the connect-time version check, invariant numbers, MIT
 
-**Resume point.** `main` carries 0.24.0, tagged v0.24.0: the version exchange
+**State at 0.24.0.** `main` carries 0.24.0, tagged v0.24.0: the version exchange
 (Fire/VersionCheck.cs), culture-invariant numbers everywhere (Utils/InvariantNumbers.cs, with
 1,680 harness checks), and the MIT licence. Played on the rig 2026-09-23 as far as the owner
 chose (matching versions, the decimal comma; CHANGELOG "Rig evidence"); the steps below marked

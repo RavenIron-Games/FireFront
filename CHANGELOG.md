@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.0.0
+
+The first release. The code is 0.24.0's with the version string changed; the wire protocol
+stays 1, so 0.24 and 1.0 play together (each side shows the "different version, works
+together" notice).
+
+- **What 1.0 means** is in docs/ROADMAP.md, "The shorter road": the server is the authority
+  for everything a client can ask of it (0.23), client and server compare versions at
+  connect and numbers read the same on every language setting (0.24), the MIT licence, and
+  a README that describes what happens on a dedicated server.
+- **The README pass**: every sentence checked against the code with a dedicated server as
+  the reference, by five section auditors and a missing-feature finder with two refuters
+  per finding, then rechecked by two independent readers. Nineteen corrections, among
+  them: scorch marks fade after five minutes and lasting dirt is the opt-in `dirtpaint`;
+  firebreak ground stops only fire crossing the ground; which commands run on the server
+  and need its admin list; three `fireset` keys the table was missing; and the arson
+  disclosure, stated as the code behaves: one igniter id for the whole server, the first
+  player to light a fire while nothing burns, saved in the fire save file and read by a
+  companion mod.
+
+Rig evidence (2026-09-23, owner on the dedicated test rig). A 0.23 client on the 1.0 server:
+the server logged `[VERSION] peer ... has not answered FireFront's version check in 60 s ...
+This server runs 1.0.0 (protocol 1).` and the owner saw the centre-screen message. A 1.0
+client on a 0.23 server: the client logged `[VERSION] FireFront: the server did not answer
+the version check ...` about 30 s after joining and the owner saw the centre-screen message.
+German number format: the 1.0 server ran as de-DE under Mono (the probe logged `1.5 formats
+as '1,5', '1.5' parses as 15`, the trap 0.24 removed) and booted clean; the save file's
+cross-culture reading is covered by the harness. Admin refusal (0.23), matching versions and
+the decimal comma (0.24) were played on code 1.0 does not change.
+
 ## 0.24.0
 
 - **Client and server compare versions at connect.** Nothing put FireFront's version on the
