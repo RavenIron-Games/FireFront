@@ -14,7 +14,9 @@ Fire is wind-driven, doused by rain, stopped by water (and by dirt paths in a ho
 - [Configuration](#configuration)
 - [Building from source](#building-from-source)
 - [Reporting problems](#reporting-problems)
+- [Licence](#licence)
 - [Credits](#credits)
+- [Support Raven Iron](#support-raven-iron)
 
 ## Requirements
 
@@ -46,15 +48,15 @@ On a dedicated server, **the server needs the dll too** — it runs the simulati
 - Standing near fire keeps you warm — it holds off Cold and Freezing exactly as a campfire does, so you cannot freeze to death inside a burning forest.
 - A tree the fire kills is charred in place: a black, bare, ash-dusted husk of the same species — real char plates split by fissures, built from that species' own bark — with a few scattered pockets of embers that glow in the splits and fade over a couple of minutes, and thin smoke off the trunk for a while after. Three seconds later it either collapses — the charred trunk falls with the game's own felling crash, drops a little coal, smokes where it lies and crumbles to ash — or stays standing as a snag you can chop later for the same coal. Charred wood never drops wood or seeds and never catches fire again. `fireset treedestruction <0-100>` is the collapse chance; `charredember`, `charredembercover` and `charredsmokeseconds` are the look.
 - Join a server mid-blaze and you see the blaze: burning buildings and trees are sent to a connecting player as a snapshot, with how long each has burned.
-- Burnt ground leaves scars. Collapsed trees regrow after about fifteen minutes if the spot is still clear.
-- Fires remember who lit them. The whole front carries its arsonist even after crawling a long way from the first spark; natural and creature-lit fire belongs to nobody. Nothing surfaces in game yet — it feeds a companion mod's reputation system.
+- Burnt ground leaves a dark scorch mark that disappears after about five minutes. For a lasting mark, `fireset dirtpaint true` also lays real bare dirt where a player is near the fire; that dirt is saved with the world and never goes away, which is why it is off by default. Collapsed trees regrow after about fifteen minutes if the spot is still clear.
+- Fires remember who lit them. When a player starts a fire, their player id goes with the whole front, even after it crawls a long way from the first spark; natural and creature-lit fire belongs to nobody. That id is saved to disk with the rest of the fire state, in `firefront_fires_<world id>.txt` in the server's `worlds_local` folder, so it survives a restart; with `persistfires` off nothing is written. Nothing surfaces in game yet: it feeds a companion mod's reputation system.
 - Fires survive a server restart. Burning things come back burning with their remaining time, spent ground stays spent, and trees still waiting to regrow still do.
 
 ## Fighting a fire
 
 A large fire is meant to be fightable rather than something you stand beside and hope.
 
-- **Water is a real firebreak, and so are dirt paths and cultivated ground in a hosted game.** Where that applies it protects a base more than you would expect: the levelled, pathed ground most bases sit on counts as fuel-free, so a wildfire burns to the edge of the yard and stalls, and walls only catch if fire starts inside the perimeter. On a dedicated server that only holds near the world's centre, in the few zones the server itself keeps loaded; everywhere else the server cannot see the ground, so only water counts for now. That is a known gap, not a setting.
+- **Water is a real firebreak, and so are dirt paths and cultivated ground in a hosted game.** Where that applies it protects a base more than you would expect: the levelled, pathed ground most bases sit on counts as fuel-free, so ground fire crawling in from outside stalls at the edge of the yard. It stops only fire moving over the ground. A burning tree or building still lights a wall within about 8 m of it (`spreadradius`), and burning ground lights anything within about 4 m (`groundradius`), so keep trees and grass that far back from walls you want to keep. On a dedicated server that only holds near the world's centre, in the few zones the server itself keeps loaded; everywhere else the server cannot see the ground, so only water counts for now. That is a known gap, not a setting.
 - **Rain douses fire, buildings included.** A burner caught in the rain stops passing fire on immediately and burns out in about a third of its normal time. Rain stops *spread*, not ignition — a torch, a fire arrow or lightning still lights something in a downpour.
 - **Press `G`** to extinguish what you are looking at plus the fire around you, ground fire and burning structures alike.
 - **The Dousing Bomb** puts out everything within about 6 m of where it lands. Hand-craftable anywhere and cheap on purpose: 3 Resin + 2 Leather scraps makes 3.
@@ -96,13 +98,17 @@ Press `` ` `` to open the console.
 | `firedebug` | Toggle verbose logging |
 | `fireset <key> <value>` | Live-tune any setting, no restart; a change to the server needs you on its admin list |
 
-Commands run on the server no matter where you type them, authorised against the server's own admin list (`fireset` included, whether typed or moved from a config manager), and the reply comes back to your console prefixed `[server]`.
+`ignite`, `startfire` and `clearfires` run on the server no matter where you type them, only for players on the server's own admin list, and the reply comes back to your console prefixed `[server]`. `fireset` changes the copy on your own machine and asks the server, which applies it only for its admins, whether typed or moved from a config manager; its answer comes back the same way. `firestatus` asks the server too and needs no admin. `stopfire` checks the admin flag your own game received from the server, then sends the same extinguish request the `G` key does. `firedebug` only changes logging on the machine you type it on.
 
-Diagnostic-only: `firelistprefabs`, `firecheckprefab`, `firepurgevfx`, `firegroundignite`, `firetreeregrow`, `firetreeregrowlist`, `firedumptex` (writes the charred-wood textures this client generated as PNG under `BepInEx/config/FireFront-textures/`).
+Test commands that change the world, run on the server for its admins only, like `startfire`: `firegroundignite [radius]` starts real ground fire around you, and `firetreeregrow` makes every pending tree regrowth try now.
+
+Diagnostic commands that change nothing: `firetreeregrowlist` lists the server's pending tree regrowth (admins only); `fireweather` shows the weather FireFront uses at your position as your game sees it, and as the server sees it if you are one of its admins; `firelistprefabs`, `firecheckprefab` and `fireinspecteffectarea` read prefab and effect details on your own machine; `firedumptex` writes the charred-wood textures your game generated as PNG under `BepInEx/config/FireFront-textures/`. `firepurgevfx` removes stray vanilla fire effects from your own game's scene only.
+
+To test rain on a dedicated server, `fireweather force Rain` and then `fireweather reset` (admins only). Vanilla's `env` changes the weather on your own game only, so the server's fire never sees it.
 
 ## Configuration
 
-Everything is in `BepInEx/config/com.raveniron.firefront.cfg` and everything is live-tunable with `fireset` by a server admin, no restart required. The config file migrates itself between versions: when a default changes, a value you never touched follows it, and a value you chose is kept and named in the log.
+Everything is in `BepInEx/config/com.raveniron.firefront.cfg`. Every setting except `ExtinguishKey` is live-tunable with `fireset` by a server admin, no restart required; `ExtinguishKey` (default `G`) is each player's own keybind, set in their own file. The config file migrates itself between versions: when a default changes, a value you never touched follows it, and a value you chose is kept and named in the log.
 
 Every key is written to both the server's file and each client's, but most are read on one side only, and two presets (`lowspec`, `burntheworld`) silently override keys that still read true. [docs/CONFIG-KEY-MAP.md](docs/CONFIG-KEY-MAP.md) says, for all 81 keys, which side reads it and what overrides it.
 
@@ -110,15 +116,15 @@ Every key is written to both the server's file and each client's, but most are r
 
 | Area | Keys |
 |---|---|
-| Core | `enabled`, `burnduration`, `firematurity`, `spreadradius`, `maxburning`, `queuesize`, `spreadinterval`, `trees`, `burnbuildings` |
+| Core | `enabled`, `burnduration`, `firematurity`, `spreadradius`, `maxburning`, `queuesize`, `spreadinterval`, `trees`, `burnbuildings`, `maxkills` |
 | Ground fire | `groundenabled`, `groundcellsize`, `groundradius`, `groundburnduration`, `groundmax`, `groundvfxmax`, `grounddamagemax`, `groundleashenabled`, `groundleashdistance` |
 | Damage and warmth | `firehurts`, `firehurtsplayeronly`, `firehurtsradius`, `firedamage`, `firetickinterval`, `firewarmth`, `firewarmthradius` |
-| Putting it out | `extinguishradius`, `dousingradius`, `douseimmunity`, `rainsuppress`, `rainmultiplier`, `rainobjects`, `rainobjectmultiplier`, `firebreaks` |
+| Putting it out | `extinguishradius`, `dousingradius`, `douseimmunity`, `rainsuppress`, `rainmultiplier`, `rainobjects`, `rainobjectmultiplier`, `firebreaks`, `waterblocks` |
 | Wind | `windbias`, `windupwindchance`, `windinfluence` |
 | Aftermath | `scorchmarks`, `scorchlifetime`, `dirtpaint`, `dirtpaintradius`, `exhaustionenabled`, `fuelregrow`, `treeregrowth`, `treeregrowthseconds`, `persistfires` |
 | Tree fire and charring | `treefire`, `treetick`, `treekillfraction`, `treedestruction`, `charreddelay`, `charredcoalmin`, `charredcoalmax`, `charredhealth`, `charredcrumble`, `charredglow`, `charredember`, `charredembercover`, `charredsmoke`, `charredsmokeseconds` |
 | Ramp | `rampenabled`, `rampduration`, `rampstart` |
-| Visuals | `vfx`, `procedural`, `maxflameheight`, `treeflames`, `crownsparks`, `tallfiremax`, `fireshadows`, `heathaze`, `barkchar` |
+| Visuals | `vfx`, `procedural`, `firesmoke`, `maxflameheight`, `treeflames`, `crownsparks`, `tallfiremax`, `fireshadows`, `heathaze`, `barkchar` |
 | Smouldering | `smouldering`, `smoulderafter` |
 | Presets and debug | `lowspec`, `burntheworld`, `debug` |
 
