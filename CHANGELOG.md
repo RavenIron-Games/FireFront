@@ -24,6 +24,15 @@
   `[AUTH] routed-sender guard armed: 13 methods` at RPC registration; if `ZNet.m_peers`
   cannot be reflected it says so at Warn and every handler's own clamps stand alone, as in
   0.22.
+- **`fireset` says where a value landed, and the server always answers.** A typed `fireset`
+  writes the copy on the typist's machine first (several keys are read on both sides) and
+  then forwards it. Before 0.23 the server never refused, so the local reply stood in for
+  both. Found in play on the rig: a refused non-admin saw `burntheworld = True (in force:
+  True)` and read it as the server's state. On a client connected to a server the reply now
+  says `on this machine`, a second line says the server answers separately, and the server
+  replies to every forwarded `fireset` as a `[server]` line: `= <value> on the server`,
+  refused (the server's value is unchanged, the local copy keeps what was set), no such key,
+  or could not read the value. The ConfigurationManager route gets the same replies.
 - **Extinguish requests are bounded by the server's settings.** The radius a client sends
   with the key or a Dousing Bomb was applied as sent. It is now capped at the larger of the
   server's `ExtinguishGroundRadius` and `DousingBombRadius`, and the position must be
@@ -40,7 +49,26 @@
   `FireBurnZone` (0.21.9, `9900edf`; the restore path queues them for
   `UpgradeDarkGroundCells`).
 
-Rig evidence: not yet played. Recorded here before the tag.
+Rig evidence (2026-09-23, owner on the dedicated test rig, both sides on the same build).
+Server boot: `[AUTH] routed-sender guard armed: 13 methods (12 FireFront + RPC_Damage)`, no
+FireFront warning or error. As admin: `fireset burntheworld true` then `false` applied on the
+server (`fireset (remote from <peer>): burntheworld = True`, then `= False`); `clearfires`
+relayed and ran. Off the adminlist (vanilla re-read the file within 10 s, no restart):
+`[AUTH] refused fireset 'burntheworld = false' from a peer not in the adminlist`; a
+ConfigurationManager slider, `[AUTH] refused fireset 'dirtpaintradius = 8'`; `G` and the
+Dousing Bomb still put fires out. The forged packets, from a rig-only test plugin that is not
+part of FireFront: a PaintAssign claiming the server's id, `[AUTH] dropped a routed RPC (method
+-677775963) ... it claims sender <server>, the connection is peer <owner>`; thirty at once, one
+line and `(29 more of these from this peer in the last 10 s not logged)` on the next; an
+`RPC_Damage` with FireFront's tick marker (method 1130726949), dropped; a FireDamage of 1e9
+(method -1026555515), dropped; an honest request with a 100 km radius, `extinguish radius
+100000.0 m clamped to the server's 15.0 m`; one 5 km away, `refused an extinguish request at
+(4945,-31): 5000 m from where the server last saw the player, limit 200 m`. Found in play and
+fixed the same evening: the `fireset` wording (the entry above). Retested on the fixed build:
+as admin the console read `burntheworld = True on this machine`, the sent-to-the-server line,
+then `[server] FireFront: fireset burntheworld = True on the server.`; as non-admin the
+`[server]` line read `refused — you are not in the server's adminlist. The server's value is
+unchanged; the copy on your machine keeps what you set.` Zero exceptions either side.
 
 ## 0.22.1
 

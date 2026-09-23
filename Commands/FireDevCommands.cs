@@ -335,7 +335,7 @@ namespace FireFront.Commands
                     if (bool.TryParse(raw, out bool btw))
                     {
                         FireConfig.WatchTheWorldBurn.Value = btw;
-                        Say(args, $"burntheworld = {btw} (in force: {FireConfig.ApocalypseActive}). " +
+                        Say(args, $"burntheworld = {btw}{WhereSet()} (in force: {FireConfig.ApocalypseActive}). " +
                                   $"maturity {FireConfig.EffectiveSpreadMaturityFraction}, firebreaks {FireConfig.EffectiveGroundFirebreaksEnabled}, " +
                                   $"water {FireConfig.EffectiveGroundWaterBlocksSpreadEnabled}, leash {FireConfig.EffectiveGroundMaxSpreadDistanceEnabled}, " +
                                   $"ramp {FireConfig.EffectiveFireRampEnabled}, regrow {FireConfig.EffectiveTreeRegrowthEnabled}, " +
@@ -354,7 +354,7 @@ namespace FireFront.Commands
                         FireConfig.LowSpecPreset.Value = ls;
                         // Report what it actually resolves to — the caps are what
                         // the player wants to see change, not the flag they typed.
-                        Say(args, $"lowspec = {ls} (burning cap {FireConfig.EffectiveMaxConcurrentBurning}, " +
+                        Say(args, $"lowspec = {ls}{WhereSet()} (burning cap {FireConfig.EffectiveMaxConcurrentBurning}, " +
                                   $"ground {FireConfig.EffectiveGroundMaxConcurrent}, vfx {FireConfig.EffectiveGroundVfxMaxConcurrent}, " +
                                   $"dmg {FireConfig.EffectiveGroundDamageMaxConcurrent}, interval {FireConfig.EffectiveSpreadCheckInterval}s, " +
                                   $"scorch {FireConfig.EffectiveScorchMarksEnabled}). Your own settings are untouched.");
@@ -655,6 +655,14 @@ namespace FireFront.Commands
             // ('rampstart 1', 'burnbuildings false') before this existed.
             _firesetKeyInFlight = null;
             ForwardToServerIfClient(key, raw);
+
+            // 0.23: the server can refuse now, so the line above is about THIS machine only and
+            // the server's own answer arrives separately as a [server] line (ApplyRemote replies
+            // to every forwarded fireset, accepted or not). Found in play on the rig 2026-09-23:
+            // a refused non-admin read "burntheworld = True (in force: True)" and took it for
+            // the server's state.
+            if (ValheimBridge.CanReachServer() && Settable().ContainsKey(key))
+                Say(args, $"fireset {key}: sent to the server; its answer follows as a [server] line. Only an admin on the server's adminlist changes the server's copy.");
         }
 
         private static void FireListPrefabs(Terminal.ConsoleEventArgs args)
@@ -947,7 +955,14 @@ namespace FireFront.Commands
         }
 
         private static void Ok(Terminal.ConsoleEventArgs args, string key, object val) =>
-            Say(args, $"fireset {key} = {val}");
+            Say(args, $"fireset {key} = {val}{WhereSet()}");
+
+        /// <summary>
+        /// " on this machine" on a client connected to a server, where a typed fireset writes the
+        /// local copy and forwards the rest to a server that may refuse it; empty on the server,
+        /// on a hosting player and at the main menu, where the local copy is the only one.
+        /// </summary>
+        private static string WhereSet() => ValheimBridge.CanReachServer() ? " on this machine" : "";
 
         private static void Bad(Terminal.ConsoleEventArgs args, string raw) =>
             Say(args, $"Couldn't parse value: {raw}");
@@ -1212,7 +1227,7 @@ namespace FireFront.Commands
             if (!ValheimBridge.IsServer()) return;
             if (!ValheimBridge.PeerIsAdmin(sender))
             {
-                ValheimBridge.SendStatusResponse(sender, $"FireFront: fireset {key} refused — you are not in the server's adminlist.");
+                ValheimBridge.SendStatusResponse(sender, $"FireFront: fireset {key} refused — you are not in the server's adminlist. The server's value is unchanged; the copy on your machine keeps what you set.");
                 AuthLog.Refused(sender, "fireset", $"refused fireset '{key} = {raw}' from a peer not in the adminlist");
                 return;
             }
@@ -1221,16 +1236,19 @@ namespace FireFront.Commands
             if (key == null || !Settable().TryGetValue(key, out BepInEx.Configuration.ConfigEntryBase entry))
             {
                 FireLogger.Warn($"fireset (remote from {sender}): unknown key '{key}'.");
+                ValheimBridge.SendStatusResponse(sender, $"FireFront: fireset {key}: the server has no such key (a different FireFront version?).");
                 return;
             }
             try
             {
                 entry.SetSerializedValue(raw);
                 FireLogger.Info($"fireset (remote from {sender}): {key} = {entry.BoxedValue}");
+                ValheimBridge.SendStatusResponse(sender, $"FireFront: fireset {key} = {entry.BoxedValue} on the server.");
             }
             catch (System.Exception ex)
             {
                 FireLogger.Warn($"fireset (remote from {sender}): couldn't parse '{raw}' for {key}: {ex.Message}");
+                ValheimBridge.SendStatusResponse(sender, $"FireFront: fireset {key}: the server couldn't read '{raw}'; its value is unchanged.");
             }
         }
     }

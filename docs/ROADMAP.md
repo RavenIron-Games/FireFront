@@ -25,6 +25,8 @@ Seven before 1.0. Each is one rig evening to test. If the calendar slips, the cu
 
 ### 0.23 Authority
 
+Shipped 2026-09-23 as v0.23.0, played on the rig; CHANGELOG 0.23.0 has the evidence.
+
 Everything after this ships new RPC surface, and it should be tested against the secured path rather than retrofitted.
 
 - Server-side admin check in `FireDevCommands.ApplyRemote` (Commands/FireDevCommands.cs:1208-1226). It applies any forwarded value without a check; the comment there marks server-side validation as scope left for a public release, which is this. Both the typed `fireset` forward and the ConfigurationManager relay land there, so this one function closes the four separately filed items about it. The pattern to copy is `ExecuteRelayed` twenty lines above, which refuses a non-admin peer and logs it. Do not add a client-side gate: 0.21.6's client gate was false on every server without an adminlist file and made the feature a silent no-op (docs/HANDOFF.md:634-643).

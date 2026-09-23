@@ -1,10 +1,11 @@
 # FireFront — 0.23.0 (2026-09-21): Authority
 
-**Resume point.** `main` carries 0.23.0, unreleased: the first release on docs/ROADMAP.md,
-built (0 errors) and reviewed (four Sonnet lenses, two Opus refuters per finding) but NOT
-yet played. The rule since 0.22.1 is that nothing merges or tags on a reading alone, so the
-next step is the rig evening below, then the CHANGELOG's "Rig evidence" line, then the tag.
-Read the 0.23.0 CHANGELOG entry first, then docs/ROADMAP.md for what comes after.
+**Resume point.** `main` carries 0.23.0, tagged v0.23.0: the first release on
+docs/ROADMAP.md, reviewed (four Sonnet lenses, two Opus refuters per finding) and played on
+the rig 2026-09-23 with every check below passing; the CHANGELOG's "Rig evidence" paragraph
+has the log lines. One defect was found in play and fixed the same evening (the `fireset`
+wording). Next on the roadmap is 0.24, the connect-time exchange. Read the 0.23.0 CHANGELOG
+entry first, then docs/ROADMAP.md.
 
 ## 0.23.0 (2026-09-21): what changed, and the rig evening that gates it
 
