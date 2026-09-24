@@ -2,8 +2,6 @@
 
 ## 1.0.2
 
-<!-- Release name, date and the build commit: to be filled in at the cut. -->
-
 Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2 play together.
 
 - **Changing worlds no longer carries fire into the next one.** In single player or when
@@ -17,14 +15,14 @@ Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2
 - **A new fire's first trees no longer char almost at once.** The tree-fire clock stood still
   while nothing burned, so the first tick of the next fire charged the whole quiet spell as
   burn time: after a few quiet minutes a tree lit by a fire arrow went to its last health in one
-  tick and charred before it was old enough to spread. The clock now stops with the fire, and a
-  late tick catches up at most one interval.
+  tick and charred before it was old enough to spread. The clock now stops with the fire, so a
+  new fire's trees burn at the configured pace from the first tick.
 - **The server checks what a client asks it to light or put out.** An ignite or extinguish
   request names an object, and the server used to build that object and take it over whatever
   it was, however far away. A modified client could name any object, another player's character
-  included, and the server would take it over and could then delete it. The server now lights only trees, logs and burnable pieces
-  within 320 m of the player who asked, and puts out only an object that is burning, within the
-  existing 200 m reach, without building anything. Pressing the extinguish key while aiming at a
+  included, and the server would take it over. The server now lights only trees, logs and
+  burnable pieces, refuses a request for something more than 320 m from where the player is,
+  and puts out only an object that is already burning, without building anything. Pressing the extinguish key while aiming at a
   piece that is not burning no longer takes that piece from the player standing next to it.
 - **Ground fire is drawn where it burns, whatever each player's `GroundCellSize`.** The server
   now sends its own cell size with the ground fire, and each client places the flames, the

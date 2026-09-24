@@ -10,15 +10,18 @@ namespace FireFront.Fire
     {
         /// <summary>
         /// Seconds of burn one tree-fire tick charges. <paramref name="nextTick"/> is when this tick
-        /// was due, or negative when the clock is stopped (no fire, or tree fire off). A late tick
-        /// may catch up one interval, never more: a hitch is absorbed, a gap is not charged.
+        /// was due, or negative when the clock is stopped (no fire, or tree fire off). The tick runs
+        /// inside the spread cycle, so it is normally up to one <paramref name="cycleInterval"/> late;
+        /// that lateness is charged in full, and so is one interval of hitch on top. Anything past
+        /// that is a gap (fire paused, tree fire toggled) and is not charged.
         /// </summary>
-        public static float TreeTickSeconds(float nextTick, float now, float interval)
+        public static float TreeTickSeconds(float nextTick, float now, float interval, float cycleInterval)
         {
             if (nextTick < 0f) return interval;
             float late = now - nextTick;
             if (float.IsNaN(late) || late < 0f) late = 0f;
-            return Math.Min(interval + late, 2f * interval);
+            float cap = interval + Math.Max(interval, float.IsNaN(cycleInterval) ? 0f : cycleInterval);
+            return Math.Min(interval + late, cap);
         }
 
         /// <summary>

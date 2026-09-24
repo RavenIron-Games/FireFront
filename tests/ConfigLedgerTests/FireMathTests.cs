@@ -15,23 +15,32 @@ namespace FireFront.Tests
             bool near(float a, float b) => Math.Abs(a - b) < 1e-4f;
 
             // --- TreeTickSeconds: the tree-fire clock after a quiet spell -----------------------
-            const float interval = 2f;
+            const float interval = 2f, cycle = 0.75f; // the defaults
             check("tree tick: a stopped clock charges one interval",
-                near(FireMath.TreeTickSeconds(-1f, 5000f, interval), interval));
+                near(FireMath.TreeTickSeconds(-1f, 5000f, interval, cycle), interval));
             check("tree tick: on time charges one interval",
-                near(FireMath.TreeTickSeconds(100f, 100f, interval), interval));
+                near(FireMath.TreeTickSeconds(100f, 100f, interval, cycle), interval));
             check("tree tick: a small hitch is caught up",
-                near(FireMath.TreeTickSeconds(100f, 101f, interval), 3f));
-            float gap = FireMath.TreeTickSeconds(100f, 400f, interval); // five quiet minutes
+                near(FireMath.TreeTickSeconds(100f, 101f, interval, cycle), 3f));
+            float gap = FireMath.TreeTickSeconds(100f, 400f, interval, cycle); // five quiet minutes
             check("tree tick: a five-minute gap is NOT charged (was 302 s, ~140% of a tree)",
                 near(gap, 2f * interval), gap.ToString());
+            // A slow custom cycle: SpreadCheckInterval 10 s, tick 2 s. Ticks land ~10 s apart
+            // (8 s late); the first fix charged 4 s of them, so trees burned at 40 % speed.
+            float slow = FireMath.TreeTickSeconds(100f, 108f, interval, 10f);
+            check("tree tick: a 10 s spread cycle is charged in full (10 s per tick, not 4)",
+                near(slow, 10f), slow.ToString());
+            check("tree tick: LowSpec-like 2 s cycle with a 0.5 s tick charges the full 2 s",
+                near(FireMath.TreeTickSeconds(100f, 101.5f, 0.5f, 2f), 2f));
+            check("tree tick: a slow cycle still does not charge a five-minute gap",
+                near(FireMath.TreeTickSeconds(100f, 400f, interval, 10f), 12f));
             // At the defaults a tree dies in 216 s of burn; one tick after a gap takes <= 2 %.
             check("tree tick: the first tick after a gap takes under 2% of the tree at the defaults",
                 gap / 216f < 0.02f, (gap / 216f).ToString());
             check("tree tick: a clock in the future charges one interval",
-                near(FireMath.TreeTickSeconds(100f, 99f, interval), interval));
+                near(FireMath.TreeTickSeconds(100f, 99f, interval, cycle), interval));
             check("tree tick: NaN time charges one interval",
-                near(FireMath.TreeTickSeconds(100f, float.NaN, interval), interval));
+                near(FireMath.TreeTickSeconds(100f, float.NaN, interval, cycle), interval));
 
             // --- RainAgeSeconds: resuming after fire was paused ---------------------------------
             check("rain: the first pass charges nothing", FireMath.RainAgeSeconds(-1f, 100f, 1.5f) == 0f);

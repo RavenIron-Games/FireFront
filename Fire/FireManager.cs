@@ -233,6 +233,7 @@ namespace FireFront.Fire
             public float RetryAt;
             public int Attempts;
             public long IgniterPlayerId;   // carried so a delayed resolution still attributes
+            public long Sender;            // 1.0.2: the asking peer, for the reach check once the ZDO arrives
         }
 
         private readonly List<PendingIgniteResolution> _pendingIgniteResolutions = new List<PendingIgniteResolution>();
@@ -2390,6 +2391,14 @@ namespace FireFront.Fire
             // be something fire can burn and lie near the player who asked.
             // Debug, not an [AUTH] line: an honest client forwards every fire hit on any piece,
             // stone walls included, so an unburnable target is ordinary traffic.
+            if (!ValheimBridge.ZdoExists(id))
+            {
+                // Not here YET is not the same as not burnable: a client's fresh object (a log it
+                // just felled into a fire) can be hit before its ZDO reaches the server. Retried as
+                // before 1.0.2, and each retry runs the same checks once the ZDO has arrived.
+                QueueIgniteRetry(sender, id, igniterPlayerId);
+                return;
+            }
             if (!ValheimBridge.TryGetBurnableZdo(id, out Vector3 requestedAt))
             {
                 FireLogger.Debug($"[IGNITE-TRACE] ignite request from peer {sender} for {id}: not a live tree, log or burnable piece — ignored.");
@@ -2420,14 +2429,34 @@ namespace FireFront.Fire
             {
                 FireLogger.Debug($"[IGNITE-TRACE] Could NOT resolve ZDOID={id} on first attempt — queuing for retry " +
                                   "(likely just not instantiated in the server's ZNetScene yet).");
-                _pendingIgniteResolutions.Add(new PendingIgniteResolution
-                {
-                    Id = id,
-                    RetryAt = Time.time + IgniteResolutionRetryInterval,
-                    Attempts = 0,
-                    IgniterPlayerId = igniterPlayerId
-                });
+                QueueIgniteRetry(sender, id, igniterPlayerId);
             }
+        }
+
+        private void QueueIgniteRetry(long sender, ZDOID id, long igniterPlayerId)
+        {
+            if (_pendingIgniteResolutions.Count >= IgniteResolutionMaxPending) return; // a flood of unknown ids stays bounded
+            _pendingIgniteResolutions.Add(new PendingIgniteResolution
+            {
+                Id = id,
+                Sender = sender,
+                RetryAt = Time.time + IgniteResolutionRetryInterval,
+                Attempts = 0,
+                IgniterPlayerId = igniterPlayerId
+            });
+        }
+
+        /// <summary>
+        /// The ignite request's checks, for a retry whose ZDO has now arrived: false drops the
+        /// retry for good (not burnable, out of reach, or nothing left to do). No ZDO yet is true.
+        /// </summary>
+        private bool IgniteRetryStillValid(PendingIgniteResolution entry)
+        {
+            if (!ValheimBridge.ZdoExists(entry.Id)) return true;
+            if (!ValheimBridge.TryGetBurnableZdo(entry.Id, out Vector3 at)) return false;
+            if (!RequestTargetInReach(entry.Sender, at, MaxIgniteReach)) return false;
+            if (_burning.ContainsKey(entry.Id) || _queue.Contains(entry.Id) || IsSoaked(entry.Id)) return false;
+            return !AshlandsBarsFireAt(at);
         }
 
         // 1.0.2: how far from the server's last reference position for a peer (ZNetPeer.m_refPos,
@@ -2448,6 +2477,7 @@ namespace FireFront.Fire
 
         private const float IgniteResolutionRetryInterval = 0.5f;
         private const int IgniteResolutionMaxAttempts = 20; // ~10 seconds total before giving up
+        private const int IgniteResolutionMaxPending = 256;
 
         /// <summary>
         /// Server-side: retries resolving queued ignite requests whose ZDOID
@@ -2465,6 +2495,7 @@ namespace FireFront.Fire
             {
                 PendingIgniteResolution entry = _pendingIgniteResolutions[i];
                 if (now < entry.RetryAt) continue;
+                if (!IgniteRetryStillValid(entry)) { _igniteResolutionScratchIndices.Add(i); continue; }
 
                 Component target = ValheimBridge.ComponentFromZdoid(entry.Id);
                 if (target != null)
@@ -2995,7 +3026,7 @@ namespace FireFront.Fire
             if (!FireConfig.TreeFireDamageEnabled.Value || _burning.Count == 0) { _nextTreeTick = -1f; return; }
             float interval = Mathf.Max(0.5f, FireConfig.TreeFireTickInterval.Value);
             if (Time.time < _nextTreeTick) return;
-            float dt = FireMath.TreeTickSeconds(_nextTreeTick, Time.time, interval);
+            float dt = FireMath.TreeTickSeconds(_nextTreeTick, Time.time, interval, FireConfig.EffectiveSpreadCheckInterval);
             _nextTreeTick = Time.time + interval;
 
             float killSeconds = Mathf.Max(1f, FireConfig.BurnDurationSeconds.Value * Mathf.Clamp(FireConfig.TreeFireKillFraction.Value, 0.2f, 1f));
