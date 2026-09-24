@@ -39,8 +39,8 @@ Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2
   restored with the fire. A save from an older version loads with the igniter unknown. The
   old map-wide value is unchanged, so older companion builds keep working. Newer ones can ask
   for each fire's igniter through `FireManager.CollectActiveFiresWithIgniters` and
-  `FireManager.FireIgniterNear`. The igniter is not sent between players, so it changes
-  nothing for 1.0.1 clients.
+  `FireManager.FireIgniterNear`. Nothing new goes over the network for it (a client's ignite
+  request already carried the attacker's id), so it changes nothing for 1.0.1 clients.
 - **Rain no longer puts out every fire at once after a pause.** Turning fire back on with
   `fireset enabled true` charged the whole pause as rain time, so every fire in the rain went
   out on resume. Rain now ages fire by at most two spread cycles at a time.
@@ -56,8 +56,8 @@ the same build; one client throughout. A fire stayed in its own world across a w
 in single player: the next world loaded with nothing burning and no fire lines, and
 re-entering the first world restored its one burning tree. The same held joining the
 dedicated server: no local fire carried over, and no restore or burn lines appeared at join.
-Five arrow hits on the dedicated server all carried the same igniter id, and the live
-store's `meta` line and its ground lines matched it; a second fire was also lit by arrow
+Five arrow hits on the dedicated server all carried the same igniter id, and the fire save
+file's `meta` line and its ground lines, read while the fire burned, matched it; a second fire was also lit by arrow
 (the plan was `startfire`), so it carried the same id and a fire with no igniter was not
 shown there — the only such fire seen was the rain check's `startfire` fire below, whose
 fire event logged igniter 0 (its per-fire igniter was not read back). A client running a
@@ -65,8 +65,9 @@ different `GroundCellSize` than the server (2 against the server's 1) drew scorc
 sized and placed for the server's cells once it joined, not its own. Extinguish by id put a
 fire out with no forced re-creation and no re-light, and after `clearfires`, pressing the
 extinguish key (G) at an unlit tree built nothing. After about two minutes with nothing
-burning, a tree lit by a fire arrow burned at the configured pace from the first tick
-instead of charring almost at once, and was still burning two minutes later. With rain
+burning, a tree lit by a fire arrow took a first tick of under 1 % of its health and burned
+at the configured pace from there (1.0.1 would have charged the whole two minutes in that
+first tick, more than half the tree's health), and was still burning two minutes later. With rain
 forced on (`fireweather force Rain`), one tree lit with `startfire`, and fire paused for
 40 s with `fireset enabled false`, the tree kept burning after the resume and went out
 15–18 s later on its rain-shortened timer, not at the resume itself — one tree and a 40 s
@@ -85,8 +86,9 @@ restaged here); a queued fire keeping its igniter; a fire started by lightning o
 recording no igniter; a save from before 1.0.2 restoring with the igniter unknown (covered
 off-game); a companion build that still reads the old map-wide igniter; a dedicated-server
 restart with fire still burning; a world change while hosting with another player connected;
-the server refusing a request for something that cannot burn, or for a target out of reach
-(320 m to light, 200 m to put out), which only a modified client would send; and a second
+the server ignoring an ignite request for something that cannot burn, which any fire hit on
+a stone wall sends; the server refusing a request for a target out of reach (320 m to
+light, 200 m to put out), which only a modified client would send; and a second
 player: two players lighting separate fires at once, which would test igniter attribution
 between two real attackers, and the extinguish key pressed at an unlit piece beside another
 player. Off-game: 1815 checks, 0 failed.
