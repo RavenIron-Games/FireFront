@@ -1,3 +1,14 @@
+# FireFront — CUT 2026-09-24: v1.0.2
+
+**Cut in progress, not yet released.** PR #7 (review fixes plus the per-fire igniter) merged
+to `main` at `f2361bb`; that merge's tree is byte-identical to the in-game-tested commit
+`e720f2b`, test DLL md5 prefix `132226a3` (solo batch 2026-09-24, results in
+`SOLO-BATCH-results-2026-09-24.md`). CHANGELOG, README and docs/ROADMAP.md are brought current
+for the release on `release/1.0.2-cut`; `manifest.json`'s website link now points at the
+Raven Iron website. Ragnarok's Wrath's next release pins FireFront 1.0.2 exactly, so 1.0.2
+needs to be live on the store before any Ragnarok's Wrath upload. Still open: the `v1.0.2`
+tag, a GitHub pre-release with the store zip, and the store upload, which is RavenIron's to do.
+
 # FireFront — 1.0.1 (2026-09-23): no FireFront fire in the Ashlands
 
 **Resume point.** `main` carries 1.0.1, tagged v1.0.1. Two changes on top of 1.0.0:
