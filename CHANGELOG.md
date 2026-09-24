@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.0.2
+
+<!-- Release name, date and the build commit: to be filled in at the cut. -->
+
+Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2 play together.
+
+- **Changing worlds no longer carries fire into the next one.** In single player or when
+  hosting, logging out of a world with fire burning and loading another (or the same one again)
+  kept the old world's fire running in the new one. Its burning objects pointed at unrelated
+  objects in the new world, so pieces there could be destroyed, the old ground fire burned at
+  its old coordinates, trees waiting to regrow were planted into the new world, and the new
+  world's fire save was overwritten. Now the fire is saved to its own world when that world
+  closes and then forgotten, and the next world loads its own. Dedicated servers were not
+  affected.
+- **A new fire's first trees no longer char almost at once.** The tree-fire clock stood still
+  while nothing burned, so the first tick of the next fire charged the whole quiet spell as
+  burn time: after a few quiet minutes a tree lit by a fire arrow went to its last health in one
+  tick and charred before it was old enough to spread. The clock now stops with the fire, and a
+  late tick catches up at most one interval.
+- **The server checks what a client asks it to light or put out.** An ignite or extinguish
+  request names an object, and the server used to build that object and take it over whatever
+  it was, however far away. A modified client could name any object, another player's character
+  included, and the server would take it over and could then delete it. The server now lights only trees, logs and burnable pieces
+  within 320 m of the player who asked, and puts out only an object that is burning, within the
+  existing 200 m reach, without building anything. Pressing the extinguish key while aiming at a
+  piece that is not burning no longer takes that piece from the player standing next to it.
+- **Ground fire is drawn where it burns, whatever each player's `GroundCellSize`.** The server
+  now sends its own cell size with the ground fire, and each client places the flames, the
+  warmth and the scorch marks with it. A player who had set a different size saw the whole
+  fire at scaled coordinates, far from where it really burned, and was not warmed by it.
+  Against a server older than 1.0.2 a client uses its own size, as before.
+- **Soaked trees are left alone.** Spread skipped a doused tree (a Dousing Bomb line) or a tree
+  past the Ashlands edge only after building it and taking it from the nearby player, every
+  0.75 s. It now skips them before building anything.
+- **Rain no longer puts out every fire at once after a pause.** Turning fire back on with
+  `fireset enabled true` charged the whole pause as rain time, so every fire in the rain went
+  out on resume. Rain now ages fire by at most two spread cycles at a time.
+
 ## 1.0.1
 
 - **FireFront no longer sets the Ashlands alight.** The Ashlands' own fire (cinders, lava,
