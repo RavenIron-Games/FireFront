@@ -1,3 +1,25 @@
+# FireFront — 1.0.2 cut in progress (2026-09-24)
+
+**Resume point. Cut in progress, not yet released.** PR #7 (review fixes plus the per-fire
+igniter) merged to `main` at `f2361bb`; that merge's tree is byte-identical to the
+in-game-tested commit `e720f2b`, test DLL md5 prefix `132226a3` (solo batch 2026-09-24,
+results in `SOLO-BATCH-results-2026-09-24.md`). CHANGELOG, README and docs/ROADMAP.md are
+brought current for the release on `release/1.0.2-cut`; `manifest.json`'s website link now
+points at the Raven Iron website. Ragnarok's Wrath's next release pins FireFront 1.0.2
+exactly, so 1.0.2 needs to be live on the store before any Ragnarok's Wrath upload.
+
+Still open: pushing `release/1.0.2-cut` and getting it onto `main`; the `v1.0.2` tag; the
+ship build from a fresh clone of the tagged commit (its md5 will match neither the test
+DLL's `132226a3` nor a provisional build's — the version string embeds the tagged commit's
+sha, so it reads `1.0.2+<sha>`); a GitHub pre-release with the store zip; and the store
+upload, which is RavenIron's to do. Open from the test: ff-5's soak half was not exercised
+(PARTIAL), and the six FireFront findings in `SOLO-BATCH-results-2026-09-24.md` are unfixed
+(a live `groundcellsize` change rescales stored cells, and CairnTest's store now mixes cell
+keys; the dousing-recipe warning at the main menu; the `[SPREAD-DIAGNOSTIC]` wording on a
+dedicated server; a restored fire's event logs igniter 0 at the event level; the client
+re-sends its handshake at the main menu; Ragnarok's Wrath keeps booking scorch for a fire
+that is paused with `fireset enabled false`).
+
 # FireFront — 1.0.1 (2026-09-23): no FireFront fire in the Ashlands
 
 **Resume point.** `main` carries 1.0.1, tagged v1.0.1. Two changes on top of 1.0.0:
