@@ -21,8 +21,8 @@ Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2
   request names an object, and the server used to build that object and take it over whatever
   it was, however far away. A modified client could name any object, another player's character
   included, and the server would take it over. The server now lights only trees, logs and
-  burnable pieces, refuses a request for something more than 320 m from where the player is,
-  and puts out only an object that is already burning, without building anything. Pressing the extinguish key while aiming at a
+  burnable pieces, refuses a request for something more than 320 m from where the player's
+  game last reported being, and puts out only an object that is already burning, without building anything. Pressing the extinguish key while aiming at a
   piece that is not burning no longer takes that piece from the player standing next to it.
 - **Ground fire is drawn where it burns, whatever each player's `GroundCellSize`.** The server
   now sends its own cell size with the ground fire, and each client places the flames, the
@@ -39,8 +39,8 @@ Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2
   restored with the fire. A save from an older version loads with the igniter unknown. The
   old map-wide value is unchanged, so older companion builds keep working. Newer ones can ask
   for each fire's igniter through `FireManager.CollectActiveFiresWithIgniters` and
-  `FireManager.FireIgniterNear`. Nothing new is sent between players, so 1.0.1 clients still
-  play with 1.0.2 servers.
+  `FireManager.FireIgniterNear`. The igniter is not sent between players, so it changes
+  nothing for 1.0.1 clients.
 - **Rain no longer puts out every fire at once after a pause.** Turning fire back on with
   `fireset enabled true` charged the whole pause as rain time, so every fire in the rain went
   out on resume. Rain now ages fire by at most two spread cycles at a time.
@@ -49,37 +49,47 @@ Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2
 This DLL was built from the commit tagged `v1.0.2`; the GitHub release names that commit and
 gives the DLL's md5.
 
-Rig evidence (2026-09-24, on the dedicated test rig, this source built just before the
-commit). A dedicated server on Valheim 1.0.15 (crossplay), plus single-player and hosted
-worlds on the same build; one client throughout. A fire stayed in its own world across a
-world change on the SP/host side: the next world loaded with nothing burning and no fire
-lines, and re-entering the first world restored its one burning tree. The same held joining
-the dedicated server: no local fire carried over, and no restore or burn lines appeared at
-join. Five arrow hits on the dedicated server all carried the same igniter id, and the live
-store's `meta` line and its ground lines matched it; a second fire lit the same way (rather
-than with `startfire`, as planned) also carried that id, so the natural-fire case was not
-proven here — it showed up instead during the rain check below, where a fire the mod itself
-aged logged igniter 0. A client running a different `GroundCellSize` than the server (2
-against the server's 1) drew scorch marks sized and placed for the server's cells once it
-joined, not its own. Extinguish by id put a fire out with no forced re-creation and no
-re-light, and `clearfires` left an unlit tree alone under G. After a quiet spell of several
-minutes, a tree lit by a fire arrow burned at the configured pace from the first tick instead
-of charring almost at once, and was still burning two minutes later. With fire lit in the
-rain, then the mod paused and resumed, the fire survived the resume and went out on its own
-timer rather than all at once — this run used one tree and a 40 s pause rather than the
-planned two to four trees and 60 s, which is why the timing above reads as a deviation, not a
-failure. `BurnPlayerBuildings false` held throughout: an ignite request aimed at a player's
-wall was refused, and the only piece that caught was part of an unowned world ruin. Settings
-were confirmed back to their pre-test values afterward. Zero exceptions on either side.
+Rig evidence (2026-09-24, on the dedicated test rig, from a build of `e720f2b` — on the
+same code as this release, since only documents and the store page's website link changed
+after it). A dedicated server on Valheim 1.0.15 (crossplay), plus single-player worlds on
+the same build; one client throughout. A fire stayed in its own world across a world change
+in single player: the next world loaded with nothing burning and no fire lines, and
+re-entering the first world restored its one burning tree. The same held joining the
+dedicated server: no local fire carried over, and no restore or burn lines appeared at join.
+Five arrow hits on the dedicated server all carried the same igniter id, and the live
+store's `meta` line and its ground lines matched it; a second fire was also lit by arrow
+(the plan was `startfire`), so it carried the same id and a fire with no igniter was not
+shown there — the only such fire seen was the rain check's `startfire` fire below, whose
+fire event logged igniter 0 (its per-fire igniter was not read back). A client running a
+different `GroundCellSize` than the server (2 against the server's 1) drew scorch marks
+sized and placed for the server's cells once it joined, not its own. Extinguish by id put a
+fire out with no forced re-creation and no re-light, and after `clearfires`, pressing the
+extinguish key (G) at an unlit tree built nothing. After about two minutes with nothing
+burning, a tree lit by a fire arrow burned at the configured pace from the first tick
+instead of charring almost at once, and was still burning two minutes later. With rain
+forced on (`fireweather force Rain`), one tree lit with `startfire`, and fire paused for
+40 s with `fireset enabled false`, the tree kept burning after the resume and went out
+15–18 s later on its rain-shortened timer, not at the resume itself — one tree and a 40 s
+pause is a smaller check than the planned two to four trees and 60 s. `BurnPlayerBuildings
+false` held throughout: `ignite` aimed at a player's wall answered `Not burnable`, and the
+only piece that caught was part of an unowned world ruin. Settings were confirmed back to
+their pre-test values afterward. Zero exceptions on either side.
 
 Not tried in game: soaked or Ashlands-barred trees being skipped rather than re-created
 mid-spread (no burning neighbour was near the doused tree in this run); the late-ZDO ignite
 retry (every request in this run resolved directly, so the retry path was never used); the
-tree-tick cap under a slower spread cycle (`spreadinterval 10`); a 1.0.1 client against a
-1.0.2 server and the reverse (checked by code review, not restaged here); the stale
-queued-igniter case; a restart-and-restore with fire still burning; and two players lighting
-separate fires at once, which would exercise the 320 m / 200 m reach refusals and igniter
-attribution between two real attackers rather than one. Off-game: 1815 checks, 0 failed.
+tree tick under a slower spread cycle (`spreadinterval 10`); being warmed by ground fire
+under a mismatched `GroundCellSize` (only where the flames and scorch marks sat was
+checked); a 1.0.1 client against a 1.0.2 server and the reverse (checked by code review, not
+restaged here); a queued fire keeping its igniter; a fire started by lightning or a creature
+recording no igniter; a save from before 1.0.2 restoring with the igniter unknown (covered
+off-game); a companion build that still reads the old map-wide igniter; a dedicated-server
+restart with fire still burning; a world change while hosting with another player connected;
+the server refusing a request for something that cannot burn, or for a target out of reach
+(320 m to light, 200 m to put out), which only a modified client would send; and a second
+player: two players lighting separate fires at once, which would test igniter attribution
+between two real attackers, and the extinguish key pressed at an unlit piece beside another
+player. Off-game: 1815 checks, 0 failed.
 
 ## 1.0.1
 
@@ -99,7 +109,7 @@ attribution between two real attackers rather than one. Off-game: 1815 checks, 0
   paths to a neutral root, so the DLL's checksum follows the commit it was built from, not the
   folder it was built in. This DLL was built from the commit tagged v1.0.1.
 
-Rig evidence (2026-09-23, owner on the dedicated test rig, this source built just before the
+Rig evidence (2026-09-23, on the dedicated test rig, this source built just before the
 commit). In the Ashlands at about (51, -9126): `startfire` lit nothing, and the server refused
 13 ignite requests the client forwarded for four Ashlands objects, logging its `[ASHLANDS]`
 line. `fireset ashlands true`, typed on the client, set the server's value and `startfire`
@@ -127,7 +137,7 @@ together" notice).
   player to light a fire while nothing burns, saved in the fire save file and read by a
   companion mod.
 
-Rig evidence (2026-09-23, owner on the dedicated test rig). A 0.23 client on the 1.0 server:
+Rig evidence (2026-09-23, on the dedicated test rig). A 0.23 client on the 1.0 server:
 the server logged `[VERSION] peer ... has not answered FireFront's version check in 60 s ...
 This server runs 1.0.0 (protocol 1).` and the tester saw the centre-screen message. A 1.0
 client on a 0.23 server: the client logged `[VERSION] FireFront: the server did not answer
@@ -186,7 +196,7 @@ the decimal comma (0.24) were played on code 1.0 does not change.
 - docs/ROADMAP.md is rewritten to the shorter road agreed on 2026-09-23: 1.0 is 0.23, this
   release, the licence and a README pass; the rest moves after 1.0.
 
-Rig evidence (2026-09-23, owner on the dedicated test rig, both sides on 0.24.0, en-US).
+Rig evidence (2026-09-23, on the dedicated test rig, both sides on 0.24.0, en-US).
 Server boot: `All 13 FireFront RPCs registered`, `[AUTH] routed-sender guard armed: 14 methods
 (13 FireFront + RPC_Damage)`. On join, server: `[VERSION] peer <id> (Steam_...) runs FireFront
 0.24.0, same as this server.`; client: `[VERSION] the server runs FireFront 0.24.0, same as this
@@ -249,7 +259,7 @@ changes only what a player sees when versions differ.
   `FireBurnZone` (0.21.9, `9900edf`; the restore path queues them for
   `UpgradeDarkGroundCells`).
 
-Rig evidence (2026-09-23, owner on the dedicated test rig, both sides on the same build).
+Rig evidence (2026-09-23, on the dedicated test rig, both sides on the same build).
 Server boot: `[AUTH] routed-sender guard armed: 13 methods (12 FireFront + RPC_Damage)`, no
 FireFront warning or error. As admin: `fireset burntheworld true` then `false` applied on the
 server (`fireset (remote from <peer>): burntheworld = True`, then `= False`); `clearfires`
@@ -1226,7 +1236,7 @@ unchanged; the copy on your machine keeps what you set.` Zero exceptions either 
   - **Default threshold moved 0.45 → 0.65**, so flames carry most of the burn
     and smouldering is the tail rather than the majority of it.
 
-  Confirmed by eye 2026-08-29 — "that reads better". The failure of the first
+  Confirmed by eye in game on 2026-08-29. The failure of the first
   version was treating smouldering as LESS fire; the suggestion had asked for
   INTERMITTENT fire, which is a different thing and the part that makes it read
   as still alive rather than finished.
