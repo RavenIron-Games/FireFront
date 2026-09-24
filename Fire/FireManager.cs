@@ -1442,7 +1442,7 @@ namespace FireFront.Fire
             // The next world's store is read before anything is saved into it.
             _persistenceRestored = false;
 
-            if (n > 0) FireLogger.Info($"[PERSIST] world closed: forgot {n} fire entries; the next world loads its own.");
+            if (n > 0) FireLogger.Info($"[PERSIST] world closed: cleared {n} fire entries from memory (a new world loads its own store).");
         }
 
         // ---------------------------------------------------------------
