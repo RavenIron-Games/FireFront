@@ -105,6 +105,20 @@ namespace FireFront.Tests
             check("store: a negative field index is 0", FireMath.IgniterField(no, -1) == 0L);
             check("store: null fields are 0", FireMath.IgniterField(null, 9) == 0L);
 
+            // The queued-igniter table (review 2: a skipped dequeue left A's entry behind, and a
+            // later NATURAL re-queue never overwrote it, so the natural fire was billed to A).
+            var table = new System.Collections.Generic.Dictionary<int, long>();
+            FireMath.PutQueuedIgniter(table, 7, A);                 // A's fire queues object 7
+            long taken = FireMath.TakeQueuedIgniter(table, 7);      // dequeued, then skipped (cap full)
+            check("queue: the dequeue takes A's igniter", taken == A);
+            check("queue: and leaves nothing behind for object 7", !table.ContainsKey(7));
+            FireMath.PutQueuedIgniter(table, 7, 0L);                // later a natural fire queues it
+            check("queue: a natural re-queue is natural, not A's", FireMath.TakeQueuedIgniter(table, 7) == 0L);
+            FireMath.PutQueuedIgniter(table, 8, A);
+            FireMath.PutQueuedIgniter(table, 8, 0L);                // re-queued naturally while still queued
+            check("queue: a re-queue replaces the older entry, 0 included", FireMath.TakeQueuedIgniter(table, 8) == 0L);
+            check("queue: taking an unknown object is 0", FireMath.TakeQueuedIgniter(table, 99) == 0L);
+
             // FireIgniterNear's distance rule.
             float bestSqr = 10f * 10f;
             check("near: a fire 6 m away is within 10", FireMath.CloserOnGround(0f, 0f, 6f, 0f, ref bestSqr, false) && near(bestSqr, 36f));

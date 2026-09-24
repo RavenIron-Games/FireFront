@@ -4278,6 +4278,37 @@ namespace FireFront.Utils
             }
         }
 
+        /// <summary>
+        /// 1.0.2: true when <paramref name="playerId"/> is the persistent id of a player on this
+        /// server right now: the local player (a listen host) or a connected peer's character.
+        /// One ZDO read per peer; called once per client ignite request.
+        /// </summary>
+        public static bool IsOnlinePlayerId(long playerId)
+        {
+            if (playerId == 0L) return false;
+            try
+            {
+                if (LocalPlayerId() == playerId) return true;
+                ZNet net = ZNet.instance;
+                ZDOMan man = ZDOMan.instance;
+                if (net == null || man == null) return false;
+                List<ZNetPeer> peers = net.GetPeers();
+                if (peers == null) return false;
+                for (int i = 0; i < peers.Count; i++)
+                {
+                    ZNetPeer peer = peers[i];
+                    if (peer == null || peer.m_characterID.IsNone()) continue;
+                    ZDO zdo = man.GetZDO(peer.m_characterID);
+                    if (zdo != null && zdo.GetLong(ZDOVars.s_playerID, 0L) == playerId) return true;
+                }
+                return false;
+            }
+            catch (System.Exception)
+            {
+                return false;
+            }
+        }
+
         public static long AttackerPlayerId(HitData hit)
         {
             try

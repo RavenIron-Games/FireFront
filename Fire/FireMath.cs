@@ -63,6 +63,22 @@ namespace FireFront.Fire
         public static long ResolveIgniter(long direct, long spreadSource) => direct != 0L ? direct : spreadSource;
 
         /// <summary>
+        /// 1.0.2: the queued-igniter table's two operations. Put always writes, 0 included, so a
+        /// re-queue replaces any older entry; Take always removes, so nothing outlives the object's
+        /// time in the queue. Generic so the harness can run them without Valheim's ZDOID.
+        /// </summary>
+        public static void PutQueuedIgniter<TKey>(System.Collections.Generic.Dictionary<TKey, long> table, TKey id, long igniter)
+        {
+            table[id] = igniter;
+        }
+
+        public static long TakeQueuedIgniter<TKey>(System.Collections.Generic.Dictionary<TKey, long> table, TKey id)
+        {
+            if (table.TryGetValue(id, out long igniter)) { table.Remove(id); return igniter; }
+            return 0L;
+        }
+
+        /// <summary>
         /// 1.0.2: the igniter field of a fire store line, or 0 when the line has no such field (a
         /// store written before 1.0.2) or it cannot be read. Never throws: a bad igniter must not
         /// cost the fire its restore.

@@ -1359,7 +1359,7 @@ namespace FireFront.Fire
             }
             else if (_queue.TryEnqueue(id))
             {
-                if (fireIgniter != 0L) RememberQueuedIgniter(id, fireIgniter);
+                RememberQueuedIgniter(id, fireIgniter); // always, 0 included: no older entry may survive
                 FireLogger.Debug($"Queued ({_queue.Count}/{_queue.Capacity}): {ValheimBridge.NameOf(target)}");
             }
             // else: queue full -> silent drop; spread re-attempts next cycle.
@@ -2468,6 +2468,15 @@ namespace FireFront.Fire
             }
 
             FireLogger.Debug($"[IGNITE-TRACE] Server received ignite request from peer {sender} for ZDOID={id}, igniter={igniterPlayerId}.");
+            // 1.0.2: the igniter id comes off the wire and names the ATTACKER, who is often not the
+            // sender (the sender owns the object; someone else may have shot it). It cannot be
+            // proven, but it can be bounded: an id that is no player on this server right now is
+            // dropped to 0 (natural), so a forged request can at worst blame someone who is online.
+            if (igniterPlayerId != 0L && !ValheimBridge.IsOnlinePlayerId(igniterPlayerId))
+            {
+                FireLogger.Debug($"[IGNITE-TRACE] igniter {igniterPlayerId} in peer {sender}'s request is not an online player — booked as natural.");
+                igniterPlayerId = 0L;
+            }
             // 1.0.2: the id comes off the wire, and ComponentFromZdoid builds an instance of it
             // headless and takes its ownership. Before this a modified client could name ANY ZDO,
             // another player's character included, and the server built it, claimed it and then
@@ -2480,6 +2489,8 @@ namespace FireFront.Fire
                 // Not here YET is not the same as not burnable: a client's fresh object (a log it
                 // just felled into a fire) can be hit before its ZDO reaches the server. Retried as
                 // before 1.0.2, and each retry runs the same checks once the ZDO has arrived.
+                // Logged once here, when queued; the retries themselves are silent until they resolve.
+                FireLogger.Debug($"[IGNITE-TRACE] ignite request from peer {sender} for {id}: no such ZDO on the server yet — queued for retry.");
                 QueueIgniteRetry(sender, id, igniterPlayerId);
                 return;
             }
@@ -3266,6 +3277,9 @@ namespace FireFront.Fire
             {
                 ZDOID next = _queue.DequeueNextValid();
                 if (next.Equals(ZDOID.None)) return;
+                // Taken off the table the moment the object leaves the queue, whatever happens to it
+                // below: an entry left behind by a skip would bill a later, natural fire to this player.
+                long queuedIgniter = FireMath.TakeQueuedIgniter(_queuedIgniters, next);
                 if (_burning.ContainsKey(next)) continue;
 
                 Component target = ValheimBridge.ComponentFromZdoid(next);
@@ -3281,8 +3295,6 @@ namespace FireFront.Fire
                 int evMax = Mathf.Max(1, Mathf.RoundToInt(FireConfig.EffectiveMaxConcurrentBurning * GetRampFraction(evId)));
                 if (BurningCountForEvent(evId) >= evMax) continue;
 
-                long queuedIgniter = 0L;
-                if (_queuedIgniters.TryGetValue(next, out queuedIgniter)) _queuedIgniters.Remove(next);
                 StartBurning(target, next, evId, queuedIgniter);
             }
         }
@@ -3297,7 +3309,7 @@ namespace FireFront.Fire
                 foreach (ZDOID k in _queuedIgniters.Keys) if (!_queue.Contains(k)) _queuedIgniterSweep.Add(k);
                 for (int i = 0; i < _queuedIgniterSweep.Count; i++) _queuedIgniters.Remove(_queuedIgniterSweep[i]);
             }
-            _queuedIgniters[id] = igniter;
+            FireMath.PutQueuedIgniter(_queuedIgniters, id, igniter);
         }
         private readonly List<ZDOID> _queuedIgniterSweep = new List<ZDOID>();
 
