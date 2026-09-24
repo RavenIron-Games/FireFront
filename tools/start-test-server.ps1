@@ -1,7 +1,7 @@
 # Starts the FireFront test server. Pairs with stop-test-server.ps1.
 #
 # The test server is a SEPARATE INSTALL, not the Steam one — see docs/HANDOFF.md.
-# The Steam install is the owner's live Ravenrest modpack: two servers there
+# The Steam install is RavenIron's live Ravenrest modpack: two servers there
 # share one FireFront.dll (so a test build could not differ from Ravenrest's)
 # and its mandatory-mod list rejects a plain client with "incompatible version".
 #
@@ -16,7 +16,7 @@
 #     lingers, and then it is unclear which one is real.
 
 param(
-    [string]$ServerDir  = "C:\Users\donfr\FireFrontTestServer",
+    [string]$ServerDir  = "$env:USERPROFILE\FireFrontTestServer",
     [int]   $Port       = 2458,
     [string]$World      = "Dedicated",
     [string]$ServerName = "FireFront Test",

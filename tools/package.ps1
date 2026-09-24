@@ -5,7 +5,7 @@
 # shipped with csproj at 0.17.2 while Plugin.cs said 0.17.3; this guard is why
 # that can't happen again.)
 #
-# The zip goes to Hexium (hexium.gg) - the only store we publish to (owner, 2026-09-03).
+# The zip goes to Hexium (hexium.gg) - the only store we publish to (RavenIron, 2026-09-03).
 # Its LAYOUT is Thunderstore's package format, because that is the format Hexium consumes;
 # format and channel are different things, and these headers conflated them for a week.
 

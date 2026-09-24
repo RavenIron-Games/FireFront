@@ -1,4 +1,4 @@
-// From Valkyrie's Cargo's ConfigMigration.cs (itself from WingsoftheValkyrie's, Wu'barrk, RGlabs84) - the family's shape; ported 2026-09-18 at the owner's word.
+// From Valkyrie's Cargo's ConfigMigration.cs (itself from WingsoftheValkyrie's, Wu'barrk, RGlabs84) - the family's shape; ported 2026-09-18 on RavenIron's word.
 using System;
 using System.Globalization;
 using System.Collections.Generic;
@@ -56,7 +56,7 @@ namespace FireFront.Config
 
         /// <summary>
         /// How many steps <see cref="Apply"/> REFUSED this boot. A refusal is almost always a bug
-        /// in our own ledger rather than in the owner's file — a row naming a key this build does
+        /// in our own ledger rather than in the user's file — a row naming a key this build does
         /// not bind, or retiring one it still does — plus the one that is nobody's bug, a drop that
         /// threw. Counted because <see cref="LastSummary"/> is written in <see cref="Begin"/> from
         /// the plan's INTENT, before a single step has run, and the console command reads it back
@@ -153,7 +153,7 @@ namespace FireFront.Config
                     // THE STAMP ONLY EVER GOES UP, corrected 2026-09-18. A file carrying a HIGHER
                     // version was written by a newer build whose rungs have already run, and this
                     // build knows nothing about them. An unconditional assignment drags it down on
-                    // a rollback; rolling forward then replays those rungs against values the owner
+                    // a rollback; rolling forward then replays those rungs against values the user
                     // has since chosen — and a rebase cannot tell a deliberate choice from the old
                     // default it happens to equal. That is this file's worst possible failure.
                     if (safeToFinish && appliedCleanly)
@@ -166,7 +166,7 @@ namespace FireFront.Config
                 }
                 // LastSummary was written in Begin, from the plan's INTENT, before anything ran.
                 // The console command reads it back verbatim, so a refused step has to reach it or
-                // the one line the owner actually looks at is confidently wrong.
+                // the one line the user actually looks at is confidently wrong.
                 if (cfg != null) cfg.Save();
             }
             catch (Exception ex)

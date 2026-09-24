@@ -24,7 +24,7 @@ that is paused with `fireset enabled false`).
 
 **Resume point.** `main` carries 1.0.1, tagged v1.0.1. Two changes on top of 1.0.0:
 
-- **`FireInAshlands`** (`[Fire]`, default false, `fireset ashlands`). The owner found the
+- **`FireInAshlands`** (`[Fire]`, default false, `fireset ashlands`). RavenIron found the
   Ashlands unplayable on 1.0.0: vanilla's cinder and lava fire hits wood there constantly
   (CinderSpawner.CanSpawnCinder is always true in the Ashlands; Fire.DoDamage sends m_fire with
   HitType.CinderFire and no attacker through RPC_Damage), and FireFront ignited on every hit.
@@ -60,7 +60,7 @@ attribution. Problems found in play are fixed as they come.
 
 **State at 0.24.0.** `main` carries 0.24.0, tagged v0.24.0: the version exchange
 (Fire/VersionCheck.cs), culture-invariant numbers everywhere (Utils/InvariantNumbers.cs, with
-1,680 harness checks), and the MIT licence. Played on the rig 2026-09-23 as far as the owner
+1,680 harness checks), and the MIT licence. Played on the rig 2026-09-23 as far as RavenIron
 chose (matching versions, the decimal comma; CHANGELOG "Rig evidence"); the steps below marked
 there as not played are the 1.0 evening. Next: the README pass (docs only), then the 1.0
 evening (docs/ROADMAP.md, "1.0 Verify, then tag": only the never-played checks), then the tag.
@@ -69,7 +69,7 @@ notices wait for the character to spawn (display only; the matching-version path
 
 ## 0.24.0 (2026-09-23): the rig evening that gates it
 
-1. Both sides on 0.24.0. Server log on the owner's join: `[VERSION] peer <id> (Steam_...) runs
+1. Both sides on 0.24.0. Server log on RavenIron's join: `[VERSION] peer <id> (Steam_...) runs
    FireFront 0.24.0, same as this server.`; client log: `[VERSION] the server runs FireFront
    0.24.0, same as this game.` No message on screen.
 2. An old client: 0.23.0's DLL in Gale's `testing` profile, 0.24.0 on the server. About 60 s
@@ -120,8 +120,8 @@ server already acts on it; the guard's peer scan is the same loop vanilla's `Rou
 runs on the same packet; a portal trip or respawn cannot put an input-capable player 200 m
 from the last reported position inside the 2 s refresh.
 
-**The rig evening.** Both sides on the same build. The owner's Steam id is on the rig's
-adminlist (`C:\Users\donfr\AppData\LocalLow\IronGate\Valheim\adminlist.txt`); vanilla's
+**The rig evening.** Both sides on the same build. RavenIron's Steam id is on the rig's
+adminlist (`%USERPROFILE%\AppData\LocalLow\IronGate\Valheim\adminlist.txt`); vanilla's
 `SyncedList` re-reads that file within 10 s of an edit, so switching between the two halves
 needs no restart.
 
@@ -129,7 +129,7 @@ needs no restart.
    `fireset burntheworld true` applies (server log `fireset (remote from <peer>):
    burntheworld = True`), then `fireset burntheworld false`. Drag a ConfigurationManager
    slider: same. `G` on a fire and a Dousing Bomb work as before.
-2. As non-admin (remove the owner's line from adminlist.txt, wait 10 s). `fireset
+2. As non-admin (remove your own line from adminlist.txt, wait 10 s). `fireset
    burntheworld true` answers `[server] FireFront: fireset burntheworld refused — you are
    not in the server's adminlist.` and the server logs `[AUTH] refused fireset
    'burntheworld = true' ...`. A slider drag: the same refusal. `G` and the bomb still
@@ -161,11 +161,11 @@ Not changed in 0.23 and not to be changed here: the RPC names, payloads and the
 and booted headless on the real `l-1.0.15` Linux dedicated server (every patch applied, 0
 exceptions). NomadicWar play-tested `720f520` clean (four sessions, 0 exceptions); the six
 look items from that review are closed on top of it (CHANGELOG, last 0.22.1 entry). **Seen in
-game 2026-09-20 evening** (owner, dedicated test rig, both sides on the 7cbfe09 build = main
+game 2026-09-20 evening** (RavenIron, dedicated test rig, both sides on the 7cbfe09 build = main
 b8c9ee5): the `[SHADER-DIAG] scorch decal material` read-back matched the expected line word
 for word (blend 10/5, alphaChannel 0, skyMask 0, softParticles 0, cameraFadeFactor 1000,
 fejdFog 1), the first five `[SCORCH] mark` lines were 5/5 terrain hits with 8-19 cm lift on
-a 2-7 degree slope, the owner saw the blots on the ground and liked the fire and the charred
+a 2-7 degree slope, RavenIron saw the blots on the ground and liked the fire and the charred
 trees; 0 exceptions either side. Tagged v0.22.1 on the commit that records this. Read the
 0.22.1 and 0.22.0 CHANGELOG entries first.
 
@@ -409,7 +409,7 @@ from its own session, and pushing mine would have published those too.
 ## 3. Two things found in passing, neither acted on
 
 - **`libs\` was refreshed to the Valheim 1.0.15 publicized set** (`tools\fetch-libs.ps1` was run
-  here, as in all seven repos, after the owner regenerated
+  here, as in all seven repos, after RavenIron regenerated
   `valheim_Data\Managed\publicized_assemblies` by hand at 11:40). The 0.21.4 repackage above is the
   first FireFront build against 1.0.15 references. 1.0.15 needed no code change anywhere: 93/93
   apiprobe surfaces resolve, network version still 40, save formats unmoved.
@@ -457,11 +457,11 @@ the memory notes in the assistant's store point here.
   is exactly right for "is the file I copied the file that is there now".)
   Never grep the DLL for version-shaped strings; FireFront's own log text
   contains literals like `0.17.2`, so a grep returns a list, not an answer.
-- **ALWAYS use Gale's `testing` profile** (owner's instruction, 2026-09-12).
+- **ALWAYS use Gale's `testing` profile** (RavenIron's decision, 2026-09-12).
   It is the one carrying the whole RavenIron suite — Cairn, FireFront,
   RagnaroksWrath, RavenEye, Undertow, ValkyriesCargo — plus
   ConfigurationManager, Server_devcommands and Njord. Previous claims in this
-  document that the owner plays `Default`, and before that `raveniron`, were
+  document that RavenIron plays `Default`, and before that `raveniron`, were
   BOTH wrong and each cost a session's client deploys. `Default` is a separate
   modpack with no FireFront in it at all.
   Two traps in that profile: mods are often parked as `<Name>.dll.off`, which
@@ -479,10 +479,10 @@ the memory notes in the assistant's store point here.
   stranded on 0.221.12 since the 1.0 update, which is why 0.20.0 would not run
   there: `SimulationDistance` is a 1.0.x type the port adopted, and it failed
   with a TypeLoadException on the old build. There is no SteamCMD on this
-  machine by the owner's instruction — the fix was that Steam already keeps a
+  machine by RavenIron's decision — the fix was that Steam already keeps a
   **Valheim dedicated server** install at 1.0.12 under `steamapps\common`, so
   the server was rebuilt from those files in place at
-  `C:\Users\donfr\FireFrontTestServer`, with the BepInEx loader taken from
+  `%USERPROFILE%\FireFrontTestServer`, with the BepInEx loader taken from
   `ValheimServers\Storm10` (the one server already proven on 1.0.12) and the
   tuned `com.raveniron.firefront.cfg` carried across. The previous install is
   kept at `FireFrontTestServer.old-0.221.12`. The world was untouched: the
@@ -490,9 +490,9 @@ the memory notes in the assistant's store point here.
 - **Testers**: at least one is on **0.19.3** (their log proved it), others may
   still be on the **0.18.0** Discord zip. Everything they are missing is in
   the v0.19.14 release.
-  **Owner's call 2026-08-28: no Discord post needed** — the regenerated split
-  in `dist\DISCORD_POST_READY.txt` exists but is not to be shipped unless the
-  owner asks.
+  **RavenIron's call 2026-08-28: no Discord post needed** — the regenerated split
+  in `dist\DISCORD_POST_READY.txt` exists but is not to be shipped unless
+  RavenIron asks.
 ## Config migration (0.21.3, 2026-09-18): the next default change goes in the ledger
 
 `Config/ConfigLedger.cs` (pure) decides, `Config/ConfigMigration.cs` (engine) applies:
@@ -553,7 +553,7 @@ to be folded back into it or the one line an admin reads is confidently wrong.
 
 ## 0.21.16 (2026-09-20): the dormant dirt painter, made real
 
-Prompted by a Mists of Avalor write-up (`PATHER-REPAINT.md`, in the owner's Downloads) of how
+Prompted by a Mists of Avalor write-up (`PATHER-REPAINT.md`, in a local Downloads folder) of how
 that mod paints its road through vanilla's terrain ops. FireFront already had the same idea
 sitting behind `UseVanillaDirtPaint` (off by default, "test-world only"). Against the shipping
 1.0.15 assembly it had three defects, and the first repair of them - "every client paints what it
@@ -680,7 +680,7 @@ Expect on the client: `[IGNITE-TRACE] All 11 FireFront RPCs registered`, then no
 paint unless a cell could not be laid (`Paint flush:` Debug lines). Expect on the server:
 `Paint assign:` Debug lines only for zones no player was in or next to. (On the merged branch
 the boot line says `All 12`.) **Run in play 2026-09-20 evening** on the merged build (wubarrk
-`de4ca34`, dedicated test rig): the owner turned it on and reported it works - the first real
+`de4ca34`, dedicated test rig): RavenIron turned it on and reported it works - the first real
 dirt under a fire on a dedicated server. Earlier that day, on the pre-merge build, every flush
 dropped, which is the old server-side path and was expected.
 
@@ -708,8 +708,8 @@ at the cell count. On a listen host `lit` should track the burning cell count.
 
 ## 0.21.9 (2026-09-19): the drawn ground fire was never the same fire as the simulated one
 
-Four divergences, all found after the owner said "the visual spread is different to the cells
-burning" and then confirmed ALL FOUR directions at once - less flame than fire, flame without
+Four divergences, all found after RavenIron reported the visual spread differing from the cells
+burning, and then confirmed ALL FOUR directions at once - less flame than fire, flame without
 fire, flame in the wrong place, and a front that spreads differently. That combination is the
 tell: no single bug does all four. **There is no reconciliation anywhere in this path** - the
 client is fed deltas and never corrected - so every error is permanent until the cell dies.
@@ -948,7 +948,7 @@ That approach is strictly more reliable and was the planned next step.
   EMPTY, with a `RavenIronStudios-FireFront.off\` sibling — someone removed it
   deliberately. A session was lost to testing fire on a server that could not
   broadcast any. It runs the `NjordTest` world, not `Storm10`. Do not add
-  FireFront back to it without asking; it is the owner's Storm infrastructure.
+  FireFront back to it without asking; it is RavenIron's Storm infrastructure.
 
 ## In flight — finish these first
 
@@ -970,7 +970,7 @@ That approach is strictly more reliable and was the planned next step.
    `startfire 10` near real trees answered `attempted 3 targets within 10m`
    and the next heartbeat showed `burning 3/50` — three real fires on the
    headless server where the identical command had found zero. The
-   doubled startfire in the server log was the owner running it twice (two
+   doubled startfire in the server log was the command being run twice (two
    separate client "sent to server" lines), not a double-send. The 0.19.1
    relay-before-local-gate fix is proven. Historical root cause kept for the
    record: vanilla's client-side `PlayerIsAdmin` exact-string match never
@@ -987,7 +987,7 @@ That approach is strictly more reliable and was the planned next step.
    `Regrowth dedupe:` debug line or simply no double entries. **Verified 2026-09-18:** 21
    entries, all distinct - and that same list exposed that regrowth itself had never spawned
    a tree headless (0.21.5).
-3. **Ship to testers** — ON HOLD, owner said no Discord post needed
+3. **Ship to testers** — ON HOLD, RavenIron's call: no Discord post needed
    (2026-08-28). The zip stays ready in dist\ if that changes.
 
 4. ~~**The tester frametime spike.**~~ **DIAGNOSED AND FIXED — one measurement
@@ -1017,8 +1017,8 @@ That approach is strictly more reliable and was the planned next step.
      a first attempt that read as "the fire went out".
 
    **STILL OUTSTANDING — the only real gap left: nobody has MEASURED whether
-   smouldering buys frames.** It shipped on a sound argument and the owner's
-   visual approval, not a number. CapFrameX is installed on the owner's box and
+   smouldering buys frames.** It shipped on a sound argument and RavenIron's
+   visual approval, not a number. CapFrameX is installed on the test machine and
    both toggles are live commands, so it is two captures with no restart:
    `fireset smouldering false` -> capture 60s at a burn -> `fireset smouldering
    true` -> capture the same spot. Compare P1/P0.2 lows and max frametime. That
@@ -1027,7 +1027,7 @@ That approach is strictly more reliable and was the planned next step.
    objects and the felled physics logs, not the particles.
 
 5. **Dedicated FireFront test server — USE THIS, not the Steam install.**
-   `C:\Users\donfr\FireFrontTestServer` (created 2026-08-29): a full copy of
+   `%USERPROFILE%\FireFrontTestServer` (created 2026-08-29): a full copy of
    the dedicated server stripped to TWO plugins, FireFront and Server
    Devcommands, with its own `ff-test.log`. Port **2458** so it never collides
    with Ravenrest on 2456.
@@ -1035,7 +1035,7 @@ That approach is strictly more reliable and was the planned next step.
    (26 plugins). Two servers sharing that install share one FireFront.dll — so
    a test server could not run a different build than Ravenrest — and its
    mandatory-mod list (Jotunn, Seasonality, VikingOS, WardIsLove...) rejected
-   the owner's client with "incompatible version" every time. A minimal server
+   the test client with "incompatible version" every time. A minimal server
    demands nothing of a client and restores the property CLAUDE.md asks for:
    a failure there is unambiguously ours. Ravenrest's install is untouched;
    do not stop Ravenrest without asking.
@@ -1085,7 +1085,7 @@ That approach is strictly more reliable and was the planned next step.
 
 ## Operational facts that cost real time — do not relearn
 
-- **The owner plays on the `Default` Gale profile, NOT `raveniron`.**
+- **RavenIron plays on the `Default` Gale profile, NOT `raveniron`.**
   Corrected 2026-08-29: an earlier note here said `raveniron`, and a whole
   session's client deploys went to the wrong profile before the mistake
   showed up (it was masked because every profile ended up byte-identical

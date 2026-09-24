@@ -54,7 +54,7 @@ $managed    = Join-Path $ValheimPath "valheim_Data\Managed"
 # Learned 2026-09-10, the day Valheim shipped 1.0.7: a game update does NOT regenerate the
 # in-game publicized_assemblies folder. It still held 0.2x files from July, so copying from
 # it would have quietly rebuilt every mod against the OLD API - a clean build, and a mod that
-# dies at runtime. The owner publicizes into a working folder instead.
+# dies at runtime. The assemblies are publicized into a working folder instead.
 #
 # AMENDED 2026-09-11, after this script shipped a stale file anyway. Choosing a FOLDER by the
 # date of one file inside it is the bug: the in-game folder's assembly_valheim_publicized.dll

@@ -281,7 +281,7 @@ namespace FireFront.Tests
 
             // THE STAMP ONLY GOES UP. A file written by a NEWER build has already had rungs this
             // build knows nothing about; dragging the stamp down makes the next upgrade replay them
-            // against values the owner has since chosen.
+            // against values the user has since chosen.
             version.Value = 7;
             ConfigMigration.Finish(cfg, version);
             Check("Finish: a stamp ABOVE this build's layout is left where it is",
@@ -397,7 +397,7 @@ namespace FireFront.Tests
                 Check("gate: and says so - an unstamped file that never explains itself is a bug report nobody can read",
                     FireLogger.Said("did not finish cleanly"));
 
-                // The line the owner actually reads. LastSummary is written in Begin from the
+                // The line the user actually reads. LastSummary is written in Begin from the
                 // plan's INTENT, before a step has run, and `firestatus` prints it verbatim - so
                 // without a correction it reports "1 retired key dropped" for a key still sitting
                 // in the file, and the only contradiction is a warning hundreds of lines earlier.

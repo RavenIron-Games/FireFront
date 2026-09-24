@@ -16,7 +16,7 @@
 # save should leave the server running, not quietly discard world state.
 
 param(
-    [string]$ServerDir      = "C:\Users\donfr\FireFrontTestServer",
+    [string]$ServerDir      = "$env:USERPROFILE\FireFrontTestServer",
     [string]$LogPath        = "",
     [string]$World          = "Dedicated",
     [string]$SaveDir        = "",
