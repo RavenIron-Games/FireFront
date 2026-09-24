@@ -384,6 +384,26 @@ namespace FireFront.Utils
         public static bool ZdoExists(ZDOID id) => ZDOMan.instance?.GetZDO(id) != null;
 
         /// <summary>
+        /// 1.0.2: true when <paramref name="id"/> names a ZDO fire could burn: its prefab is in the
+        /// burnable table (trees, logs, burnable pieces) and it is not charred already. Reads the ZDO
+        /// only, so it builds nothing and claims nothing; the RPC handlers ask this before they let
+        /// a client-supplied id anywhere near <see cref="ComponentFromZdoid"/>. False when the table
+        /// cannot be read yet: a request from the wire is refused, never guessed at.
+        /// </summary>
+        public static bool TryGetBurnableZdo(ZDOID id, out Vector3 position)
+        {
+            position = Vector3.zero;
+            if (id == ZDOID.None) return false;
+            ZDO zdo = ZDOMan.instance?.GetZDO(id);
+            if (zdo == null) return false;
+            Dictionary<int, bool> kinds = EnsureBurnablePrefabKinds();
+            if (kinds == null || !kinds.TryGetValue(zdo.GetPrefab(), out bool isTreeOrLog)) return false;
+            if (isTreeOrLog && FireFront.Fire.CharredTreeLifecycle.IsCharred(zdo)) return false;
+            position = zdo.GetPosition();
+            return true;
+        }
+
+        /// <summary>
         /// The burnable Component of a ZDOID's LOCAL instance, or null — never creates one and
         /// never touches ownership, unlike <see cref="ComponentFromZdoid"/>. This is the lookup
         /// for anything cosmetic on a client: a fire drawn on a tree must not steal the tree.
@@ -426,6 +446,18 @@ namespace FireFront.Utils
                 if (zdo == null)
                 {
                     FireLogger.Debug($"[IGNITE-TRACE] ComponentFromZdoid({id}): ZDO not found in ZDOMan either — nothing to instantiate.");
+                    return null;
+                }
+
+                // 1.0.2: only ever for something fire can burn. Every caller means a tree, a log or
+                // a burnable piece, and building anything else here also takes its ownership: a
+                // forged ignite request once made the server build, claim and then delete another
+                // player's character. Unknown when the prefab table cannot be read (no ZNetScene
+                // names yet), and then the old behaviour stands rather than fire stopping altogether.
+                Dictionary<int, bool> kinds = EnsureBurnablePrefabKinds();
+                if (kinds != null && !kinds.ContainsKey(zdo.GetPrefab()))
+                {
+                    FireLogger.Debug($"[IGNITE-TRACE] ComponentFromZdoid({id}): prefab {zdo.GetPrefab()} is not burnable — not creating it.");
                     return null;
                 }
 
@@ -4243,6 +4275,37 @@ namespace FireFront.Utils
             catch (System.Exception)
             {
                 return 0L;
+            }
+        }
+
+        /// <summary>
+        /// 1.0.2: true when <paramref name="playerId"/> is the persistent id of a player on this
+        /// server right now: the local player (a listen host) or a connected peer's character.
+        /// One ZDO read per peer; called once per client ignite request.
+        /// </summary>
+        public static bool IsOnlinePlayerId(long playerId)
+        {
+            if (playerId == 0L) return false;
+            try
+            {
+                if (LocalPlayerId() == playerId) return true;
+                ZNet net = ZNet.instance;
+                ZDOMan man = ZDOMan.instance;
+                if (net == null || man == null) return false;
+                List<ZNetPeer> peers = net.GetPeers();
+                if (peers == null) return false;
+                for (int i = 0; i < peers.Count; i++)
+                {
+                    ZNetPeer peer = peers[i];
+                    if (peer == null || peer.m_characterID.IsNone()) continue;
+                    ZDO zdo = man.GetZDO(peer.m_characterID);
+                    if (zdo != null && zdo.GetLong(ZDOVars.s_playerID, 0L) == playerId) return true;
+                }
+                return false;
+            }
+            catch (System.Exception)
+            {
+                return false;
             }
         }
 

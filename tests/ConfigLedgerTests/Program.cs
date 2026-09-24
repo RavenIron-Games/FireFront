@@ -426,6 +426,7 @@ namespace FireFront.Tests
 
             // --- InvariantNumbers (0.24) -------------------------------------------------------
             InvariantNumbersTests.Run(Check);
+            FireMathTests.Run(Check);
 
             Console.WriteLine("ConfigLedgerTests: " + _passed + " passed, " + _failed + " failed");
             return _failed == 0 ? 0 : 1;

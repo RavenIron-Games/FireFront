@@ -46,6 +46,7 @@ namespace FireFront.Fire
         public float Y;
         public bool YIsReal;  // false = Y is inherited from the igniter, not measured. See IsStandingInFire.
         public int EventId;   // which fire event this cell belongs to (0 = unassigned/legacy)
+        public long Igniter;  // 1.0.2: who lit THIS fire, inherited along spread; 0 = natural/unknown
     }
 
     public class FireManager : MonoBehaviour
@@ -73,6 +74,7 @@ namespace FireFront.Fire
             public int KillAttempts; // bounded retry if resolving a live Component at expiry fails
             public int EventId;      // which fire event this burner belongs to (0 = unassigned/legacy)
             public bool Smouldering; // its VFX has been dropped to embers+smoke (cosmetic only)
+            public long Igniter;     // 1.0.2: who lit THIS fire, inherited along spread; 0 = natural/unknown
         }
 
         private readonly Dictionary<ZDOID, BurningState> _burning = new Dictionary<ZDOID, BurningState>();
@@ -233,6 +235,7 @@ namespace FireFront.Fire
             public float RetryAt;
             public int Attempts;
             public long IgniterPlayerId;   // carried so a delayed resolution still attributes
+            public long Sender;            // 1.0.2: the asking peer, for the reach check once the ZDO arrives
         }
 
         private readonly List<PendingIgniteResolution> _pendingIgniteResolutions = new List<PendingIgniteResolution>();
@@ -689,6 +692,76 @@ namespace FireFront.Fire
         /// </summary>
         public long CurrentFireIgniterPlayerId => _fireIgniterPlayerId;
 
+        // --- 1.0.2: who lit each fire ------------------------------------------------------
+        //
+        // Every burning object and ground cell carries its own igniter: the player whose hit lit
+        // it, or, for anything fire spread to, the igniter of the burner or cell it spread FROM.
+        // So a player's fire stays theirs however far it travels, and a natural fire or a second
+        // player's fire elsewhere is not billed to them. Saved with the fire (store fields added
+        // at the end of each line, so older builds still read the store) and restored with it;
+        // a store written before 1.0.2 restores its fires with igniter 0. Server side only, like
+        // the rest of the simulation; nothing new goes over the wire.
+
+        // The igniter of the burner or cell SpreadPass is spreading from right now; 0 outside it.
+        private long _spreadIgniter;
+
+        // Igniters of queued objects, so a fire that waited for room keeps its culprit.
+        private readonly Dictionary<ZDOID, long> _queuedIgniters = new Dictionary<ZDOID, long>();
+
+        /// <summary>
+        /// PUBLIC CROSS-MOD CONTRACT (added 1.0.2), the per-fire companion to
+        /// <see cref="CollectActiveFirePositions"/> and <see cref="CurrentFireIgniterPlayerId"/>.
+        /// Appends one entry per active fire to BOTH lists, in the same order as
+        /// CollectActiveFirePositions: the fire's world position to <paramref name="positions"/>
+        /// and the persistent player id that lit it (inherited along spread) to
+        /// <paramref name="igniters"/>, 0 for natural or unknown. Neither list is cleared first.
+        /// Ragnarok's Wrath resolves this by reflection; renaming or re-signing it is a breaking
+        /// change for that mod. Meaningful on the simulation authority only.
+        /// </summary>
+        public void CollectActiveFiresWithIgniters(List<Vector3> positions, List<long> igniters)
+        {
+            if (positions == null || igniters == null) return;
+
+            foreach (KeyValuePair<ZDOID, BurningState> kv in _burning)
+            {
+                positions.Add(kv.Value.Position);
+                igniters.Add(kv.Value.Igniter);
+            }
+
+            foreach (KeyValuePair<GroundCellKey, GroundCellState> kv in _groundBurning)
+            {
+                positions.Add(CellCenter(kv.Key, kv.Value.Y));
+                igniters.Add(kv.Value.Igniter);
+            }
+        }
+
+        /// <summary>
+        /// PUBLIC CROSS-MOD CONTRACT (added 1.0.2): the igniter of the nearest active fire within
+        /// <paramref name="radius"/> metres of <paramref name="position"/> (horizontal distance),
+        /// or 0 when no fire is that close or the nearest one has no known igniter. Same authority
+        /// and stability rules as <see cref="CollectActiveFiresWithIgniters"/>.
+        /// </summary>
+        public long FireIgniterNear(Vector3 position, float radius)
+        {
+            if (float.IsNaN(radius) || radius < 0f) return 0L;
+            float best = radius * radius;
+            long igniter = 0L;
+            bool found = false;
+            foreach (BurningState s in _burning.Values)
+            {
+                if (FireMath.CloserOnGround(position.x, position.z, s.Position.x, s.Position.z, ref best, found))
+                { igniter = s.Igniter; found = true; }
+            }
+            float size = FireConfig.GroundCellSize.Value;
+            foreach (KeyValuePair<GroundCellKey, GroundCellState> kv in _groundBurning)
+            {
+                if (FireMath.CloserOnGround(position.x, position.z,
+                        FireMath.CellCentre(kv.Key.X, size), FireMath.CellCentre(kv.Key.Z, size), ref best, found))
+                { igniter = kv.Value.Igniter; found = true; }
+            }
+            return igniter;
+        }
+
         /// <summary>
         /// External read surface: append the world position of every active fire — burning
         /// objects and burning ground cells — to <paramref name="into"/>.
@@ -737,6 +810,10 @@ namespace FireFront.Fire
                 // so a player who logged out once and came back could never see fire in those cells
                 // again for the rest of the process, and the dictionary grew every session.
                 ResetRemoteMirror();
+                // 1.0.2: and the simulation's own state. Normally already done by OnWorldShutdown,
+                // which also saved it; this covers an exit that never passed ZNet.Shutdown. It
+                // runs before the restore below, so the new world's store is what gets loaded.
+                ResetWorldState();
                 VersionCheck.ResetForNewConnection();
                 _wantGroundSnapshot = true; // asked for below, once the connection can carry it
                 _snapshotRequestsSent = 0;
@@ -796,6 +873,10 @@ namespace FireFront.Fire
             // simulation with no warning. Gate it explicitly instead of relying
             // on that accident.
             if (!ValheimBridge.IsServer()) return;
+
+            // 1.0.2: between ZNet.Shutdown and the scene change the old world still answers
+            // IsServer, and running here would read its store straight back in (see OnWorldShutdown).
+            if (ZNet.instance.HaveStopped) return;
 
             // 0.24: notice connected peers that never sent their version (FireFront 0.23 or older,
             // or none). Above the Enabled gate on purpose: a mismatch matters with fire off too.
@@ -997,6 +1078,7 @@ namespace FireFront.Fire
                 pkg.Write(kv.Value.Y);
             }
             pkg.Write(0); // no expiries in a snapshot: this IS the full set
+            WriteGroundSyncTrailer(pkg);
 
             ValheimBridge.SendGroundFireSyncTo(sender, pkg);
 
@@ -1099,10 +1181,17 @@ namespace FireFront.Fire
                 groundRadius = ceiling;
             }
 
-            if (!targetId.Equals(ZDOID.None))
+            // 1.0.2: only a target that is actually burning, and near the player, and without
+            // building anything: a burning object's state is all Extinguish needs. This used to
+            // build and claim whatever id the client sent (any ZDO, any distance) and only then
+            // ask whether it was burning, so even an honest press of the key while aiming at an
+            // unlit piece took that piece away from the player standing next to it.
+            if (!targetId.Equals(ZDOID.None) && _burning.TryGetValue(targetId, out BurningState burningTarget))
             {
-                Component target = ValheimBridge.ComponentFromZdoid(targetId);
-                if (target != null && IsBurning(target)) Extinguish(target);
+                if (RequestTargetInReach(sender, burningTarget.Position, MaxExtinguishReach))
+                    ExtinguishById(targetId);
+                else
+                    AuthLog.Refused(sender, "extinguish-target", $"refused to put out {targetId}: more than {MaxExtinguishReach:F0} m from where the server last saw the player");
             }
 
             ExtinguishAt(playerPos, groundRadius);
@@ -1255,6 +1344,9 @@ namespace FireFront.Fire
             int eventId = EventForPosition(targetPos, igniterPlayerId);
             int effectiveMax = Mathf.Max(1, Mathf.RoundToInt(FireConfig.EffectiveMaxConcurrentBurning * GetRampFraction(eventId)));
 
+            // 1.0.2: this fire's own igniter: whoever's hit lit it, else the fire it spread from.
+            long fireIgniter = FireMath.ResolveIgniter(igniterPlayerId, _spreadIgniter);
+
             if (BurningCountForEvent(eventId) < effectiveMax)
             {
                 if (_fireStartTime < 0f) _fireStartTime = Time.time;
@@ -1263,10 +1355,11 @@ namespace FireFront.Fire
                     _fireOrigin = targetPos;                 // legacy global, still written to the sidecar
                     _fireIgniterPlayerId = igniterPlayerId;
                 }
-                StartBurning(target, id, eventId);
+                StartBurning(target, id, eventId, fireIgniter);
             }
             else if (_queue.TryEnqueue(id))
             {
+                RememberQueuedIgniter(id, fireIgniter); // always, 0 included: no older entry may survive
                 FireLogger.Debug($"Queued ({_queue.Count}/{_queue.Capacity}): {ValheimBridge.NameOf(target)}");
             }
             // else: queue full -> silent drop; spread re-attempts next cycle.
@@ -1293,6 +1386,20 @@ namespace FireFront.Fire
                 _dousedUntil[id.Value] = Time.time + FireConfig.EffectiveDouseImmunitySeconds;
         }
 
+        /// <summary>Extinguish(Component) by id alone, for a burner with no instance on this machine.</summary>
+        private void ExtinguishById(ZDOID id)
+        {
+            if (_burning.TryGetValue(id, out BurningState st))
+            {
+                _burning.Remove(id);
+                FireLogger.Debug($"Extinguished: {st.PrefabName}");
+            }
+            _queue.Remove(id);
+            RemoveVfxFor(id);
+            if (FireConfig.EffectiveDouseImmunitySeconds > 0f)
+                _dousedUntil[id] = Time.time + FireConfig.EffectiveDouseImmunitySeconds;
+        }
+
         public void ClearAll()
         {
             int n = _burning.Count + _queue.Count + _groundBurning.Count;
@@ -1316,6 +1423,7 @@ namespace FireFront.Fire
             _pendingIgniteResolutions.Clear();
             _burning.Clear();
             _queue.Clear();
+            _queuedIgniters.Clear();
             _groundBurning.Clear();
             _groundVfx.Clear();
             _groundExhausted.Clear();
@@ -1331,6 +1439,90 @@ namespace FireFront.Fire
             // after — otherwise the next boot resurrects the fire someone
             // explicitly put out.
             PersistFiresNow();
+        }
+
+        /// <summary>
+        /// 1.0.2: the world is going away (ZNet.Shutdown, see Patches/WorldShutdownPatch). Saves
+        /// this world's fire to ITS store while ZNet and ZDOMan still name it, then forgets every
+        /// piece of simulation state. FireManager outlives the world (it sits on the plugin's
+        /// GameObject), and before this a host who logged out and loaded another world carried the
+        /// old fire into it: its ZDOIDs are load indices that name unrelated objects in the next
+        /// world (ZDOID.m_loadID restarts at every load), so the old burners' timers destroyed
+        /// whatever pieces held those indices, the old ground cells burned at their old
+        /// coordinates, the old regrowth planted trees, and the next save overwrote the new
+        /// world's store. A dedicated server only gets here on its way out, where the save is
+        /// the same last-chance flush OnDestroy makes.
+        /// </summary>
+        public void OnWorldShutdown()
+        {
+            if (ValheimBridge.IsServer()) PersistFiresNow();
+            ResetWorldState();
+        }
+
+        /// <summary>
+        /// Drops all per-world simulation state without saving or telling anyone: the world it
+        /// belonged to is gone or going. Called by OnWorldShutdown, and again when a new
+        /// ZRoutedRpc appears (a new world), for any exit that did not pass ZNet.Shutdown.
+        /// Clears _persistenceRestored so the NEXT world's store is read before anything saves.
+        /// </summary>
+        internal void ResetWorldState()
+        {
+            int n = _burning.Count + _queue.Count + _groundBurning.Count + _pendingRegrowth.Count;
+
+            // The server-side effects. No RemoveVfxFor: that broadcasts a stop to the old world's peers.
+            foreach (GameObject instance in _vfx.Values) { if (instance != null) Destroy(instance); }
+            foreach (GameObject instance in _groundVfx.Values) { if (instance != null) Destroy(instance); }
+            _vfx.Clear();
+            _groundVfx.Clear();
+            _groundVfxVisual.Clear();
+            _groundVfxDamage.Clear();
+            _groundVfxDark.Clear();
+
+            _burning.Clear();
+            _queue.Clear();
+            _queuedIgniters.Clear();
+            _spreadIgniter = 0L;
+            _dousedUntil.Clear();
+            _groundBurning.Clear();
+            _groundExhausted.Clear();
+            _groundIgnitedSinceFlush.Clear();
+            _groundExpiredSinceFlush.Clear();
+            _groundPainted.Clear();
+            _paintAssignPending.Clear();
+            _zonePainter.Clear();
+            _firebreakCache.Clear();
+            _pendingIgniteResolutions.Clear();
+            _pendingRegrowth.Clear();
+            _restoreClaimed.Clear();
+            _events.Clear();
+            _nextEventId = 1;
+            _lastSnapshotRequest.Clear();
+
+            // Candidate caches hold the old world's objects; rebuild on the next cycle.
+            _candidates.Clear();
+            _zdoCandidates.Clear();
+            ClearGrid(_candidateGrid);
+            ClearGrid(_zdoCandidateGrid);
+            _nextCandidateRebuild = 0f;
+            _builtScanValid = false;
+            _restoreScanValid = false;
+
+            // Clocks. -1 is each one's "not running" sentinel.
+            _fireStartTime = -1f;
+            _restoredRampAge = 0f;
+            _restoringRampAge = 0f;
+            _fireOrigin = null;
+            _fireIgniterPlayerId = 0L;
+            _nextSpreadDiagnosticLog = 0f;
+            _nextTreeTick = -1f;
+            _lastRainAgeTime = -1f;
+            _nextCycle = 0f;
+            _nextPersistSave = 0f;
+
+            // The next world's store is read before anything is saved into it.
+            _persistenceRestored = false;
+
+            if (n > 0) FireLogger.Info($"[PERSIST] world closed: cleared {n} fire entries from memory (a new world loads its own store).");
         }
 
         // ---------------------------------------------------------------
@@ -1390,14 +1582,16 @@ namespace FireFront.Fire
                   .Append(InvariantNumbers.Format(at.x)).Append('\t').Append(InvariantNumbers.Format(at.y)).Append('\t').Append(InvariantNumbers.Format(at.z)).Append('\t')
                   .Append(InvariantNumbers.Format(kv.Value.ExpireAt - now)).Append('\t')
                   .Append(InvariantNumbers.Format(now - kv.Value.IgnitedAt)).Append('\t')      // burn age, so restored burners keep their spread maturity
-                  .Append(kv.Value.PrefabName).Append('\n');           // field 8, 0.21.6: half of what the entry is keyed on now.
+                  .Append(kv.Value.PrefabName).Append('\t')           // field 8, 0.21.6: half of what the entry is keyed on now.
+                  .Append(InvariantNumbers.Format(kv.Value.Igniter)).Append('\n'); // field 9, 1.0.2: who lit it. Older builds stop at 8.
                 // Fields 1-2 still carry the ZDOID and are DIAGNOSTIC ONLY - a ZDOID is reassigned
                 // on every world load. Kept so a store stays readable by an older build.
             }
             foreach (KeyValuePair<GroundCellKey, GroundCellState> kv in _groundBurning)
             {
                 sb.Append("ground\t").Append(InvariantNumbers.Format(kv.Key.X)).Append('\t').Append(InvariantNumbers.Format(kv.Key.Z)).Append('\t')
-                  .Append(InvariantNumbers.Format(kv.Value.Y)).Append('\t').Append(InvariantNumbers.Format(kv.Value.ExpireAt - now)).Append('\n');
+                  .Append(InvariantNumbers.Format(kv.Value.Y)).Append('\t').Append(InvariantNumbers.Format(kv.Value.ExpireAt - now)).Append('\t')
+                  .Append(InvariantNumbers.Format(kv.Value.Igniter)).Append('\n'); // field 5, 1.0.2: who lit it. Older builds stop at 4.
             }
             foreach (KeyValuePair<GroundCellKey, float> kv in _groundExhausted)
             {
@@ -1472,7 +1666,8 @@ namespace FireFront.Fire
                             float y = InvariantNumbers.ParseFloat(f[3]);
                             // A save written by 1.0.0 can hold Ashlands fire; it is dropped, not restored.
                             if (AshlandsBarsFireAt(CellCenter(key, y))) { skipped++; break; }
-                            _groundBurning[key] = new GroundCellState { ExpireAt = now + remaining, Y = y, YIsReal = true };
+                            _groundBurning[key] = new GroundCellState { ExpireAt = now + remaining, Y = y, YIsReal = true,
+                                                                        Igniter = FireMath.IgniterField(f, 5) }; // 0 from a pre-1.0.2 store
                             _groundIgnitedSinceFlush.Add((key, y)); // clients learn of it at the next flush
                             // Queued rather than built here: the restore installs the whole fire at
                             // once, and building fifty ground objects in one frame is the boot spike
@@ -1535,6 +1730,7 @@ namespace FireFront.Fire
                                 st.IgnitedAt = f.Length > 7
                                     ? now - InvariantNumbers.ParseFloat(f[7])
                                     : now - FireConfig.BurnDurationSeconds.Value;
+                                st.Igniter = FireMath.IgniterField(f, 9); // 0 from a pre-1.0.2 store
                                 _burning[id] = st;
                                 objects++;
                             }
@@ -1971,7 +2167,7 @@ namespace FireFront.Fire
             // rain arrives on later.
             float duration = FireConfig.GroundBurnDurationSeconds.Value;
 
-            _groundBurning[key] = new GroundCellState { ExpireAt = Time.time + duration, Y = realY, YIsReal = realYSampled, EventId = cellEventId };
+            _groundBurning[key] = new GroundCellState { ExpireAt = Time.time + duration, Y = realY, YIsReal = realYSampled, EventId = cellEventId, Igniter = _spreadIgniter };
             FireLogger.Debug($"Ground ignited ({_groundBurning.Count}/{effectiveGroundMax}) at cell ({key.X},{key.Z})");
             SpawnGroundVfxFor(key, CellCenter(key, realY));
             _groundIgnitedSinceFlush.Add((key, realY));
@@ -2153,7 +2349,7 @@ namespace FireFront.Fire
         // Cycle steps — object fire
         // ---------------------------------------------------------------
 
-        private void StartBurning(Component target, ZDOID id, int eventId)
+        private void StartBurning(Component target, ZDOID id, int eventId, long igniter)
         {
             Vector3 position = ValheimBridge.PositionOf(target);
             _burning[id] = new BurningState
@@ -2162,7 +2358,8 @@ namespace FireFront.Fire
                 IgnitedAt = Time.time,
                 Position = position,
                 PrefabName = ValheimBridge.PrefabNameOf(target),
-                EventId = eventId
+                EventId = eventId,
+                Igniter = igniter
             };
             FireLogger.Debug($"Ignited ({_burning.Count}/{FireConfig.MaxConcurrentBurning.Value}): {ValheimBridge.NameOf(target)}");
             SpawnVfxFor(id, position, target);
@@ -2271,9 +2468,48 @@ namespace FireFront.Fire
             }
 
             FireLogger.Debug($"[IGNITE-TRACE] Server received ignite request from peer {sender} for ZDOID={id}, igniter={igniterPlayerId}.");
+            // 1.0.2: the igniter id comes off the wire and names the ATTACKER, who is often not the
+            // sender (the sender owns the object; someone else may have shot it). It cannot be
+            // proven, but it can be bounded: an id that is no player on this server right now is
+            // dropped to 0 (natural), so a forged request can at worst blame someone who is online.
+            if (igniterPlayerId != 0L && !ValheimBridge.IsOnlinePlayerId(igniterPlayerId))
+            {
+                FireLogger.Debug($"[IGNITE-TRACE] igniter {igniterPlayerId} in peer {sender}'s request is not an online player — booked as natural.");
+                igniterPlayerId = 0L;
+            }
+            // 1.0.2: the id comes off the wire, and ComponentFromZdoid builds an instance of it
+            // headless and takes its ownership. Before this a modified client could name ANY ZDO,
+            // another player's character included, and the server built it, claimed it and then
+            // deleted it as out of its area. So the ZDO is read first, building nothing: it must
+            // be something fire can burn and lie near the player who asked.
+            // Debug, not an [AUTH] line: an honest client forwards every fire hit on any piece,
+            // stone walls included, so an unburnable target is ordinary traffic.
+            if (!ValheimBridge.ZdoExists(id))
+            {
+                // Not here YET is not the same as not burnable: a client's fresh object (a log it
+                // just felled into a fire) can be hit before its ZDO reaches the server. Retried as
+                // before 1.0.2, and each retry runs the same checks once the ZDO has arrived.
+                // Logged once here, when queued; the retries themselves are silent until they resolve.
+                FireLogger.Debug($"[IGNITE-TRACE] ignite request from peer {sender} for {id}: no such ZDO on the server yet — queued for retry.");
+                QueueIgniteRetry(sender, id, igniterPlayerId);
+                return;
+            }
+            if (!ValheimBridge.TryGetBurnableZdo(id, out Vector3 requestedAt))
+            {
+                FireLogger.Debug($"[IGNITE-TRACE] ignite request from peer {sender} for {id}: not a live tree, log or burnable piece — ignored.");
+                return;
+            }
+            if (!RequestTargetInReach(sender, requestedAt, MaxIgniteReach))
+            {
+                AuthLog.Refused(sender, "ignite-reach", $"refused an ignite request for {id} at ({requestedAt.x:F0},{requestedAt.z:F0}): " +
+                                        $"more than {MaxIgniteReach:F0} m from where the server last saw the player");
+                return;
+            }
+            // Nothing to do for a target already alight, queued or soaked, so nothing is built for it.
+            if (_burning.ContainsKey(id) || _queue.Contains(id) || IsSoaked(id)) return;
             // Refused by the ZDO's own position, before ComponentFromZdoid can build an
             // instance headless and claim it, for a target TryIgnite would refuse anyway.
-            if (ValheimBridge.TryGetZdoPosition(id, out Vector3 requestedAt) && AshlandsBarsFireAt(requestedAt))
+            if (AshlandsBarsFireAt(requestedAt))
             {
                 NoteAshlandsRefusal($"ZDOID={id} (asked by peer {sender})", requestedAt);
                 return;
@@ -2288,18 +2524,55 @@ namespace FireFront.Fire
             {
                 FireLogger.Debug($"[IGNITE-TRACE] Could NOT resolve ZDOID={id} on first attempt — queuing for retry " +
                                   "(likely just not instantiated in the server's ZNetScene yet).");
-                _pendingIgniteResolutions.Add(new PendingIgniteResolution
-                {
-                    Id = id,
-                    RetryAt = Time.time + IgniteResolutionRetryInterval,
-                    Attempts = 0,
-                    IgniterPlayerId = igniterPlayerId
-                });
+                QueueIgniteRetry(sender, id, igniterPlayerId);
             }
+        }
+
+        private void QueueIgniteRetry(long sender, ZDOID id, long igniterPlayerId)
+        {
+            if (_pendingIgniteResolutions.Count >= IgniteResolutionMaxPending) return; // a flood of unknown ids stays bounded
+            _pendingIgniteResolutions.Add(new PendingIgniteResolution
+            {
+                Id = id,
+                Sender = sender,
+                RetryAt = Time.time + IgniteResolutionRetryInterval,
+                Attempts = 0,
+                IgniterPlayerId = igniterPlayerId
+            });
+        }
+
+        /// <summary>
+        /// The ignite request's checks, for a retry whose ZDO has now arrived: false drops the
+        /// retry for good (not burnable, out of reach, or nothing left to do). No ZDO yet is true.
+        /// </summary>
+        private bool IgniteRetryStillValid(PendingIgniteResolution entry)
+        {
+            if (!ValheimBridge.ZdoExists(entry.Id)) return true;
+            if (!ValheimBridge.TryGetBurnableZdo(entry.Id, out Vector3 at)) return false;
+            if (!RequestTargetInReach(entry.Sender, at, MaxIgniteReach)) return false;
+            if (_burning.ContainsKey(entry.Id) || _queue.Contains(entry.Id) || IsSoaked(entry.Id)) return false;
+            return !AshlandsBarsFireAt(at);
+        }
+
+        // 1.0.2: how far from the server's last reference position for a peer (ZNetPeer.m_refPos,
+        // refreshed every 2 s) an ignite request's target may lie. A client asks only for objects
+        // it owns, which sit in the zones around it; five zones is wider than any of that.
+        private const float MaxIgniteReach = 320f;
+
+        /// <summary>
+        /// True when <paramref name="target"/> is within <paramref name="reach"/> of where the server
+        /// last saw <paramref name="sender"/>, on the ground plane. A peer the server has not placed
+        /// yet passes, the same rule the extinguish position check uses.
+        /// </summary>
+        private static bool RequestTargetInReach(long sender, Vector3 target, float reach)
+        {
+            Vector3? seenAt = ValheimBridge.PeerRefPosition(sender);
+            return !seenAt.HasValue || FireMath.WithinReach(seenAt.Value.x, seenAt.Value.z, target.x, target.z, reach);
         }
 
         private const float IgniteResolutionRetryInterval = 0.5f;
         private const int IgniteResolutionMaxAttempts = 20; // ~10 seconds total before giving up
+        private const int IgniteResolutionMaxPending = 256;
 
         /// <summary>
         /// Server-side: retries resolving queued ignite requests whose ZDOID
@@ -2317,6 +2590,7 @@ namespace FireFront.Fire
             {
                 PendingIgniteResolution entry = _pendingIgniteResolutions[i];
                 if (now < entry.RetryAt) continue;
+                if (!IgniteRetryStillValid(entry)) { _igniteResolutionScratchIndices.Add(i); continue; }
 
                 Component target = ValheimBridge.ComponentFromZdoid(entry.Id);
                 if (target != null)
@@ -2703,7 +2977,10 @@ namespace FireFront.Fire
         private void AgeFiresInRain()
         {
             float now = Time.time;
-            float dt = _lastRainAgeTime < 0f ? 0f : now - _lastRainAgeTime;
+            // 1.0.2: at most two cycles' worth. The clock only moves while the cycle runs, so
+            // resuming after `fireset enabled false` charged the whole pause in one step and every
+            // fire in the rain went out at once.
+            float dt = FireMath.RainAgeSeconds(_lastRainAgeTime, now, 2f * FireConfig.EffectiveSpreadCheckInterval);
             _lastRainAgeTime = now;
             if (dt <= 0f) return;
 
@@ -2838,11 +3115,13 @@ namespace FireFront.Fire
         /// </summary>
         private void TickTreeFire()
         {
-            if (!FireConfig.TreeFireDamageEnabled.Value) return;
-            if (_burning.Count == 0) return;
+            // 1.0.2: the clock stops with the fire. It used to stand still while nothing burned,
+            // so the first tick of the NEXT fire charged the whole quiet spell as burn time and
+            // charred its first tree almost at once, before it was old enough to spread.
+            if (!FireConfig.TreeFireDamageEnabled.Value || _burning.Count == 0) { _nextTreeTick = -1f; return; }
             float interval = Mathf.Max(0.5f, FireConfig.TreeFireTickInterval.Value);
             if (Time.time < _nextTreeTick) return;
-            float dt = _nextTreeTick < 0f ? interval : Mathf.Max(interval, Time.time - _nextTreeTick + interval);
+            float dt = FireMath.TreeTickSeconds(_nextTreeTick, Time.time, interval, FireConfig.EffectiveSpreadCheckInterval);
             _nextTreeTick = Time.time + interval;
 
             float killSeconds = Mathf.Max(1f, FireConfig.BurnDurationSeconds.Value * Mathf.Clamp(FireConfig.TreeFireKillFraction.Value, 0.2f, 1f));
@@ -2998,6 +3277,9 @@ namespace FireFront.Fire
             {
                 ZDOID next = _queue.DequeueNextValid();
                 if (next.Equals(ZDOID.None)) return;
+                // Taken off the table the moment the object leaves the queue, whatever happens to it
+                // below: an entry left behind by a skip would bill a later, natural fire to this player.
+                long queuedIgniter = FireMath.TakeQueuedIgniter(_queuedIgniters, next);
                 if (_burning.ContainsKey(next)) continue;
 
                 Component target = ValheimBridge.ComponentFromZdoid(next);
@@ -3013,9 +3295,23 @@ namespace FireFront.Fire
                 int evMax = Mathf.Max(1, Mathf.RoundToInt(FireConfig.EffectiveMaxConcurrentBurning * GetRampFraction(evId)));
                 if (BurningCountForEvent(evId) >= evMax) continue;
 
-                StartBurning(target, next, evId);
+                StartBurning(target, next, evId, queuedIgniter);
             }
         }
+
+        private void RememberQueuedIgniter(ZDOID id, long igniter)
+        {
+            // Bounded by the queue: entries whose object left the queue some other way are dropped
+            // once the table outgrows it, so it never holds more than about twice the queue.
+            if (_queuedIgniters.Count >= 2 * Mathf.Max(16, _queue.Capacity))
+            {
+                _queuedIgniterSweep.Clear();
+                foreach (ZDOID k in _queuedIgniters.Keys) if (!_queue.Contains(k)) _queuedIgniterSweep.Add(k);
+                for (int i = 0; i < _queuedIgniterSweep.Count; i++) _queuedIgniters.Remove(_queuedIgniterSweep[i]);
+            }
+            FireMath.PutQueuedIgniter(_queuedIgniters, id, igniter);
+        }
+        private readonly List<ZDOID> _queuedIgniterSweep = new List<ZDOID>();
 
         // ---------------------------------------------------------------
         // Cycle steps — ground fire
@@ -3615,10 +3911,55 @@ namespace FireFront.Fire
                 pkg.Write(key.X);
                 pkg.Write(key.Z);
             }
+            WriteGroundSyncTrailer(pkg);
 
             ValheimBridge.BroadcastGroundFireSync(pkg);
             _groundIgnitedSinceFlush.Clear();
             _groundExpiredSinceFlush.Clear();
+        }
+
+        // 1.0.2: a marker, then the server's GroundCellSize, AFTER the two lists. Appended rather
+        // than put in front so the layout stays readable both ways: a 1.0.1 client stops reading
+        // after the lists and never sees it, and a 1.0.2 client talking to an older server finds
+        // nothing there and falls back to its own size, which is all that server could offer.
+        // Hence no WireProtocol bump. Before, each client turned the indices into positions with
+        // its OWN cell size, so a client set to 2 m drew a server's 1 m fire at twice its
+        // coordinates, and warmed and scorched there too.
+        private const int GroundSyncCellSizeMarker = 0x46464353; // "FFCS"
+
+        private static void WriteGroundSyncTrailer(ZPackage pkg)
+        {
+            pkg.Write(GroundSyncCellSizeMarker);
+            pkg.Write(FireConfig.GroundCellSize.Value);
+        }
+
+        /// <summary>
+        /// The server's cell size from a sync package's trailer, or this machine's own when there
+        /// is none. Leaves the read position where it was, at the start of the lists.
+        /// </summary>
+        private static float ReadGroundSyncCellSize(ZPackage pkg)
+        {
+            float local = FireConfig.GroundCellSize.Value;
+            int start = pkg.GetPos();
+            bool has = false;
+            float size = 0f;
+            try
+            {
+                int ignited = pkg.ReadInt();
+                if (ignited < 0 || ignited > 1_000_000) return local;
+                pkg.SetPos(pkg.GetPos() + ignited * 12);  // int x, int z, float y
+                int expired = pkg.ReadInt();
+                if (expired < 0 || expired > 1_000_000) return local;
+                pkg.SetPos(pkg.GetPos() + expired * 8);   // int x, int z
+                if (pkg.Size() - pkg.GetPos() >= 8 && pkg.ReadInt() == GroundSyncCellSizeMarker)
+                {
+                    size = pkg.ReadSingle();
+                    has = true;
+                }
+            }
+            catch (System.Exception) { has = false; }
+            finally { pkg.SetPos(start); }
+            return FireMath.SyncCellSize(has, size, local);
         }
 
         /// <summary>
@@ -3635,6 +3976,10 @@ namespace FireFront.Fire
             FireLogger.Debug($"[SYNC-DIAG] GroundFireSync arrived from {sender} (IsServer={ValheimBridge.IsServer()}).");
             if (ValheimBridge.IsServer()) return;
             if (!ValheimBridge.IsFromServer(sender)) return; // same forgery guard as the object handlers
+
+            // 1.0.2: positions use the SERVER's GroundCellSize, carried after the lists (see
+            // WriteGroundSyncTrailer). Read first, so every cell below is placed with it.
+            float cellSize = ReadGroundSyncCellSize(pkg);
 
             int ignitedCount = pkg.ReadInt();
             int expiredCountPeek = 0; // logged after reading, just for the trace line below
@@ -3654,10 +3999,11 @@ namespace FireFront.Fire
                 // me" has to read this, not the VFX dictionary: with visuals switched off there are
                 // no GameObjects at all, and keying behaviour off them would make a setting about
                 // appearance silently change what fire does to you.
-                _remoteGroundCells[key] = y;
+                Vector3 centre = new Vector3(FireMath.CellCentre(x, cellSize), y, FireMath.CellCentre(z, cellSize));
+                _remoteGroundCells[key] = centre;
 
                 if (!_remoteGroundVfx.ContainsKey(key) && _remoteVfxQueuedKeys.Add(key))
-                    _remoteVfxSpawnQueue.Add((key, CellCenter(key, y)));
+                    _remoteVfxSpawnQueue.Add((key, centre));
             }
 
             int expiredCount = pkg.ReadInt();
@@ -3681,10 +4027,10 @@ namespace FireFront.Fire
                 // 2.4-3.3 m blot per 1 m cell, 2.7 multiply blots deep over every burnt square
                 // metre, burnt ground pushed toward black.
                 if (FireConfig.EffectiveScorchMarksEnabled &&
-                    _remoteGroundCells.TryGetValue(key, out float scorchY))
+                    _remoteGroundCells.TryGetValue(key, out Vector3 scorchAt))
                 {
-                    QueueScorchMark(CellCenter(key, scorchY),
-                        FireConfig.GroundCellSize.Value,
+                    QueueScorchMark(scorchAt,
+                        cellSize,
                         FireConfig.ScorchMarkLifetimeSeconds.Value);
                 }
 
@@ -3749,7 +4095,10 @@ namespace FireFront.Fire
         private const float SnapshotRetrySeconds = 10f; // must exceed the server's 5 s per-sender cooldown or the retry is swallowed
         private const int SnapshotMaxRequests = 3;
         private float _nextWarmthCheck;
-        private readonly Dictionary<GroundCellKey, float> _remoteGroundCells = new Dictionary<GroundCellKey, float>();
+        // Keyed by the SERVER's cell indices; the value is the cell's centre, placed with the
+        // server's cell size when the cell arrived (1.0.2; was the height alone, placed with this
+        // machine's own GroundCellSize, so a client set differently drew the fire elsewhere).
+        private readonly Dictionary<GroundCellKey, Vector3> _remoteGroundCells = new Dictionary<GroundCellKey, Vector3>();
 
         // A scorch decal waits for its zone. A cell can go out anywhere on the map, and the sync
         // stream delivers the expiry during the loading screen: the first play test logged five
@@ -3914,9 +4263,9 @@ namespace FireFront.Fire
                 return found;
             }
 
-            foreach (KeyValuePair<GroundCellKey, float> kv in _remoteGroundCells)
+            foreach (KeyValuePair<GroundCellKey, Vector3> kv in _remoteGroundCells)
             {
-                Vector3 c = CellCenter(kv.Key, kv.Value);
+                Vector3 c = kv.Value;
                 float d = (c - pos).sqrMagnitude;
                 if (d < best) { best = d; fire = c; found = true; }
             }
@@ -4098,6 +4447,13 @@ namespace FireFront.Fire
 
         private void SpreadPass()
         {
+            // 1.0.2: _spreadIgniter names the fire being spread FROM, only for the length of the pass.
+            try { SpreadPassCore(); }
+            finally { _spreadIgniter = 0L; }
+        }
+
+        private void SpreadPassCore()
+        {
             if (_burning.Count == 0 && _groundBurning.Count == 0) return;
 
             // The ramp is PER EVENT and so is the reach it scales. This used to call the
@@ -4152,6 +4508,7 @@ namespace FireFront.Fire
             {
                 if (!_burning.TryGetValue(burnerId, out BurningState burnerState)) continue;
                 if (Time.time - burnerState.IgnitedAt < maturitySeconds) continue;
+                _spreadIgniter = burnerState.Igniter;
 
                 float ramp = GetRampFraction(burnerState.EventId);
                 float effectiveSpreadRadius = FireConfig.EffectiveSpreadRadius * ramp;
@@ -4199,6 +4556,7 @@ namespace FireFront.Fire
                 foreach (GroundCellKey key in _groundScratch)
                 {
                     GroundCellState cellState = _groundBurning[key];
+                    _spreadIgniter = cellState.Igniter;
                     float y = cellState.Y;
                     Vector3 origin = CellCenter(key, y);
                     float groundRadius = FireConfig.EffectiveGroundSpreadRadius * GetRampFraction(cellState.EventId);
@@ -4358,12 +4716,21 @@ namespace FireFront.Fire
                 if ((candidate.Position - origin).sqrMagnitude > radiusSqr) continue;
                 if (_burning.ContainsKey(candidate.Id)) continue;
                 if (_queue.Contains(candidate.Id)) continue;
+                // 1.0.2: TryIgnite's two refusals, asked here from the ZDO, before an instance is
+                // built and claimed only to be refused. Otherwise every soaked tree (a Dousing Bomb
+                // line) and every tree past the Ashlands edge within reach of a front was built,
+                // taken from the player beside it and torn down again, every cycle.
+                if (IsSoaked(candidate.Id)) continue;
+                if (AshlandsBarsFireAt(candidate.Position)) continue;
 
                 Component target = ValheimBridge.ComponentFromZdoid(candidate.Id);
                 if (target == null) continue;
                 TryIgnite(target);
             }
         }
+
+        /// <summary>True while a doused object still refuses fire (see _dousedUntil).</summary>
+        private bool IsSoaked(ZDOID id) => _dousedUntil.TryGetValue(id, out float wetUntil) && Time.time < wetUntil;
 
         // Scratch for IgniteBurnablesNear only — _zdoCandidates is the spread
         // cycle's 5s cache and a console command must not clobber it.

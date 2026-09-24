@@ -25,5 +25,7 @@
     <Compile Include="..\..\Config\FireConfig.cs" Link="Config\FireConfig.cs" />
     <!-- 0.24: the culture-invariant number reader and writer. Pure; run under ten cultures. -->
     <Compile Include="..\..\Utils\InvariantNumbers.cs" Link="Utils\InvariantNumbers.cs" />
+    <!-- 1.0.2: the pure half of the review fixes (tree tick, rain aging, sync cell size, reach). -->
+    <Compile Include="..\..\Fire\FireMath.cs" Link="Fire\FireMath.cs" />
   </ItemGroup>
 </Project>
