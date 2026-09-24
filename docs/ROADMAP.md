@@ -1,15 +1,15 @@
 # FireFront: the road from 0.22.1 to 1.0
 
-Written 2026-09-21 against main `d5aa62d` (0.22.1). Inputs: docs/HANDOFF.md, CHANGELOG.md, README.md, docs/CONFIG-KEY-MAP.md, the code's own comments, GitHub issues and PR #3, read by four agents; two release proposals from opposite angles (player-facing failure first, engineering risk first); an Opus judge and an Opus completeness critic; and the owner's and this author's own knowledge of what the last four weeks found in play. Sixty-six open items came out of that. This document is a proposed order for them; every item carries its source so it can be checked or argued with.
+Written 2026-09-21 against main `d5aa62d` (0.22.1). Inputs: docs/HANDOFF.md, CHANGELOG.md, README.md, docs/CONFIG-KEY-MAP.md, the code's own comments, GitHub issues and PR #3, read by four agents; two release proposals from opposite angles (player-facing failure first, engineering risk first); an Opus judge and an Opus completeness critic; and RavenIron's and this author's own knowledge of what the last four weeks found in play. Sixty-six open items came out of that. This document is a proposed order for them; every item carries its source so it can be checked or argued with.
 
 ## What 1.0 means
 
 Someone who has never talked to either of us can run this on a public dedicated server and get what the store page describes: settings that do what they say, no way for a non-admin to change the server, and a world that survives an upgrade or a downgrade. Four conditions, each with a check that can be run:
 
-1. **No unauthenticated client can change server behaviour.** Every server-side mutation that a client can request passes the server's own admin check or is clamped against the server's own config. Check: a non-admin client types `fireset burntheworld true`, drags a ConfigurationManager slider, throws a Dousing Bomb with a forged radius, sends a forged tree-damage RPC and a `FireFront_PaintAssign` burst; all are refused and logged, and the owner's admin equivalents still work.
+1. **No unauthenticated client can change server behaviour.** Every server-side mutation that a client can request passes the server's own admin check or is clamped against the server's own config. Check: a non-admin client types `fireset burntheworld true`, drags a ConfigurationManager slider, throws a Dousing Bomb with a forged radius, sends a forged tree-damage RPC and a `FireFront_PaintAssign` burst; all are refused and logged, and the admin equivalents still work.
 2. **Nothing configurable fails silently.** A key that has no effect on the machine reading it says so in its own description in the generated `.cfg`; a preset that overrides a key logs the override when it takes effect; a client and server on different versions are told so at connect time. Check: turn on LowSpecPreset and read the five things it disabled in the log; join with a mismatched DLL and read the warning.
 3. **The README describes what happens on a dedicated server**, which is the platform the mod is built for, rather than on a hosted game. Check: read README.md end to end with the dedicated server as the reference. Two lines do not match yet: README.md:45 (creatures do not burn headless) and README.md:57 (dirt paths, outside the ring of real zones near world origin).
-4. **Nothing ships on a reading alone.** Every release below merges after one evening on the rig with the owner, and every release that touches the look after one with Wu'barrk present. 0.22.1's real defects, the velocity-curve error that wrote 80,000 log lines, the decal that multiplied the ground by white, the five marks spawned 500 m away during a loading screen, were all found in play after review passes had missed them. Evidence means a log line, a screenshot or a frametime capture recorded in the CHANGELOG entry.
+4. **Nothing ships on a reading alone.** Every release below merges after one evening on the rig with RavenIron, and every release that touches the look after one with Wu'barrk present. 0.22.1's real defects, the velocity-curve error that wrote 80,000 log lines, the decal that multiplied the ground by white, the five marks spawned 500 m away during a loading screen, were all found in play after review passes had missed them. Evidence means a log line, a screenshot or a frametime capture recorded in the CHANGELOG entry.
 
 And 1.0 comes with the things a new admin looks for: a licence, an admin guide, a note on what the mod leaves in a world save and how to remove it, a checksum on the release, and a line about the one piece of player data it keeps.
 
@@ -21,7 +21,7 @@ Fire spreads, climbs trees by their health, chars them, leaves soot and, on requ
 
 ## The shorter road (decided 2026-09-23)
 
-After 0.23 shipped, the owner chose a shorter road to 1.0 over the seven releases below. 1.0 is:
+After 0.23 shipped, RavenIron chose a shorter road to 1.0 over the seven releases below. 1.0 is:
 
 - **0.23 Authority**, shipped and played (v0.23.0).
 - **0.24 as cut**: the connect-time version check with one wire protocol number, and culture-invariant numbers everywhere, the fire save file included. Plus the **MIT licence**, which came forward from 0.29.
@@ -89,7 +89,7 @@ Rig test: hoe a path 300 m from origin, light grass on one side, watch it stop.
 - The three decal items the 0.22.1 reviews accepted for the time being: a cell that re-burns after its mark spawned gets a second coincident blot for the overlap of their lifetimes (replace the old mark rather than stack); the quad's spin is random per peer (seed it from the cell); and the 0.22.1 client checks nobody has confirmed run, the atlas-species ember masks, the retired-mask reaper mid-glow, the shared 30-90 m fade ramp (docs/HANDOFF.md:28-63).
 - Move the charred albedo and normal build off the main thread (docs/HANDOFF.md:88-90); the release that made everything else asynchronous scoped this as its follow-up.
 - Bound charred-texture memory. The charred albedo and normal are built at the source bark texture's full resolution as uncompressed RGBA32 with mipmaps, cached one pair per vanilla texture with no cap on species and no compression, and freed only when the game exits, not on world unload. Cap the cache, compress, and release on world unload.
-- `TreeDestructionRate` 65 to 80, the number the owner asked for, through a ConfigLedger rung; and a harness test that a forgotten rung fails the build, because every release in this plan moves a default and the ledger is hand-maintained (CHANGELOG.md:586-624 records eight corrections to it the last time).
+- `TreeDestructionRate` 65 to 80, the number RavenIron asked for, through a ConfigLedger rung; and a harness test that a forgotten rung fails the build, because every release in this plan moves a default and the ledger is hand-maintained (CHANGELOG.md:586-624 records eight corrections to it the last time).
 
 Rig test: both of us on the rig, a burnt pine forest, a coverage change mid-glow, an hour of play with the memory profiler open.
 
