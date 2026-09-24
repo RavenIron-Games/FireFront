@@ -32,6 +32,15 @@ Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2
 - **Soaked trees are left alone.** Spread skipped a doused tree (a Dousing Bomb line) or a tree
   past the Ashlands edge only after building it and taking it from the nearby player, every
   0.75 s. It now skips them before building anything.
+- **Each fire remembers who lit it.** Until now FireFront kept one igniter for the whole map,
+  so a companion mod such as Ragnarok's Wrath could only blame whoever lit the oldest fire
+  still burning. Now every burning object and ground cell records the player who lit it, fire
+  that spreads keeps the igniter of the fire it came from, and the igniter is saved and
+  restored with the fire. A save from an older version loads with the igniter unknown. The
+  old map-wide value is unchanged, so older companion builds keep working. Newer ones can ask
+  for each fire's igniter through `FireManager.CollectActiveFiresWithIgniters` and
+  `FireManager.FireIgniterNear`. Nothing new is sent between players, so 1.0.1 clients still
+  play with 1.0.2 servers.
 - **Rain no longer puts out every fire at once after a pause.** Turning fire back on with
   `fireset enabled true` charged the whole pause as rain time, so every fire in the rain went
   out on resume. Rain now ages fire by at most two spread cycles at a time.

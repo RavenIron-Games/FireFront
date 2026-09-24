@@ -1,5 +1,6 @@
 using System;
 using FireFront.Fire;
+using FireFront.Utils;
 
 namespace FireFront.Tests
 {
@@ -75,6 +76,44 @@ namespace FireFront.Tests
             check("reach: diagonal just past the limit is refused", !FireMath.WithinReach(0f, 0f, 227f, 227f, 320f));
             check("reach: a NaN target is refused", !FireMath.WithinReach(0f, 0f, float.NaN, 0f, 320f));
             check("reach: an infinite target is refused", !FireMath.WithinReach(0f, 0f, float.PositiveInfinity, 0f, 320f));
+
+            // --- 1.0.2 per-fire igniter -----------------------------------------------------
+            const long A = 76561198000000001L, B = 76561198000000002L;
+            check("igniter: a player's own hit wins over the fire it spread from", FireMath.ResolveIgniter(B, A) == B);
+            check("igniter: spread inherits the source fire's igniter", FireMath.ResolveIgniter(0L, A) == A);
+            check("igniter: natural fire spreading stays natural", FireMath.ResolveIgniter(0L, 0L) == 0L);
+            check("igniter: a player lighting from a natural fire is billed", FireMath.ResolveIgniter(A, 0L) == A);
+            // A chain: A lights a tree, it spreads to ground, the ground to another tree.
+            long chain = FireMath.ResolveIgniter(0L, FireMath.ResolveIgniter(0L, FireMath.ResolveIgniter(A, 0L)));
+            check("igniter: A's fire is still A's three hops out", chain == A);
+
+            // Store lines. The writer appends the igniter as the LAST field; the readers (this
+            // build and every older one) index fields by position, so older builds never see it.
+            string newObj = string.Join("\t", "obj", "0", "123", "10.5", "30", "-600.25", "200", "40", "Beech1", InvariantNumbers.Format(A));
+            string oldObj = string.Join("\t", "obj", "0", "123", "10.5", "30", "-600.25", "200", "40", "Beech1");
+            string newGround = string.Join("\t", "ground", "10", "-600", "30", "20", InvariantNumbers.Format(B));
+            string oldGround = string.Join("\t", "ground", "10", "-600", "30", "20");
+            string[] no = newObj.Split('\t'), oo = oldObj.Split('\t'), ng = newGround.Split('\t'), og = oldGround.Split('\t');
+            check("store: a 1.0.2 obj line restores its igniter", FireMath.IgniterField(no, 9) == A);
+            check("store: a 1.0.2 obj line keeps the prefab at field 8 for older builds", no[8] == "Beech1");
+            check("store: a pre-1.0.2 obj line restores with igniter 0", FireMath.IgniterField(oo, 9) == 0L);
+            check("store: a 1.0.2 ground line restores its igniter", FireMath.IgniterField(ng, 5) == B);
+            check("store: a 1.0.2 ground line keeps remaining time at field 4 for older builds",
+                InvariantNumbers.ParseFloat(ng[4]) == 20f);
+            check("store: a pre-1.0.2 ground line restores with igniter 0", FireMath.IgniterField(og, 5) == 0L);
+            check("store: an unreadable igniter is 0, never a throw", FireMath.IgniterField(new[] { "obj", "x" }, 1) == 0L);
+            check("store: a negative field index is 0", FireMath.IgniterField(no, -1) == 0L);
+            check("store: null fields are 0", FireMath.IgniterField(null, 9) == 0L);
+
+            // FireIgniterNear's distance rule.
+            float bestSqr = 10f * 10f;
+            check("near: a fire 6 m away is within 10", FireMath.CloserOnGround(0f, 0f, 6f, 0f, ref bestSqr, false) && near(bestSqr, 36f));
+            check("near: a farther fire does not replace it", !FireMath.CloserOnGround(0f, 0f, 8f, 0f, ref bestSqr, true));
+            check("near: a nearer fire does", FireMath.CloserOnGround(0f, 0f, 0f, 3f, ref bestSqr, true) && near(bestSqr, 9f));
+            float none = 5f * 5f;
+            check("near: nothing past the radius", !FireMath.CloserOnGround(0f, 0f, 6f, 0f, ref none, false));
+            check("near: the radius edge counts", FireMath.CloserOnGround(0f, 0f, 5f, 0f, ref none, false));
+            check("near: NaN never matches", !FireMath.CloserOnGround(0f, 0f, float.NaN, 0f, ref none, false));
         }
     }
 }

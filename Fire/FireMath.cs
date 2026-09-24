@@ -55,6 +55,38 @@ namespace FireFront.Fire
             return serverSize;
         }
 
+        /// <summary>
+        /// 1.0.2: the igniter a new fire is booked to. A player's own hit wins; otherwise the fire
+        /// inherits the igniter of the fire it spread from; 0 when neither is known (natural fire,
+        /// lightning, a console command, or a store written before 1.0.2).
+        /// </summary>
+        public static long ResolveIgniter(long direct, long spreadSource) => direct != 0L ? direct : spreadSource;
+
+        /// <summary>
+        /// 1.0.2: the igniter field of a fire store line, or 0 when the line has no such field (a
+        /// store written before 1.0.2) or it cannot be read. Never throws: a bad igniter must not
+        /// cost the fire its restore.
+        /// </summary>
+        public static long IgniterField(string[] fields, int index)
+        {
+            if (fields == null || index < 0 || index >= fields.Length) return 0L;
+            try { return FireFront.Utils.InvariantNumbers.ParseLong(fields[index]); }
+            catch (Exception) { return 0L; }
+        }
+
+        /// <summary>
+        /// 1.0.2: true, and <paramref name="bestSqr"/> updated, when (x, z) is closer to (px, pz) on
+        /// the ground plane than the best so far (or, with nothing found yet, within it).
+        /// </summary>
+        public static bool CloserOnGround(float px, float pz, float x, float z, ref float bestSqr, bool foundAlready)
+        {
+            float dx = x - px, dz = z - pz;
+            float d2 = dx * dx + dz * dz;
+            if (float.IsNaN(d2)) return false;
+            if (foundAlready ? d2 < bestSqr : d2 <= bestSqr) { bestSqr = d2; return true; }
+            return false;
+        }
+
         /// <summary>True when (x, z) lies within <paramref name="reach"/> metres of (refX, refZ) on the ground plane.</summary>
         public static bool WithinReach(float refX, float refZ, float x, float z, float reach)
         {

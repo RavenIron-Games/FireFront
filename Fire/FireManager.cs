@@ -46,6 +46,7 @@ namespace FireFront.Fire
         public float Y;
         public bool YIsReal;  // false = Y is inherited from the igniter, not measured. See IsStandingInFire.
         public int EventId;   // which fire event this cell belongs to (0 = unassigned/legacy)
+        public long Igniter;  // 1.0.2: who lit THIS fire, inherited along spread; 0 = natural/unknown
     }
 
     public class FireManager : MonoBehaviour
@@ -73,6 +74,7 @@ namespace FireFront.Fire
             public int KillAttempts; // bounded retry if resolving a live Component at expiry fails
             public int EventId;      // which fire event this burner belongs to (0 = unassigned/legacy)
             public bool Smouldering; // its VFX has been dropped to embers+smoke (cosmetic only)
+            public long Igniter;     // 1.0.2: who lit THIS fire, inherited along spread; 0 = natural/unknown
         }
 
         private readonly Dictionary<ZDOID, BurningState> _burning = new Dictionary<ZDOID, BurningState>();
@@ -690,6 +692,76 @@ namespace FireFront.Fire
         /// </summary>
         public long CurrentFireIgniterPlayerId => _fireIgniterPlayerId;
 
+        // --- 1.0.2: who lit each fire ------------------------------------------------------
+        //
+        // Every burning object and ground cell carries its own igniter: the player whose hit lit
+        // it, or, for anything fire spread to, the igniter of the burner or cell it spread FROM.
+        // So a player's fire stays theirs however far it travels, and a natural fire or a second
+        // player's fire elsewhere is not billed to them. Saved with the fire (store fields added
+        // at the end of each line, so older builds still read the store) and restored with it;
+        // a store written before 1.0.2 restores its fires with igniter 0. Server side only, like
+        // the rest of the simulation; nothing new goes over the wire.
+
+        // The igniter of the burner or cell SpreadPass is spreading from right now; 0 outside it.
+        private long _spreadIgniter;
+
+        // Igniters of queued objects, so a fire that waited for room keeps its culprit.
+        private readonly Dictionary<ZDOID, long> _queuedIgniters = new Dictionary<ZDOID, long>();
+
+        /// <summary>
+        /// PUBLIC CROSS-MOD CONTRACT (added 1.0.2), the per-fire companion to
+        /// <see cref="CollectActiveFirePositions"/> and <see cref="CurrentFireIgniterPlayerId"/>.
+        /// Appends one entry per active fire to BOTH lists, in the same order as
+        /// CollectActiveFirePositions: the fire's world position to <paramref name="positions"/>
+        /// and the persistent player id that lit it (inherited along spread) to
+        /// <paramref name="igniters"/>, 0 for natural or unknown. Neither list is cleared first.
+        /// Ragnarok's Wrath resolves this by reflection; renaming or re-signing it is a breaking
+        /// change for that mod. Meaningful on the simulation authority only.
+        /// </summary>
+        public void CollectActiveFiresWithIgniters(List<Vector3> positions, List<long> igniters)
+        {
+            if (positions == null || igniters == null) return;
+
+            foreach (KeyValuePair<ZDOID, BurningState> kv in _burning)
+            {
+                positions.Add(kv.Value.Position);
+                igniters.Add(kv.Value.Igniter);
+            }
+
+            foreach (KeyValuePair<GroundCellKey, GroundCellState> kv in _groundBurning)
+            {
+                positions.Add(CellCenter(kv.Key, kv.Value.Y));
+                igniters.Add(kv.Value.Igniter);
+            }
+        }
+
+        /// <summary>
+        /// PUBLIC CROSS-MOD CONTRACT (added 1.0.2): the igniter of the nearest active fire within
+        /// <paramref name="radius"/> metres of <paramref name="position"/> (horizontal distance),
+        /// or 0 when no fire is that close or the nearest one has no known igniter. Same authority
+        /// and stability rules as <see cref="CollectActiveFiresWithIgniters"/>.
+        /// </summary>
+        public long FireIgniterNear(Vector3 position, float radius)
+        {
+            if (float.IsNaN(radius) || radius < 0f) return 0L;
+            float best = radius * radius;
+            long igniter = 0L;
+            bool found = false;
+            foreach (BurningState s in _burning.Values)
+            {
+                if (FireMath.CloserOnGround(position.x, position.z, s.Position.x, s.Position.z, ref best, found))
+                { igniter = s.Igniter; found = true; }
+            }
+            float size = FireConfig.GroundCellSize.Value;
+            foreach (KeyValuePair<GroundCellKey, GroundCellState> kv in _groundBurning)
+            {
+                if (FireMath.CloserOnGround(position.x, position.z,
+                        FireMath.CellCentre(kv.Key.X, size), FireMath.CellCentre(kv.Key.Z, size), ref best, found))
+                { igniter = kv.Value.Igniter; found = true; }
+            }
+            return igniter;
+        }
+
         /// <summary>
         /// External read surface: append the world position of every active fire — burning
         /// objects and burning ground cells — to <paramref name="into"/>.
@@ -1272,6 +1344,9 @@ namespace FireFront.Fire
             int eventId = EventForPosition(targetPos, igniterPlayerId);
             int effectiveMax = Mathf.Max(1, Mathf.RoundToInt(FireConfig.EffectiveMaxConcurrentBurning * GetRampFraction(eventId)));
 
+            // 1.0.2: this fire's own igniter: whoever's hit lit it, else the fire it spread from.
+            long fireIgniter = FireMath.ResolveIgniter(igniterPlayerId, _spreadIgniter);
+
             if (BurningCountForEvent(eventId) < effectiveMax)
             {
                 if (_fireStartTime < 0f) _fireStartTime = Time.time;
@@ -1280,10 +1355,11 @@ namespace FireFront.Fire
                     _fireOrigin = targetPos;                 // legacy global, still written to the sidecar
                     _fireIgniterPlayerId = igniterPlayerId;
                 }
-                StartBurning(target, id, eventId);
+                StartBurning(target, id, eventId, fireIgniter);
             }
             else if (_queue.TryEnqueue(id))
             {
+                if (fireIgniter != 0L) RememberQueuedIgniter(id, fireIgniter);
                 FireLogger.Debug($"Queued ({_queue.Count}/{_queue.Capacity}): {ValheimBridge.NameOf(target)}");
             }
             // else: queue full -> silent drop; spread re-attempts next cycle.
@@ -1347,6 +1423,7 @@ namespace FireFront.Fire
             _pendingIgniteResolutions.Clear();
             _burning.Clear();
             _queue.Clear();
+            _queuedIgniters.Clear();
             _groundBurning.Clear();
             _groundVfx.Clear();
             _groundExhausted.Clear();
@@ -1403,6 +1480,8 @@ namespace FireFront.Fire
 
             _burning.Clear();
             _queue.Clear();
+            _queuedIgniters.Clear();
+            _spreadIgniter = 0L;
             _dousedUntil.Clear();
             _groundBurning.Clear();
             _groundExhausted.Clear();
@@ -1503,14 +1582,16 @@ namespace FireFront.Fire
                   .Append(InvariantNumbers.Format(at.x)).Append('\t').Append(InvariantNumbers.Format(at.y)).Append('\t').Append(InvariantNumbers.Format(at.z)).Append('\t')
                   .Append(InvariantNumbers.Format(kv.Value.ExpireAt - now)).Append('\t')
                   .Append(InvariantNumbers.Format(now - kv.Value.IgnitedAt)).Append('\t')      // burn age, so restored burners keep their spread maturity
-                  .Append(kv.Value.PrefabName).Append('\n');           // field 8, 0.21.6: half of what the entry is keyed on now.
+                  .Append(kv.Value.PrefabName).Append('\t')           // field 8, 0.21.6: half of what the entry is keyed on now.
+                  .Append(InvariantNumbers.Format(kv.Value.Igniter)).Append('\n'); // field 9, 1.0.2: who lit it. Older builds stop at 8.
                 // Fields 1-2 still carry the ZDOID and are DIAGNOSTIC ONLY - a ZDOID is reassigned
                 // on every world load. Kept so a store stays readable by an older build.
             }
             foreach (KeyValuePair<GroundCellKey, GroundCellState> kv in _groundBurning)
             {
                 sb.Append("ground\t").Append(InvariantNumbers.Format(kv.Key.X)).Append('\t').Append(InvariantNumbers.Format(kv.Key.Z)).Append('\t')
-                  .Append(InvariantNumbers.Format(kv.Value.Y)).Append('\t').Append(InvariantNumbers.Format(kv.Value.ExpireAt - now)).Append('\n');
+                  .Append(InvariantNumbers.Format(kv.Value.Y)).Append('\t').Append(InvariantNumbers.Format(kv.Value.ExpireAt - now)).Append('\t')
+                  .Append(InvariantNumbers.Format(kv.Value.Igniter)).Append('\n'); // field 5, 1.0.2: who lit it. Older builds stop at 4.
             }
             foreach (KeyValuePair<GroundCellKey, float> kv in _groundExhausted)
             {
@@ -1585,7 +1666,8 @@ namespace FireFront.Fire
                             float y = InvariantNumbers.ParseFloat(f[3]);
                             // A save written by 1.0.0 can hold Ashlands fire; it is dropped, not restored.
                             if (AshlandsBarsFireAt(CellCenter(key, y))) { skipped++; break; }
-                            _groundBurning[key] = new GroundCellState { ExpireAt = now + remaining, Y = y, YIsReal = true };
+                            _groundBurning[key] = new GroundCellState { ExpireAt = now + remaining, Y = y, YIsReal = true,
+                                                                        Igniter = FireMath.IgniterField(f, 5) }; // 0 from a pre-1.0.2 store
                             _groundIgnitedSinceFlush.Add((key, y)); // clients learn of it at the next flush
                             // Queued rather than built here: the restore installs the whole fire at
                             // once, and building fifty ground objects in one frame is the boot spike
@@ -1648,6 +1730,7 @@ namespace FireFront.Fire
                                 st.IgnitedAt = f.Length > 7
                                     ? now - InvariantNumbers.ParseFloat(f[7])
                                     : now - FireConfig.BurnDurationSeconds.Value;
+                                st.Igniter = FireMath.IgniterField(f, 9); // 0 from a pre-1.0.2 store
                                 _burning[id] = st;
                                 objects++;
                             }
@@ -2084,7 +2167,7 @@ namespace FireFront.Fire
             // rain arrives on later.
             float duration = FireConfig.GroundBurnDurationSeconds.Value;
 
-            _groundBurning[key] = new GroundCellState { ExpireAt = Time.time + duration, Y = realY, YIsReal = realYSampled, EventId = cellEventId };
+            _groundBurning[key] = new GroundCellState { ExpireAt = Time.time + duration, Y = realY, YIsReal = realYSampled, EventId = cellEventId, Igniter = _spreadIgniter };
             FireLogger.Debug($"Ground ignited ({_groundBurning.Count}/{effectiveGroundMax}) at cell ({key.X},{key.Z})");
             SpawnGroundVfxFor(key, CellCenter(key, realY));
             _groundIgnitedSinceFlush.Add((key, realY));
@@ -2266,7 +2349,7 @@ namespace FireFront.Fire
         // Cycle steps — object fire
         // ---------------------------------------------------------------
 
-        private void StartBurning(Component target, ZDOID id, int eventId)
+        private void StartBurning(Component target, ZDOID id, int eventId, long igniter)
         {
             Vector3 position = ValheimBridge.PositionOf(target);
             _burning[id] = new BurningState
@@ -2275,7 +2358,8 @@ namespace FireFront.Fire
                 IgnitedAt = Time.time,
                 Position = position,
                 PrefabName = ValheimBridge.PrefabNameOf(target),
-                EventId = eventId
+                EventId = eventId,
+                Igniter = igniter
             };
             FireLogger.Debug($"Ignited ({_burning.Count}/{FireConfig.MaxConcurrentBurning.Value}): {ValheimBridge.NameOf(target)}");
             SpawnVfxFor(id, position, target);
@@ -3197,9 +3281,25 @@ namespace FireFront.Fire
                 int evMax = Mathf.Max(1, Mathf.RoundToInt(FireConfig.EffectiveMaxConcurrentBurning * GetRampFraction(evId)));
                 if (BurningCountForEvent(evId) >= evMax) continue;
 
-                StartBurning(target, next, evId);
+                long queuedIgniter = 0L;
+                if (_queuedIgniters.TryGetValue(next, out queuedIgniter)) _queuedIgniters.Remove(next);
+                StartBurning(target, next, evId, queuedIgniter);
             }
         }
+
+        private void RememberQueuedIgniter(ZDOID id, long igniter)
+        {
+            // Bounded by the queue: entries whose object left the queue some other way are dropped
+            // once the table outgrows it, so it never holds more than about twice the queue.
+            if (_queuedIgniters.Count >= 2 * Mathf.Max(16, _queue.Capacity))
+            {
+                _queuedIgniterSweep.Clear();
+                foreach (ZDOID k in _queuedIgniters.Keys) if (!_queue.Contains(k)) _queuedIgniterSweep.Add(k);
+                for (int i = 0; i < _queuedIgniterSweep.Count; i++) _queuedIgniters.Remove(_queuedIgniterSweep[i]);
+            }
+            _queuedIgniters[id] = igniter;
+        }
+        private readonly List<ZDOID> _queuedIgniterSweep = new List<ZDOID>();
 
         // ---------------------------------------------------------------
         // Cycle steps — ground fire
@@ -4335,6 +4435,13 @@ namespace FireFront.Fire
 
         private void SpreadPass()
         {
+            // 1.0.2: _spreadIgniter names the fire being spread FROM, only for the length of the pass.
+            try { SpreadPassCore(); }
+            finally { _spreadIgniter = 0L; }
+        }
+
+        private void SpreadPassCore()
+        {
             if (_burning.Count == 0 && _groundBurning.Count == 0) return;
 
             // The ramp is PER EVENT and so is the reach it scales. This used to call the
@@ -4389,6 +4496,7 @@ namespace FireFront.Fire
             {
                 if (!_burning.TryGetValue(burnerId, out BurningState burnerState)) continue;
                 if (Time.time - burnerState.IgnitedAt < maturitySeconds) continue;
+                _spreadIgniter = burnerState.Igniter;
 
                 float ramp = GetRampFraction(burnerState.EventId);
                 float effectiveSpreadRadius = FireConfig.EffectiveSpreadRadius * ramp;
@@ -4436,6 +4544,7 @@ namespace FireFront.Fire
                 foreach (GroundCellKey key in _groundScratch)
                 {
                     GroundCellState cellState = _groundBurning[key];
+                    _spreadIgniter = cellState.Igniter;
                     float y = cellState.Y;
                     Vector3 origin = CellCenter(key, y);
                     float groundRadius = FireConfig.EffectiveGroundSpreadRadius * GetRampFraction(cellState.EventId);
