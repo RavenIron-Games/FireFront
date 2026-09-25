@@ -22,7 +22,7 @@ Fire is wind-driven, doused by rain, stopped by water (and by dirt paths in a ho
 
 | | |
 |---|---|
-| Valheim | 1.0.15 (built and tested against; older builds are not supported) |
+| Valheim | 1.0.16 (built and checked against it; last tested in game on 1.0.15; builds older than 1.0.15 are not supported) |
 | BepInEx | BepInExPack Valheim 5.4.2350 or newer |
 
 ## Installation
@@ -162,6 +162,7 @@ Known limits:
 - The fire visual is assembled in code from the game's own fire materials and particle recipes (flipbook flames, ember motes, lit smoke, heat shimmer, a soft-shadowed light), so it should sit next to a campfire without looking like another game — but it is not an authored asset. The charred bark is generated the same way, from each species' own bark texture, on your machine the first time a tree of that species chars.
 - Ray-traced lighting is not something any mod can add to Valheim: the game runs the built-in render pipeline with no ray-tracing support compiled in. Shadow-casting fire lights, HDR bloom, normal-mapped char, lit smoke and heat haze are the ceiling, and all of them are used.
 - Defaults are tuned aggressive. Expect fire to spread fast and hungrily unless you dial it down.
+- Changing `groundcellsize` on the server (or in your own game, in single player or when hosting) while ground fire burns moves the burning cells to scaled positions (doubling the size puts them twice as far from the world centre), and a fire save written then keeps the mixed cells. Change it only while no ground fire burns, and with `persistfires` on (the default) not across a restart that saved ground fire either: the saved cells load onto the new grid the same way.
 
 ## Licence
 

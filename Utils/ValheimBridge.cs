@@ -933,9 +933,10 @@ namespace FireFront.Utils
         // TerrainComp is networked (m_nview) AND writes per-zone terrain data that is SAVED WITH
         // THE WORLD, unlike every VFX and damage system in this file, which is runtime only. That
         // is why UseVanillaDirtPaint is opt-in. Six facts, read from the shipping 1.0.15 assembly
-        // on 2026-09-20. The publicized copy in libs\ has the same method bodies; what it gets
-        // wrong is visibility, which is why the private/public list at the end came from the
-        // shipping DLL and not from what compiles.
+        // on 2026-09-20; fact 2 also states what 1.0.16 changed (read 2026-09-25). The 1.0.15
+        // publicized copy in libs\ then had the same method bodies (libs\ is on 1.0.16 now);
+        // what a publicized copy gets wrong is visibility, which is why the private/public list
+        // at the end came from the shipping DLL and not from what compiles.
         //
         //   1. FindTerrainCompiler and Heightmap.FindHeightmap scan static lists of LOADED
         //      INSTANCES. A dedicated server keeps real zones only around its own reference
@@ -948,11 +949,18 @@ namespace FireFront.Utils
         //   2. A zone nobody has ever hoed has NO compiler. Vanilla's TerrainOp.Awake goes through
         //      Heightmap.GetAndCreateTerrainCompiler, which instantiates one; FindTerrainCompiler
         //      alone returns null for pristine forest, which is most of what burns. But creating
-        //      one is only safe when NO compiler ZDO exists for the zone anywhere: TerrainComp.Awake
-        //      destroys the OTHER compiler it finds, through ZNetScene, on every machine that has
-        //      one instantiated - so a duplicate created because the real one's ZDO had not been
-        //      instantiated here yet destroys the real one, and every hoe mark in it, for everyone.
-        //      Two peers creating one in the same second destroy each other's, on repeat. Hence:
+        //      one is only safe when NO compiler ZDO exists for the zone anywhere. On 1.0.15,
+        //      TerrainComp.Awake destroys the OTHER compiler it finds, through ZNetScene, on every
+        //      machine that has one instantiated - so a duplicate created because the real one's
+        //      ZDO had not been instantiated here yet destroys the real one, and every hoe mark in
+        //      it, for everyone. On 1.0.16 Awake destroys nothing: it puts both in
+        //      TerrainComp.s_duplicateInstances, and Start -> TryCleanInvalidTCs keeps the one with
+        //      the most m_operations (a tie keeps the newer instance, the 1.0.15 result) and
+        //      destroys the rest through ZNetScene, claiming an unowned loser first so its ZDO is
+        //      deleted. A fresh duplicate usually loses there, but one that has painted can tie or
+        //      win, and the loser's marks go with it. Two peers creating one in the same second
+        //      destroy each other's, on repeat (on 1.0.16 while their counts tie). 1.0.16's
+        //      ApplyOperation also refuses an invalid m_nview; nothing here calls it. Hence:
         //      exactly one painter per cell, elected by the server, which alone sees every peer
         //      and every compiler ZDO, and a per-cell "may create" flag the server sets only when
         //      it sees no compiler ZDO in that zone (FireManager.AssignPendingPaint). The painter
@@ -966,7 +974,8 @@ namespace FireFront.Utils
         //      and releases an owner that is gone or out of reach (ReleaseNearbyZDOS only looks
         //      around a peer's CURRENT position, so a compiler left behind by a teleport is held
         //      for good otherwise). An unowned compiler is claimed only for a zone the server
-        //      elected this machine for - vanilla's own Awake claims an unowned one the same way.
+        //      elected this machine for - vanilla's own duplicate cleanup claims an unowned one the
+        //      same way (in Awake on 1.0.15, in Start on 1.0.16; fact 2).
         //      A disc that spills into the next zone is painted there only if that compiler is
         //      already ours: its own elected painter may be claiming it this very second.
         //   4. Save writes the ZDO and does NOT regenerate the heightmap. Vanilla's DoOperation is

@@ -1233,7 +1233,7 @@ namespace FireFront.Commands
             // it to only one of the two routes buys nothing: anyone who could abuse the manager
             // could type the command instead. Worse, ZNet.LocalPlayerIsAdminOrHost answers false
             // whenever the server has no adminlist at all, which is every private test server, so
-            // the gate blocked the owner on their own machine with no message anywhere.
+            // the gate blocked the server's owner on their own machine with no message anywhere.
             //
             // The real check belongs on the SERVER, in ApplyRemote, against its own adminlist -
             // the unspoofable one, as the relayed commands already note. That is still the

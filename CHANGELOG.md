@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3 — 2026-09-25
+
+Updated due to 1.0.16 Patch.
+
 ## 1.0.2
 
 Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2 play together.
@@ -32,9 +36,10 @@ Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2
 - **Soaked trees are left alone.** Spread skipped a doused tree (a Dousing Bomb line) or a tree
   past the Ashlands edge only after building it and taking it from the nearby player, every
   0.75 s. It now skips them before building anything.
-- **Each fire remembers who lit it.** Until now FireFront kept one igniter for the whole map,
-  so a companion mod such as Ragnarok's Wrath could only blame whoever lit the first fire
-  since the map was last clear of fire, even after that fire had gone out. Now every burning object and ground cell records the player who lit it, fire
+- **Each fire remembers who lit it.** Until now the igniter FireFront saved and offered to
+  companion mods was one for the whole map, so Ragnarok's Wrath, for one, could only blame
+  whoever lit the first fire since the map was last clear of fire, even after that fire had
+  gone out. Now every burning object and ground cell records the player who lit it, fire
   that spreads keeps the igniter of the fire it came from, and the igniter is saved and
   restored with the fire. A save from an older version loads with the igniter unknown. The
   old map-wide value is unchanged, so older companion builds keep working. Newer ones can ask

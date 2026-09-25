@@ -1,6 +1,6 @@
 {
   "name": "FireFront",
-  "version_number": "1.0.2",
+  "version_number": "1.0.3",
   "website_url": "https://ravenirongames.com/",
   "description": "Fire that actually spreads: structure to structure, into the trees, across open ground. Wind-driven, rain-damped, stopped by water. Charred trees, burn scars, real drops, tree regrowth, fires that survive restarts and remember who lit them.",
   "dependencies": [
