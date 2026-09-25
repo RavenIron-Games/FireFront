@@ -1,35 +1,8 @@
 # Changelog
 
-## 1.0.3
+## 1.0.3 — 2026-09-25
 
-A rebuild for Valheim 1.0.16. Nothing about the fire changed: apart from the version number and
-code comments the code is 1.0.2's, no setting changed, and the wire protocol stays 1, so 1.0.1,
-1.0.2 and 1.0.3 play together.
-
-- **Checked against Valheim 1.0.16.** The game's 1.0.16 hotfix (2026-09-25) changed none of the
-  game methods FireFront patches or calls, every patch and every lookup by name that FireFront
-  makes finds the same thing on 1.0.15 and 1.0.16, and the mod builds cleanly against 1.0.16.
-  This DLL is built against 1.0.16. The game's network version did not change, so 1.0.15 and
-  1.0.16 players and servers still connect to each other. The one change near FireFront is how
-  the game settles two terrain-edit records for the same zone, which only the opt-in `dirtpaint`
-  can run into: 1.0.16 keeps the one holding more edits, where 1.0.15 kept whichever loaded last
-  (on a tie 1.0.16 does the same). FireFront still creates one only where the server sees none.
-- **Known issue, not fixed:** changing `groundcellsize` on the server (or in your own game, in
-  single player or when hosting) while ground fire burns moves the burning cells to scaled
-  positions (doubling the size puts them twice as far from the world centre), and a fire save
-  written then keeps the mixed cells. Change it only while no ground fire burns, and with
-  `persistfires` on (the default) not across a restart that saved ground fire either: the saved
-  cells load onto the new grid the same way. (1.0.2's cell-size fix covers a player whose own
-  setting differs from the server's, not a change to the server's own.)
-- The README's requirements line names Valheim 1.0.16, and its known limits carry the issue
-  above. The 1.0.2 entry below now says which igniter was one for the whole map: the one
-  FireFront saves and offers to companion mods, which 1.0.2 kept alongside the new per-fire
-  igniter.
-
-This DLL was built from the commit tagged `v1.0.3`; the GitHub release names that commit and
-gives the DLL's md5.
-
-Last tested in game as 1.0.2, on Valheim 1.0.15 (below). Off-game: 1815 checks, 0 failed.
+Updated due to 1.0.16 Patch.
 
 ## 1.0.2
 
