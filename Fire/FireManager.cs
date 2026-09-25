@@ -3699,8 +3699,10 @@ namespace FireFront.Fire
         /// Server side, once a second: hands every burnt cell to exactly ONE painter, decided per
         /// ZONE, because what has to be unique is the writer of a zone's compiler ZDO: only its
         /// OWNER can publish a write, and a zone nobody has touched has no compiler until someone
-        /// creates one, while creating one when another exists anywhere destroys the other with
-        /// every hoe mark in it (TerrainComp.Awake). The server is the one machine that sees every
+        /// creates one, while creating one when another exists anywhere destroys one of the two
+        /// with every mark in it: on 1.0.15 always the other (TerrainComp.Awake), on 1.0.16 the one
+        /// with fewer operations, the newer surviving a tie (TerrainComp.TryCleanInvalidTCs; see
+        /// ValheimBridge, terrain painting, fact 2). The server is the one machine that sees every
         /// peer and every compiler ZDO, so it decides both who paints and whether they may create.
         /// Per zone with burnt cells: the compiler's owner if it is connected and in reach (an
         /// owner that is not - a peer that left or teleported away, or this server after a world

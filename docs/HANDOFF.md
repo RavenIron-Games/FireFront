@@ -1,6 +1,36 @@
-# FireFront — 1.0.2 cut in progress (2026-09-24)
+# FireFront — 1.0.3 prepared, not cut (2026-09-25): rebuilt for Valheim 1.0.16
 
-**Resume point. Cut in progress, not yet released.** PR #7 (review fixes plus the per-fire
+**Resume point. Prepared on `release/1.0.3-prep`, not cut.** Valheim hot-fixed 1.0.15 to 1.0.16
+on 2026-09-25 (network version and save versions unchanged, so 1.0.15 and 1.0.16 players and
+servers connect to each other). A static check that day found FireFront needs no code change:
+it builds cleanly against the 1.0.16 assemblies (`libs\` is on 1.0.16), every Harmony target
+and every reflection-by-name lookup resolves the same on 1.0.15 and 1.0.16, and none of the 28
+game methods whose code changed is one FireFront patches or calls. So 1.0.3 is 1.0.2's code
+with the version string and comments changed, plus documents: the 1.0.3 CHANGELOG entry; the
+README requirements line (1.0.16) and a known-limits line for a live `groundcellsize` change
+(solo-batch finding 1, unfixed); the 1.0.2 entry's igniter sentence corrected to name what 1.0.2
+replaced, the one igniter FireFront saved and offered to companion mods for the whole map; and
+the docs/comments byline scrub. Not yet tested in game on 1.0.16.
+
+**1.0.16's terrain-compiler change (read 2026-09-25).** On 1.0.15, `TerrainComp.Awake` destroys
+the other compiler it finds in its zone. On 1.0.16 `Awake` destroys nothing: both go into
+`TerrainComp.s_duplicateInstances`, and `Start` -> `TryCleanInvalidTCs` keeps the one with the
+most `m_operations` (a tie keeps the newer instance, the 1.0.15 result) and destroys the rest,
+claiming an unowned loser first so its ZDO is deleted; `ApplyOperation` now refuses an invalid
+nview (FireFront never calls it). FireFront's guards (a painter creates a compiler only when it
+finds none and the server's MayCreate flag says the server sees none) stay correct and harmless,
+and the dirt-paint race comes out the same as on 1.0.15 or better. `UseVanillaDirtPaint` ships
+off. The comments in ValheimBridge.cs (terrain painting, facts 2 and 3) and on
+`FireManager.AssignPendingPaint` now state both versions; no code change.
+
+Cutting it: merge the branch, tag `v1.0.3` (lightweight, like `v1.0.2`), build the ship DLL
+from a fresh clone of the tagged commit, `tools\package.ps1`, a GitHub pre-release with the
+store zip, and the store upload (RavenIron's). Ragnarok's Wrath 0.28.0 pins FireFront 1.0.2
+exactly in its manifest; that pin stays at 1.0.2 until Ragnarok's Wrath's next cut.
+
+# FireFront — 1.0.2 (2026-09-24): released
+
+**State at 1.0.2. Released 2026-09-24.** PR #7 (review fixes plus the per-fire
 igniter) merged to `main` at `f2361bb`; that merge's tree is byte-identical to the
 in-game-tested commit `e720f2b`, test DLL md5 prefix `132226a3` (solo batch 2026-09-24,
 results in `SOLO-BATCH-results-2026-09-24.md`). CHANGELOG, README and docs/ROADMAP.md are
@@ -8,11 +38,11 @@ brought current for the release on `release/1.0.2-cut`; `manifest.json`'s websit
 points at the Raven Iron website. Ragnarok's Wrath's next release pins FireFront 1.0.2
 exactly, so 1.0.2 needs to be live on the store before any Ragnarok's Wrath upload.
 
-Still open: pushing `release/1.0.2-cut` and getting it onto `main`; the `v1.0.2` tag; the
-ship build from a fresh clone of the tagged commit (its md5 will match neither the test
-DLL's `132226a3` nor a provisional build's — the version string embeds the tagged commit's
-sha, so it reads `1.0.2+<sha>`); a GitHub pre-release with the store zip; and the store
-upload, which is RavenIron's to do. Open from the test: ff-5's soak half was not exercised
+Done at the cut: `release/1.0.2-cut` merged to `main` as PR #8 (`cc7986b`), tagged `v1.0.2`
+(lightweight); the ship build came from a fresh clone of that commit (version
+`1.0.2+cc7986b…`, md5 `abee9e53…`, 359,424 bytes; not the test DLL's `132226a3`); a GitHub
+pre-release carries the store zip; and RavenIron uploaded 1.0.2 to the store on 2026-09-24,
+before Ragnarok's Wrath 0.28.0. Open from the test: ff-5's soak half was not exercised
 (PARTIAL), and the six FireFront findings in `SOLO-BATCH-results-2026-09-24.md` are unfixed
 (a live `groundcellsize` change rescales stored cells, and CairnTest's store now mixes cell
 keys; the dousing-recipe warning at the main menu; the `[SPREAD-DIAGNOSTIC]` wording on a

@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.0.3
+
+A rebuild for Valheim 1.0.16. Nothing about the fire changed: apart from the version number and
+code comments the code is 1.0.2's, no setting changed, and the wire protocol stays 1, so 1.0.1,
+1.0.2 and 1.0.3 play together.
+
+- **Checked against Valheim 1.0.16.** The game's 1.0.16 hotfix (2026-09-25) changed none of the
+  game methods FireFront patches or calls, every patch and every lookup by name that FireFront
+  makes finds the same thing on 1.0.15 and 1.0.16, and the mod builds cleanly against 1.0.16.
+  This DLL is built against 1.0.16. The game's network version did not change, so 1.0.15 and
+  1.0.16 players and servers still connect to each other. The one change near FireFront is how
+  the game settles two terrain-edit records for the same zone, which only the opt-in `dirtpaint`
+  can run into: 1.0.16 keeps the one holding more edits, where 1.0.15 kept whichever loaded last
+  (on a tie 1.0.16 does the same). FireFront still creates one only where the server sees none.
+- **Known issue, not fixed:** changing `groundcellsize` on the server (or in your own game, in
+  single player or when hosting) while ground fire burns moves the burning cells to the new
+  grid, and a fire save written then keeps the mixed cells. Change it only while no ground fire
+  burns. (1.0.2's cell-size fix covers a player whose own setting differs from the server's, not
+  a change to the server's own.)
+- The README's requirements line names Valheim 1.0.16, and its known limits carry the issue
+  above. The 1.0.2 entry below now says which igniter 1.0.2 replaced: the one FireFront saved and
+  offered to companion mods, one for the whole map.
+
+This DLL was built from the commit tagged `v1.0.3`; the GitHub release names that commit and
+gives the DLL's md5.
+
+Last tested in game as 1.0.2, on Valheim 1.0.15 (below). Off-game: 1815 checks, 0 failed.
+
 ## 1.0.2
 
 Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2 play together.
@@ -32,8 +60,8 @@ Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2
 - **Soaked trees are left alone.** Spread skipped a doused tree (a Dousing Bomb line) or a tree
   past the Ashlands edge only after building it and taking it from the nearby player, every
   0.75 s. It now skips them before building anything.
-- **Each fire remembers who lit it.** Until now FireFront kept one igniter for the whole map,
-  so a companion mod such as Ragnarok's Wrath could only blame whoever lit the first fire
+- **Each fire remembers who lit it.** Until now the igniter FireFront saved and offered to
+  companion mods was one for the whole map, so a companion mod such as Ragnarok's Wrath could only blame whoever lit the first fire
   since the map was last clear of fire, even after that fire had gone out. Now every burning object and ground cell records the player who lit it, fire
   that spreads keeps the igniter of the fire it came from, and the igniter is saved and
   restored with the fire. A save from an older version loads with the igniter unknown. The
