@@ -1,18 +1,29 @@
-# FireFront — 1.0.3 prepared, not cut (2026-09-25): rebuilt for Valheim 1.0.16
+# FireFront — 1.0.3 (2026-09-25): released, rebuilt for Valheim 1.0.16
 
-**Resume point. Prepared on `release/1.0.3-prep`, not cut.** Valheim hot-fixed 1.0.15 to 1.0.16
-on 2026-09-25 (network version and save versions unchanged, so 1.0.15 and 1.0.16 players and
-servers connect to each other). A static check that day found FireFront needs no code change:
-it builds cleanly against the 1.0.16 assemblies (`libs\` is on 1.0.16), every Harmony target
-and every reflection-by-name lookup resolves the same on 1.0.15 and 1.0.16, and none of the 28
-game methods whose code changed is one FireFront patches or calls. So 1.0.3 is 1.0.2's code
-with the version string and comments changed, plus documents: the 1.0.3 CHANGELOG entry; the
-README requirements line (1.0.16) and a known-limits line for a live `groundcellsize` change
+**Released 2026-09-25.** Tagged `v1.0.3` (lightweight, like `v1.0.2`) on `5442f10` (branch
+`release/1.0.3-prep`); the GitHub pre-release carries the store zip (DLL `1.0.3+5442f10…`, md5
+`8a1fe405…`, 359,424 bytes). The store upload is RavenIron's step, pending as of 2026-09-25.
+Valheim hot-fixed 1.0.15 to 1.0.16 on 2026-09-25 (network version and save versions unchanged,
+so 1.0.15 and 1.0.16 players and servers connect to each other). A static check that day found
+FireFront needs no code change: it builds cleanly against the 1.0.16 assemblies (`libs\` is on
+1.0.16), every Harmony target and every reflection-by-name lookup resolves the same on 1.0.15
+and 1.0.16, and none of the 28 game methods whose code changed is one FireFront patches or
+calls. So 1.0.3 is 1.0.2's code with the version string and comments changed, plus documents:
+the 1.0.3 CHANGELOG entry, which since `5442f10` is the one line "Updated due to 1.0.16
+Patch."; the README requirements line (1.0.16) and a known-limits line for a live
+`groundcellsize` change, which is in the README's known limits only, not in the changelog
 (solo-batch finding 1, unfixed; the store keeps ground and spent cells as grid indices with no
 cell size, so a change across a restart that saved ground fire does the same, read from the
 code); the 1.0.2 entry's igniter sentence corrected: what was one for the whole map was the
 igniter FireFront saved and offered to companion mods (1.0.2 kept it and added one per fire);
-and the docs/comments byline scrub. Not yet tested in game on 1.0.16.
+and the docs/comments byline scrub.
+
+Smoke-tested in game 2026-09-25 with the ship DLL on a 1.0.16 dedicated server (Storm10) and
+one client: 1.0.3 loaded on both sides, `[VERSION]` same on both, `firestatus` answered with
+both `[server]` lines, a restored fire burned and drew scorch marks. Not tried: a new fire lit
+on 1.0.16, a second player, mixed 1.0.15/1.0.16. Seen on join: the client's `[AUTH] dropped a
+paint assignment: more than 10 in 5 s` (the restored fire's dirt-paint burst hitting
+FireFront's own limit, present since 0.23.0), cosmetic, a follow-up.
 
 **1.0.16's terrain-compiler change (read 2026-09-25).** On 1.0.15, `TerrainComp.Awake` destroys
 the other compiler it finds in its zone. On 1.0.16 `Awake` destroys nothing: both go into
@@ -25,10 +36,20 @@ and the dirt-paint race comes out the same as on 1.0.15 or better. `UseVanillaDi
 off. The comments in ValheimBridge.cs (terrain painting, facts 2 and 3) and on
 `FireManager.AssignPendingPaint` now state both versions; no code change.
 
-Cutting it: merge the branch, tag `v1.0.3` (lightweight, like `v1.0.2`), build the ship DLL
-from a fresh clone of the tagged commit, `tools\package.ps1`, a GitHub pre-release with the
-store zip, and the store upload (RavenIron's). Ragnarok's Wrath 0.28.0 pins FireFront 1.0.2
-exactly in its manifest; that pin stays at 1.0.2 until Ragnarok's Wrath's next cut.
+Done at the cut: `v1.0.3` sits on the branch commit `5442f10` itself, not on a merge commit
+(`v1.0.2` sits on PR #8's merge); the ship DLL was built from a fresh clone of `5442f10`
+against the 1.0.16 libs, and the GitHub pre-release "FireFront 1.0.3 — updated due to 1.0.16
+Patch" carries the store zip. Open: merge `release/1.0.3-prep` to `main` through a PR, with a
+merge commit (not squash or rebase), so the tagged commit is in main's history and `main`
+matches the release; and the store upload (RavenIron's, pending as of 2026-09-25). Ragnarok's
+Wrath 0.28.0 pins FireFront 1.0.2 exactly in its manifest; that pin stays at 1.0.2 until
+Ragnarok's Wrath's next cut.
+
+Carry into the next release (shipped files stay as released until then): README.md's
+requirements line says "built and checked against it; last tested in game on 1.0.15"; the
+2026-09-25 smoke test ran the 1.0.3 build in game on 1.0.16, so the next cut can say "built
+against it and smoke-tested in game on it; builds older than 1.0.15 are not supported". And
+the `[AUTH] dropped a paint assignment` line on join above, a code follow-up.
 
 # FireFront — 1.0.2 (2026-09-24): released
 
