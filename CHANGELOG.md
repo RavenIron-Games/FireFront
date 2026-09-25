@@ -15,13 +15,16 @@ code comments the code is 1.0.2's, no setting changed, and the wire protocol sta
   can run into: 1.0.16 keeps the one holding more edits, where 1.0.15 kept whichever loaded last
   (on a tie 1.0.16 does the same). FireFront still creates one only where the server sees none.
 - **Known issue, not fixed:** changing `groundcellsize` on the server (or in your own game, in
-  single player or when hosting) while ground fire burns moves the burning cells to the new
-  grid, and a fire save written then keeps the mixed cells. Change it only while no ground fire
-  burns. (1.0.2's cell-size fix covers a player whose own setting differs from the server's, not
-  a change to the server's own.)
+  single player or when hosting) while ground fire burns moves the burning cells to scaled
+  positions (doubling the size puts them twice as far from the world centre), and a fire save
+  written then keeps the mixed cells. Change it only while no ground fire burns, and with
+  `persistfires` on (the default) not across a restart that saved ground fire either: the saved
+  cells load onto the new grid the same way. (1.0.2's cell-size fix covers a player whose own
+  setting differs from the server's, not a change to the server's own.)
 - The README's requirements line names Valheim 1.0.16, and its known limits carry the issue
-  above. The 1.0.2 entry below now says which igniter 1.0.2 replaced: the one FireFront saved and
-  offered to companion mods, one for the whole map.
+  above. The 1.0.2 entry below now says which igniter was one for the whole map: the one
+  FireFront saves and offers to companion mods, which 1.0.2 kept alongside the new per-fire
+  igniter.
 
 This DLL was built from the commit tagged `v1.0.3`; the GitHub release names that commit and
 gives the DLL's md5.
@@ -61,8 +64,9 @@ Fixes from a code review of 1.0.1. The wire protocol stays 1, so 1.0.1 and 1.0.2
   past the Ashlands edge only after building it and taking it from the nearby player, every
   0.75 s. It now skips them before building anything.
 - **Each fire remembers who lit it.** Until now the igniter FireFront saved and offered to
-  companion mods was one for the whole map, so a companion mod such as Ragnarok's Wrath could only blame whoever lit the first fire
-  since the map was last clear of fire, even after that fire had gone out. Now every burning object and ground cell records the player who lit it, fire
+  companion mods was one for the whole map, so Ragnarok's Wrath, for one, could only blame
+  whoever lit the first fire since the map was last clear of fire, even after that fire had
+  gone out. Now every burning object and ground cell records the player who lit it, fire
   that spreads keeps the igniter of the fire it came from, and the igniter is saved and
   restored with the fire. A save from an older version loads with the igniter unknown. The
   old map-wide value is unchanged, so older companion builds keep working. Newer ones can ask

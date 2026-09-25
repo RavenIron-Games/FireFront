@@ -233,7 +233,7 @@ namespace FireFront.Config
                 // cast to throw is not protection: BepInEx returns the EXISTING entry for an
                 // already-bound definition, so the cast fails only when the type differs, and a
                 // still-bound STRING key would be bound and then removed in silence — deleting the
-                // owner's value with nothing thrown and nothing logged. Today's rung targets
+                // user's value with nothing thrown and nothing logged. Today's rung targets
                 // Debug.VerboseLogging, which this build genuinely no longer binds, so this is a
                 // guard against the next rung rather than a fix to a live fault.
                 if (Lookup(cfg, slot) != null)

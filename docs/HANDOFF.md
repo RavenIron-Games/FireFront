@@ -8,9 +8,11 @@ and every reflection-by-name lookup resolves the same on 1.0.15 and 1.0.16, and 
 game methods whose code changed is one FireFront patches or calls. So 1.0.3 is 1.0.2's code
 with the version string and comments changed, plus documents: the 1.0.3 CHANGELOG entry; the
 README requirements line (1.0.16) and a known-limits line for a live `groundcellsize` change
-(solo-batch finding 1, unfixed); the 1.0.2 entry's igniter sentence corrected to name what 1.0.2
-replaced, the one igniter FireFront saved and offered to companion mods for the whole map; and
-the docs/comments byline scrub. Not yet tested in game on 1.0.16.
+(solo-batch finding 1, unfixed; the store keeps ground and spent cells as grid indices with no
+cell size, so a change across a restart that saved ground fire does the same, read from the
+code); the 1.0.2 entry's igniter sentence corrected: what was one for the whole map was the
+igniter FireFront saved and offered to companion mods (1.0.2 kept it and added one per fire);
+and the docs/comments byline scrub. Not yet tested in game on 1.0.16.
 
 **1.0.16's terrain-compiler change (read 2026-09-25).** On 1.0.15, `TerrainComp.Awake` destroys
 the other compiler it finds in its zone. On 1.0.16 `Awake` destroys nothing: both go into

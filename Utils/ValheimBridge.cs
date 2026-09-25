@@ -933,10 +933,10 @@ namespace FireFront.Utils
         // TerrainComp is networked (m_nview) AND writes per-zone terrain data that is SAVED WITH
         // THE WORLD, unlike every VFX and damage system in this file, which is runtime only. That
         // is why UseVanillaDirtPaint is opt-in. Six facts, read from the shipping 1.0.15 assembly
-        // on 2026-09-20; fact 2 also states what 1.0.16 changed (read 2026-09-25). The publicized
-        // copy in libs\ has the same method bodies; what it gets wrong is visibility, which is
-        // why the private/public list at the end came from the shipping DLL and not from what
-        // compiles.
+        // on 2026-09-20; fact 2 also states what 1.0.16 changed (read 2026-09-25). The 1.0.15
+        // publicized copy in libs\ then had the same method bodies (libs\ is on 1.0.16 now);
+        // what a publicized copy gets wrong is visibility, which is why the private/public list
+        // at the end came from the shipping DLL and not from what compiles.
         //
         //   1. FindTerrainCompiler and Heightmap.FindHeightmap scan static lists of LOADED
         //      INSTANCES. A dedicated server keeps real zones only around its own reference
