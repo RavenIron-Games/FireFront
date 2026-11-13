@@ -22,8 +22,8 @@ Fire is wind-driven, doused by rain, stopped by water (and by dirt paths in a ho
 
 | | |
 |---|---|
-| Valheim | 1.0.16 (built and checked against it; last tested in game on 1.0.15; builds older than 1.0.15 are not supported) |
-| BepInEx | BepInExPack Valheim 5.4.2350 or newer |
+| Valheim | 1.0 (rebuilt and checked against the current 1.0 release; last tested in game on 1.0.15; builds older than 1.0.15 are not supported) |
+| BepInEx | BepInExPack Valheim 5.4.2360 or newer |
 
 ## Installation
 
@@ -181,7 +181,7 @@ back for patrons, and nothing ever will be.
 
 If you'd like to help cover server hosting and test hardware:
 
-- **Website** — <https://ravenirongames.com>
+- **Website** — <https://ravenirongames.com/>
 - **Patreon** — <https://www.patreon.com/cw/RavenIronGames>
 - **Discord** — <https://discord.gg/AGKDEurAVa> — a channel per mod, and where the
   testing happens

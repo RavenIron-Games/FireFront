@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.4 — 2026-11-01
+
+Updated due to the Valheim 1.0.21 patch. Rebuilt and checked against Valheim 1.0.21 (network
+version 41); no code changes beyond the version string, and the wire protocol stays 1, so 1.0.3
+and 1.0.4 play together. The store page's website link is https://ravenirongames.com/. The
+BepInExPack dependency is now 5.4.2360.
+
 ## 1.0.3 — 2026-09-25
 
 Updated due to 1.0.16 Patch.
