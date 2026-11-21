@@ -36,7 +36,6 @@ Two presets override keys that still read true in the file: `LowSpecPreset` (Low
 | Fire | `BurningCreatureFireRadius` | server | `creaturefireradius` |  | client copy is dead (1.0.5) |
 | Fire | `BurningCreatureCarrySeconds` | server | `creaturefireseconds` |  | client copy is dead (1.0.5) |
 | Fire | `BurningCreatureTreeRadius` | server | `creaturefiretreeradius` |  | client copy is dead (1.0.5) |
-| Fire | `BurningCreatureBurnSeconds` | both | `creatureburnseconds` |  | read by the creature's owner: each player's game, or the server/host for creatures it owns (1.0.5) |
 | Fire | `FireKeepsYouWarm` | both | `firewarmth` |  |  |
 | Fire | `FireRampDurationSeconds` | server | `rampduration` |  | client copy is dead |
 | Fire | `FireRampEnabled` | server | `rampenabled` | LowSpec + Apocalypse | client copy is dead |
@@ -255,7 +254,7 @@ File and line per reader, at `c4ab08c`. Status-line echoes and the `fireset` set
 - Fire/FireManager.cs:1558 - StatusLine() echo - status line, does not count
 
 </details>
-<details><summary><code>BurningCreaturesSpreadFire</code> / <code>BurningCreatureFireRadius</code> / <code>BurningCreatureTreeRadius</code> / <code>BurningCreatureCarrySeconds</code> (server) and <code>BurningCreatureBurnSeconds</code> (owner), 1.0.5</summary>
+<details><summary><code>BurningCreaturesSpreadFire</code> / <code>BurningCreatureFireRadius</code> / <code>BurningCreatureTreeRadius</code> / <code>BurningCreatureCarrySeconds</code> (server, 1.0.5)</summary>
 
 - Fire/FireManager.cs IgniteFromBurningCreature(), the only reader; it runs on the server (from the FireFront_CreatureFire handler, or directly from Fire/CreatureFireWatch.cs on a server or host)
 - A client's watcher reports every burning creature it owns whatever its own copy says; the server decides, as with the RPC_Damage patches

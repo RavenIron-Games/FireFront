@@ -1874,7 +1874,7 @@ namespace FireFront.Fire
                    $"fires {_events.Count}, " +
                    $"trees {FireConfig.BurnTreesAndLogs.Value}, " +
                    $"burnbuildings {FireConfig.BurnPlayerBuildings.Value}, ashlands {FireConfig.FireInAshlands.Value}, " +
-                   $"creaturefire {FireConfig.BurningCreaturesSpreadFire.Value} (ground {FireConfig.BurningCreatureFireRadius.Value:F1} m, trees {FireConfig.BurningCreatureTreeRadius.Value:F1} m, carry {FireConfig.BurningCreatureCarrySeconds.Value:F0} s, burn {FireConfig.BurningCreatureBurnSeconds.Value:F0} s), " +
+                   $"creaturefire {FireConfig.BurningCreaturesSpreadFire.Value} (ground {FireConfig.BurningCreatureFireRadius.Value:F1} m, trees {FireConfig.BurningCreatureTreeRadius.Value:F1} m, carry {FireConfig.BurningCreatureCarrySeconds.Value:F0} s), " +
                    $"vfx '{FireConfig.VfxPrefabName.Value}', procedural {FireConfig.UseProceduralVfx.Value}, " +
                    $"treeflames {FireConfig.TreeFlameScaling.Value} (max {FireConfig.EffectiveMaxFlameHeight}m, tallcap {FireConfig.EffectiveTallFireMaxConcurrent}, sparks {FireConfig.EffectiveCrownSparksEnabled}), " +
                    $"hurts {FireConfig.FireHurtsEnabled.Value} (playerOnly {FireConfig.FireHurtsPlayerOnly.Value}, {FireConfig.FireDamagePerTick.Value}dmg/{FireConfig.FireDamageTickInterval.Value}s), " +

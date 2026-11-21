@@ -5,19 +5,18 @@
 - **A creature on fire spreads fire as it runs.** Set a bear alight with a torch, shoot a
   skeleton with a fire arrow, or let a boar run through a blaze, and while it burns it lights the
   grass along its path and any tree, log or burnable piece it passes within 4 m, so a burning
-  animal running under the trees sets the forest alight. A creature hit with fire stays alight for
-  12 seconds instead of vanilla's 5, and takes burn damage the whole time it burns. One burn carries fire for up to 30 seconds:
+  animal running under the trees sets the forest alight. It burns for vanilla's time and takes
+  vanilla's damage: FireFront changes neither. One burn carries fire for up to 30 seconds:
   a creature standing in the fire it started keeps catching again, and without the limit it would
   carry fire for as long as it lived. Past it the creature still burns and still hurts, but lights
   nothing until it has stopped burning for a few seconds. Players and tames never carry fire. The
   fire is booked to the player whose fire last hit the creature; one nobody's fire hit lately is
   booked to nobody. All the usual rules hold: nothing in the Ashlands, in
   water, in dungeons or in rain that stops fire, and `BurnPlayerBuildings` still protects
-  builds. Five new settings: `BurningCreaturesSpreadFire` (on), `BurningCreatureFireRadius` (grass,
-  2 m), `BurningCreatureTreeRadius` (trees, 4 m) and `BurningCreatureCarrySeconds` (30 s), read by
-  the server, and `BurningCreatureBurnSeconds` (12 s), read by the game running the creature. Their
-  `fireset` keys are `creaturefire`, `creaturefireradius`, `creaturefiretreeradius`,
-  `creaturefireseconds` and `creatureburnseconds`.
+  builds. Four new server settings: `BurningCreaturesSpreadFire` (on), `BurningCreatureFireRadius`
+  (grass, 2 m), `BurningCreatureTreeRadius` (trees, 4 m) and `BurningCreatureCarrySeconds` (30 s).
+  Their `fireset` keys are `creaturefire`, `creaturefireradius`, `creaturefiretreeradius` and
+  `creaturefireseconds`.
   A creature is run by the game of the player near it, so that player needs 1.0.5 for it to
   carry fire. This adds one new message (`FireFront_CreatureFire`); an older server ignores it,
   so the wire protocol stays 1.
