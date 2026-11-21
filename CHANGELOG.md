@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.5
+## 1.0.5 — 2026-11-21
 
 - **A creature on fire spreads fire as it runs.** Set a bear alight with a torch, shoot a
   skeleton with a fire arrow, or let a boar run through a blaze, and while it burns it lights the
