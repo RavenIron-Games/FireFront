@@ -429,11 +429,12 @@ namespace FireFront.Config
             // 1.0.5. New keys, so their defaults reach existing installs without a ledger rung.
             BurningCreaturesSpreadFire = config.Bind(
                 "Fire", "BurningCreaturesSpreadFire", true,
-                "A creature that is on fire (a bear hit with a torch, a skeleton shot with a fire " +
-                "arrow, a boar that ran through a blaze) lights what it passes: the grass under it " +
-                "and any tree, log or burnable piece within BurningCreatureFireRadius, about once a " +
-                "second for as long as it burns. Players never carry fire. The fire is booked to the " +
-                "player whose fire hit set the creature alight, if there was one. Every normal rule " +
+                "A creature set alight by a fire hit (a bear hit with a torch, a skeleton shot with a " +
+                "fire arrow) lights what it passes for 8 seconds after the hit, while it burns: the " +
+                "grass under it and any tree, log or burnable piece within BurningCreatureFireRadius, " +
+                "about once a second. Players and tames never carry fire, and FireFront's own flames " +
+                "never make a creature a carrier. The fire is booked to the player whose fire hit set " +
+                "the creature alight, if there was one. Every normal rule " +
                 "still applies (Ashlands, water, dungeons, BurnPlayerBuildings, BurnTreesAndLogs). " +
                 "Read by the server; set it there.");
 

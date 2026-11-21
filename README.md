@@ -23,7 +23,7 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 |---|---|
 | **Fight Brenna in the Smouldering Tomb** | Her fire still lights what will burn inside the tomb, but the trees and grass around its entrance stay untouched |
 | **Burn anything in any dungeon or crypt** | It burns and spreads inside, as before; no ground fire is lit in there, and none reaches the land outside |
-| **Set a creature alight** | A bear hit with a torch, a skeleton shot with a fire arrow, a boar that ran through a blaze: while it burns it lights the grass under it and any tree, log or burnable piece within 2 m, so it can carry fire into the forest. The fire is booked to whoever set it alight. Off with `fireset creaturefire false` |
+| **Set a creature alight** | A bear hit with a torch, a skeleton shot with a fire arrow: for a few seconds after the hit it lights the grass under it and any tree, log or burnable piece within 2 m, so it can carry fire into the forest. The fire is booked to whoever set it alight. Tames never carry fire, and FireFront's own flames hurt a creature but never make it a carrier. Off with `fireset creaturefire false` |
 | **Put out a fire** | Press **`` ` ``** (backquote, left of 1) instead of G. A config still on the old G moves over by itself; a key you chose stays yours |
 | **Update the server and players** | The crypt fix and the creature fire run on the server (or whoever hosts); the new key comes with each player's own 1.0.5, and so does the watch on burning creatures, since a creature is run by the game of the player near it. A 1.0.4 player can still join a 1.0.5 server, with a version notice; creatures near only them just do not carry fire |
 
@@ -218,7 +218,7 @@ Press `` ` `` to open the console.
 
 `fireset` changes the copy on your own machine and asks the server, which applies it only for its admins, whether typed or moved from a config manager; its answer comes back the same way. `firestatus` asks the server too and needs no admin.
 
-`stopfire` puts out only the one thing under your crosshair, unlike **`` ` ``**, which also clears the fire around you. It checks the admin flag your own game holds, which can say no even to a real admin on a dedicated server; **G** needs no admin. `firedebug` turns verbose logging on or off on your own machine; on a client connected to a server it also sends the new value to the server like `fireset debug`, which the server applies only for its admins.
+`stopfire` puts out only the one thing under your crosshair, unlike **`` ` ``**, which also clears the fire around you. It checks the admin flag your own game holds, which can say no even to a real admin on a dedicated server; **`` ` ``** needs no admin. `firedebug` turns verbose logging on or off on your own machine; on a client connected to a server it also sends the new value to the server like `fireset debug`, which the server applies only for its admins.
 
 </details>
 

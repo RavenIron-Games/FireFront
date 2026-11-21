@@ -1487,6 +1487,9 @@ namespace FireFront.Fire
             _spreadIgniter = 0L;
             _creatureFireWindowStart = 0f;
             _creatureFireInWindow = 0;
+            _creatureFirePeerWindow.Clear();
+            _creatureFireLastAt.Clear();
+            _creatureFireNextPrune = 0f;
             CreatureFireWatch.Reset();
             _dousedUntil.Clear();
             _groundBurning.Clear();
@@ -1992,15 +1995,67 @@ namespace FireFront.Fire
         private int _creatureFireInWindow;
         private readonly List<ValheimBridge.ZdoBurnable> _creatureZdoScratch = new List<ValheimBridge.ZdoBurnable>();
 
+        // Per-peer share of that ceiling, so one player (or a modified client) cannot spend everyone's
+        // budget; and one report per creature per CreatureFireMinGapSeconds, whatever the client sends.
+        private const int CreatureFireMaxPerPeerPerSecond = 8;
+        private const float CreatureFireMinGapSeconds = 0.75f;
+        // How far the reported position may sit from the creature's synced ZDO position: positions
+        // reach the server a few times a second, and a charging animal moves several metres between.
+        private const float CreatureFirePositionSlack = 12f;
+        private readonly Dictionary<long, (float start, int count)> _creatureFirePeerWindow = new Dictionary<long, (float, int)>();
+        private readonly Dictionary<ZDOID, float> _creatureFireLastAt = new Dictionary<ZDOID, float>();
+        private readonly List<ZDOID> _creatureFirePruneScratch = new List<ZDOID>();
+        private float _creatureFireNextPrune;
+
         /// <summary>
         /// Server-side handler for FireFront_CreatureFire: a client reports a creature it owns is on
-        /// fire at <paramref name="position"/>. Bounded like the other requests: the position must be
-        /// finite and near where the server last saw the sender, and the igniter must be a player
-        /// online now (else it is booked to nobody).
+        /// fire. The payload is (creature ZDOID, position, igniter id). Bounded harder than the other
+        /// requests because it lights ground with no burnable object to anchor it: the id must name
+        /// a live non-player creature, owned by the sender, within a few metres of the reported
+        /// position; the position must be finite and near where the server last saw the sender; one
+        /// report per creature per 0.75 s and eight per peer per second; and the igniter must be a
+        /// player online now (else it is booked to nobody).
         /// </summary>
-        private void HandleCreatureFireRequest(long sender, Vector3 position, long igniterPlayerId)
+        private void HandleCreatureFireRequest(long sender, ZPackage pkg)
         {
             if (!ValheimBridge.IsServer()) return;
+            ZDOID creature;
+            Vector3 position;
+            long igniterPlayerId;
+            try
+            {
+                creature = pkg.ReadZDOID();
+                position = pkg.ReadVector3();
+                igniterPlayerId = pkg.ReadLong();
+            }
+            catch (System.Exception)
+            {
+                AuthLog.Refused(sender, "creature-fire", "refused a creature-fire report: the package could not be read");
+                return;
+            }
+
+            float now = Time.time;
+            if (now >= _creatureFireNextPrune) PruneCreatureFireState(now);
+
+            if (!ValheimBridge.TryGetCreatureZdo(creature, out Vector3 creatureAt, out long owner))
+            {
+                AuthLog.Refused(sender, "creature-fire-id", $"refused a creature-fire report for {creature}: not a live non-player creature");
+                return;
+            }
+            // Ownership moves between players as they walk about, so a report can cross a hand-off in
+            // flight. That is ordinary, not hostile: Debug, and the new owner reports next second.
+            if (owner != sender)
+            {
+                FireLogger.Debug($"[CREATURE-FIRE] report for {creature} from peer {sender}, but peer {owner} owns it now — ignored.");
+                return;
+            }
+            if (_creatureFireLastAt.TryGetValue(creature, out float lastAt) && now - lastAt < CreatureFireMinGapSeconds) return;
+            if (!_creatureFirePeerWindow.TryGetValue(sender, out (float start, int count) window) || now - window.start >= 1f)
+                window = (now, 0);
+            if (window.count >= CreatureFireMaxPerPeerPerSecond) return;
+            _creatureFirePeerWindow[sender] = (window.start, window.count + 1);
+            _creatureFireLastAt[creature] = now;
+
             if (float.IsNaN(position.x) || float.IsNaN(position.y) || float.IsNaN(position.z) ||
                 float.IsInfinity(position.x) || float.IsInfinity(position.y) || float.IsInfinity(position.z))
             {
@@ -2013,12 +2068,33 @@ namespace FireFront.Fire
                                         $"more than {MaxIgniteReach:F0} m from where the server last saw the player");
                 return;
             }
+            if ((creatureAt - position).sqrMagnitude > CreatureFirePositionSlack * CreatureFirePositionSlack)
+            {
+                AuthLog.Refused(sender, "creature-fire-pos", $"refused a creature-fire report for {creature} at ({position.x:F0},{position.z:F0}): " +
+                                        $"{Vector3.Distance(creatureAt, position):F0} m from where that creature is, limit {CreatureFirePositionSlack:F0} m");
+                return;
+            }
             if (igniterPlayerId != 0L && !ValheimBridge.IsOnlinePlayerId(igniterPlayerId))
             {
                 FireLogger.Debug($"[CREATURE-FIRE] igniter {igniterPlayerId} in peer {sender}'s report is not an online player — booked as natural.");
                 igniterPlayerId = 0L;
             }
             IgniteFromBurningCreature(position, igniterPlayerId);
+        }
+
+        private void PruneCreatureFireState(float now)
+        {
+            _creatureFireNextPrune = now + 10f;
+            _creatureFirePruneScratch.Clear();
+            foreach (KeyValuePair<ZDOID, float> kv in _creatureFireLastAt)
+                if (now - kv.Value > 5f) _creatureFirePruneScratch.Add(kv.Key);
+            foreach (ZDOID id in _creatureFirePruneScratch) _creatureFireLastAt.Remove(id);
+            _creatureFirePruneScratch.Clear();
+            // Peer windows are one entry per peer that ever reported; drop the stale ones too.
+            var stalePeers = new List<long>();
+            foreach (KeyValuePair<long, (float start, int count)> kv in _creatureFirePeerWindow)
+                if (now - kv.Value.start > 5f) stalePeers.Add(kv.Key);
+            foreach (long peer in stalePeers) _creatureFirePeerWindow.Remove(peer);
         }
 
         /// <summary>

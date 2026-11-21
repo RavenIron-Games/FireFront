@@ -4361,7 +4361,7 @@ namespace FireFront.Utils
             System.Action<long, ZPackage> onPaintAssign,
             System.Action<long, ZPackage> onObjectFireSync,
             System.Action<long, string, int> onVersion,
-            System.Action<long, Vector3, long> onCreatureFire)
+            System.Action<long, ZPackage> onCreatureFire)
         {
             if (ZRoutedRpc.instance == null)
             {
@@ -4391,7 +4391,7 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.Register<ZPackage>(RpcPaintAssign, onPaintAssign);
                 ZRoutedRpc.instance.Register<ZPackage>(RpcObjectFireSync, onObjectFireSync);
                 ZRoutedRpc.instance.Register<string, int>(RpcVersion, onVersion);
-                ZRoutedRpc.instance.Register<Vector3, long>(RpcCreatureFire, onCreatureFire);
+                ZRoutedRpc.instance.Register<ZPackage>(RpcCreatureFire, onCreatureFire);
                 FireLogger.Info($"[IGNITE-TRACE] All 14 FireFront RPCs registered successfully (IsServer={IsServer()}).");
                 if (IsServer())
                 {
@@ -4484,10 +4484,20 @@ namespace FireFront.Utils
         /// stays 1: a server older than 1.0.5 has no handler and ZRoutedRpc drops an unknown method
         /// hash without a word (HandleRoutedRPC is a TryGetValue), so nothing an older build reads changes.
         /// </summary>
-        public static void SendCreatureFireToServer(Vector3 position, long igniterPlayerId)
+        /// Payload (one ZPackage; three generic arguments have broken Valheim's dispatcher here before):
+        /// the creature's ZDOID, its position, the igniter's player id. The id lets the server check
+        /// the report names a real creature the sender owns, standing where the report says.
+        public static void SendCreatureFireToServer(ZDOID creature, Vector3 position, long igniterPlayerId)
         {
             if (ZRoutedRpc.instance == null) return;
-            try { ZRoutedRpc.instance.InvokeRoutedRPC(GetServerPeerId(), RpcCreatureFire, position, igniterPlayerId); }
+            try
+            {
+                var pkg = new ZPackage();
+                pkg.Write(creature);
+                pkg.Write(position);
+                pkg.Write(igniterPlayerId);
+                ZRoutedRpc.instance.InvokeRoutedRPC(GetServerPeerId(), RpcCreatureFire, pkg);
+            }
             catch (System.Exception ex) { FireLogger.Debug($"SendCreatureFireToServer threw: {ex.Message}"); }
         }
 
@@ -4525,6 +4535,40 @@ namespace FireFront.Utils
             }
         }
         private static bool _burningCreatureScanFailureLogged;
+
+        // Prefab hash -> "a non-player Character". Prefabs never change in a session.
+        private static readonly Dictionary<int, bool> _creaturePrefabs = new Dictionary<int, bool>();
+
+        /// <summary>
+        /// 1.0.5, server side: does <paramref name="id"/> name a live non-player creature? Reads the ZDO
+        /// and the prefab only, building nothing. Gives the creature's synced position and its owner.
+        /// </summary>
+        public static bool TryGetCreatureZdo(ZDOID id, out Vector3 position, out long owner)
+        {
+            position = Vector3.zero;
+            owner = 0L;
+            try
+            {
+                ZDO zdo = ZDOMan.instance?.GetZDO(id);
+                if (zdo == null || ZNetScene.instance == null) return false;
+                int prefab = zdo.GetPrefab();
+                if (!_creaturePrefabs.TryGetValue(prefab, out bool isCreature))
+                {
+                    GameObject go = ZNetScene.instance.GetPrefab(prefab);
+                    isCreature = go != null && go.GetComponent<Character>() != null && go.GetComponent<Player>() == null;
+                    _creaturePrefabs[prefab] = isCreature;
+                }
+                if (!isCreature) return false;
+                position = zdo.GetPosition();
+                owner = zdo.GetOwner();
+                return true;
+            }
+            catch (System.Exception ex)
+            {
+                FireLogger.Debug($"[CREATURE-FIRE] TryGetCreatureZdo({id}) threw: {ex.Message}");
+                return false;
+            }
+        }
 
         /// <summary>The uid of every connected peer that has finished its handshake.</summary>
         public static void CollectReadyPeerIds(List<long> into)

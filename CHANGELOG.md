@@ -2,12 +2,14 @@
 
 ## 1.0.5
 
-- **A creature on fire lights what it passes.** Set a bear alight with a torch, shoot a skeleton
-  with a fire arrow, or let a boar run through a blaze, and for as long as it burns it lights the
+- **A creature set alight lights what it passes.** Set a bear alight with a torch or shoot a
+  skeleton with a fire arrow, and for 8 seconds after each fire hit, while it burns, it lights the
   grass under it and any tree, log or burnable piece within 2 m, about once a second, so a
-  burning animal can carry fire into the forest. Players never carry fire. The fire is booked to
-  the player whose fire hit set the creature alight; a creature lit any other way, FireFront's
-  own fire included, is booked to nobody. All the usual rules hold: nothing in the Ashlands, in
+  burning animal can carry fire into the forest. Players and tames never carry fire. FireFront's
+  own flames hurt a creature standing in them but never make it a carrier, so an animal cannot
+  keep re-lighting itself from the fire it started and drag it across the map. The fire is booked
+  to the player whose fire hit set the creature alight; a creature lit by anything else (a
+  creature's fire attack, a hearth) is booked to nobody. All the usual rules hold: nothing in the Ashlands, in
   water, in dungeons or in rain that stops fire, and `BurnPlayerBuildings` still protects
   builds. Two new server settings, `BurningCreaturesSpreadFire` (on) and
   `BurningCreatureFireRadius` (2 m), with `fireset creaturefire` and `fireset creaturefireradius`.
@@ -22,7 +24,8 @@
   Objects in there still burn and still spread to each other, and fire outside, creature fire
   included, is unchanged. The wire protocol stays 1, so 1.0.4 and 1.0.5 play together; the fix
   needs only the server, or the player hosting, to run 1.0.5.
-- **The extinguish key is now `` ` `` (backquote, left of 1), not G.** A config file that still
+- **The extinguish key is now `` ` `` (backquote, left of 1), not G**, which clashes with the
+  hotbar. A config file that still
   holds the old default G moves to the new key on first boot (config layout version 3); a key you
   picked yourself, G with a modifier included, is kept and named in the log. To keep G, set
   `ExtinguishKey = G` again after that boot. The key is read by each player's own game, so this
