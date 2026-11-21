@@ -24,6 +24,7 @@ namespace FireFront.Config
         public static ConfigEntry<bool> FireInAshlands;
         public static ConfigEntry<bool> BurningCreaturesSpreadFire;
         public static ConfigEntry<float> BurningCreatureFireRadius;
+        public static ConfigEntry<float> BurningCreatureCarrySeconds;
         public static ConfigEntry<string> VfxPrefabName;
         public static ConfigEntry<bool> UseProceduralVfx;
         public static ConfigEntry<bool> FireSmokeEnabled;
@@ -429,12 +430,11 @@ namespace FireFront.Config
             // 1.0.5. New keys, so their defaults reach existing installs without a ledger rung.
             BurningCreaturesSpreadFire = config.Bind(
                 "Fire", "BurningCreaturesSpreadFire", true,
-                "A creature set alight by a fire hit (a bear hit with a torch, a skeleton shot with a " +
-                "fire arrow) lights what it passes for 8 seconds after the hit, while it burns: the " +
-                "grass under it and any tree, log or burnable piece within BurningCreatureFireRadius, " +
-                "about once a second. Players and tames never carry fire, and FireFront's own flames " +
-                "never make a creature a carrier. The fire is booked to the player whose fire hit set " +
-                "the creature alight, if there was one. Every normal rule " +
+                "A creature on fire (a bear hit with a torch, a skeleton shot with a fire arrow, a " +
+                "boar that ran through a blaze) lights what it passes while it burns: the grass along " +
+                "its path and any tree, log or burnable piece within BurningCreatureFireRadius of it, " +
+                "for up to BurningCreatureCarrySeconds per burn. Players and tames never carry fire. " +
+                "The fire is booked to the player whose fire last hit the creature, if any. Every normal rule " +
                 "still applies (Ashlands, water, dungeons, BurnPlayerBuildings, BurnTreesAndLogs). " +
                 "Read by the server; set it there.");
 
@@ -444,6 +444,15 @@ namespace FireFront.Config
                     "Meters around a burning creature that it sets alight each second (grass cells " +
                     "and burnable objects). Read by the server.",
                     new AcceptableValueRange<float>(0.5f, 4f)));
+
+            BurningCreatureCarrySeconds = config.Bind(
+                "Fire", "BurningCreatureCarrySeconds", 30f,
+                new ConfigDescription(
+                    "The longest one burn lets a creature carry fire, in seconds. A creature standing in " +
+                    "the fire it started keeps catching again, so without a limit it would carry fire for " +
+                    "as long as it lived. Past this it still burns and still hurts, but lights nothing " +
+                    "more until it has stopped burning for a few seconds. Read by the server.",
+                    new AcceptableValueRange<float>(3f, 120f)));
 
             VfxPrefabName = config.Bind(
                 "Visuals", "VfxPrefabName", "",

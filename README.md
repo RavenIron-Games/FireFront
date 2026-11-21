@@ -23,7 +23,7 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 |---|---|
 | **Fight Brenna in the Smouldering Tomb** | Her fire still lights what will burn inside the tomb, but the trees and grass around its entrance stay untouched |
 | **Burn anything in any dungeon or crypt** | It burns and spreads inside, as before; no ground fire is lit in there, and none reaches the land outside |
-| **Set a creature alight** | A bear hit with a torch, a skeleton shot with a fire arrow: for a few seconds after the hit it lights the grass under it and any tree, log or burnable piece within 2 m, so it can carry fire into the forest. The fire is booked to whoever set it alight. Tames never carry fire, and FireFront's own flames hurt a creature but never make it a carrier. Off with `fireset creaturefire false` |
+| **Set a creature alight** | A bear hit with a torch, a skeleton shot with a fire arrow, a boar that ran through a blaze: while it burns it lights the grass along its path and any tree, log or burnable piece within 2 m, so a burning animal running through the forest sets it alight. One burn carries fire for up to 30 s. The fire is booked to whoever set it alight. Tames never carry fire. Off with `fireset creaturefire false` |
 | **Put out a fire** | Press **`` ` ``** (backquote, left of 1) instead of G. A config still on the old G moves over by itself; a key you chose stays yours |
 | **Update the server and players** | The crypt fix and the creature fire run on the server (or whoever hosts); the new key comes with each player's own 1.0.5, and so does the watch on burning creatures, since a creature is run by the game of the player near it. A 1.0.4 player can still join a 1.0.5 server, with a version notice; creatures near only them just do not carry fire |
 
@@ -322,7 +322,7 @@ All safe to leave alone. They are in `BepInEx/config/com.raveniron.firefront.cfg
 | Fire | `BurnDurationSeconds` · `SpreadMaturityFraction` · `SpreadRadius` | how long a piece burns, how long before it spreads, and how far |
 | Fire | `MaxConcurrentBurning` · `QueueSize` · `SpreadCheckInterval` | how many things burn at once, how many wait, how often spread is checked |
 | Fire | `BurnTreesAndLogs` · `BurnPlayerBuildings` · `FireInAshlands` | what may catch fire, and where |
-| Fire | `BurningCreaturesSpreadFire` · `BurningCreatureFireRadius` | whether a creature on fire lights what it passes, and how far around it (default on, 2 m) |
+| Fire | `BurningCreaturesSpreadFire` · `BurningCreatureFireRadius` · `BurningCreatureCarrySeconds` | whether a creature on fire lights what it passes, how far around its path, and for how long per burn (default on, 2 m, 30 s) |
 | Fire | `TreeDestructionRate` | the chance a dead tree collapses rather than standing as a snag |
 | Fire | `FireRampEnabled` · `FireRampDurationSeconds` · `FireRampStartFraction` | how a new fire builds to full strength |
 | Ground | `GroundSpreadEnabled` · `GroundCellSize` · `GroundSpreadRadius` · `GroundBurnDurationSeconds` · `GroundMaxConcurrent` | ground fire: on or off, cell size, reach, burn time, cap |
