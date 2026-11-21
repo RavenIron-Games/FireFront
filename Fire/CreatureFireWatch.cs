@@ -28,11 +28,10 @@ namespace FireFront.Fire
     /// The longer burn (BurningCreatureBurnSeconds, 12 s): vanilla's Burning lasts about 5 s, too short
     /// for a creature to carry fire anywhere (the second test: every burn ended at 4 s, after 1-4 m).
     /// So for that long after a real FIRE HIT (Character.RPC_Damage with fire damage: a torch, a fire
-    /// arrow, a hearth) the owner keeps the effect from running out. It adds no damage: SE_Burning
-    /// keeps dealing m_fireDamagePerHit every tick for as long as it lasts, so once vanilla's damage
-    /// pool (m_fireDamageLeft) is spent the per-tick damage is set to 0, which Character.ApplyDamage
-    /// drops silently (anything at or under 0.1 shows no number). A new fire hit refills the pool the
-    /// vanilla way. FireFront's own flames set a creature burning with no hit, so they are never
+    /// arrow, a hearth) the owner keeps the effect from running out. FireFront does not touch the
+    /// damage (owner, 2026-11-21: "if creature is on fire it should damage"): SE_Burning keeps
+    /// dealing its own per-tick damage for as long as it burns, exactly as vanilla does while a burn
+    /// lasts. FireFront's own flames set a creature burning with no hit, so they are never
     /// lengthened. Wet or swimming creatures are left to vanilla, which puts them out faster.
     ///
     /// Tames are left out on purpose: a wolf that steps through a hearth would otherwise light the
@@ -67,8 +66,6 @@ namespace FireFront.Fire
         // Private and protected in the real assembly, so by reflection. Missing -> no longer burn
         // (vanilla's ~5 s), logged once; never a throw.
         private static readonly FieldInfo SeTimeField = AccessTools.Field(typeof(StatusEffect), "m_time");
-        private static readonly FieldInfo FireDamageLeftField = AccessTools.Field(typeof(SE_Burning), "m_fireDamageLeft");
-        private static readonly FieldInfo FireDamagePerHitField = AccessTools.Field(typeof(SE_Burning), "m_fireDamagePerHit");
         private static bool _burnExtendFailureLogged;
 
         /// <summary>New world or new connection: nothing from the old one carries over.</summary>
@@ -139,12 +136,12 @@ namespace FireFront.Fire
 
         /// <summary>
         /// Keeps vanilla's Burning effect on <paramref name="c"/> from ending for <paramref name="left"/>
-        /// more seconds (never more than its own ttl at a time; this runs every second), and stops it
-        /// dealing more than vanilla's own damage. Leaves a wet creature alone.
+        /// more seconds (never more than its own ttl at a time; this runs every second). Its damage is
+        /// vanilla's, untouched. Leaves a wet creature alone.
         /// </summary>
         private static void KeepBurning(Character c, float left)
         {
-            if (SeTimeField == null || FireDamageLeftField == null || FireDamagePerHitField == null)
+            if (SeTimeField == null)
             {
                 if (!_burnExtendFailureLogged)
                 {
@@ -158,9 +155,6 @@ namespace FireFront.Fire
                 SEMan seman = c.GetSEMan();
                 if (seman == null || seman.HaveStatusEffect(SEMan.s_statusEffectWet)) return;
                 if (!(seman.GetStatusEffect(SEMan.s_statusEffectBurning) is SE_Burning se)) return;
-
-                // Vanilla's damage is spent: the rest of the burn is for show and for spreading.
-                if ((float)FireDamageLeftField.GetValue(se) <= 0f) FireDamagePerHitField.SetValue(se, 0f);
 
                 float remaining = se.GetRemaningTime();
                 float want = Mathf.Min(left, se.m_ttl);

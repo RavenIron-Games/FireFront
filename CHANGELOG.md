@@ -6,8 +6,7 @@
   skeleton with a fire arrow, or let a boar run through a blaze, and while it burns it lights the
   grass along its path and any tree, log or burnable piece it passes within 4 m, so a burning
   animal running under the trees sets the forest alight. A creature hit with fire stays alight for
-  12 seconds instead of vanilla's 5, with no extra damage: once vanilla's own burn damage is dealt,
-  the rest of the burn only spreads fire. One burn carries fire for up to 30 seconds:
+  12 seconds instead of vanilla's 5, and takes burn damage the whole time it burns. One burn carries fire for up to 30 seconds:
   a creature standing in the fire it started keeps catching again, and without the limit it would
   carry fire for as long as it lived. Past it the creature still burns and still hurts, but lights
   nothing until it has stopped burning for a few seconds. Players and tames never carry fire. The

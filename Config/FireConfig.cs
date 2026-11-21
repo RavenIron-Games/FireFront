@@ -470,8 +470,7 @@ namespace FireFront.Config
                 new ConfigDescription(
                     "How long a creature hit with fire (a torch, a fire arrow, a hearth) stays alight. " +
                     "Vanilla's burn is about 5 s, too short to carry fire anywhere; this keeps it going " +
-                    "for longer WITHOUT more damage (once vanilla's own burn damage is dealt, the rest is " +
-                    "harmless). 0 = vanilla's time. Read by the game that runs the creature, usually the " +
+                    "longer, and it burns (and takes vanilla's burn damage) the whole time. 0 = vanilla's time. Read by the game that runs the creature, usually the " +
                     "nearest player's; fireset sets the server's copy too.",
                     new AcceptableValueRange<float>(0f, 30f)));
 
