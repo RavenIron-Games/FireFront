@@ -15,16 +15,17 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 
 ---
 
-![NEW IN 1.0.5](https://img.shields.io/badge/NEW_IN_1.0.5-FIRE_STAYS_IN_THE_CRYPT-8b1e1e?style=for-the-badge&labelColor=1b1b1b)
+![NEW IN 1.0.5](https://img.shields.io/badge/NEW_IN_1.0.5-BURNING_BEASTS_SPREAD_FIRE-8b1e1e?style=for-the-badge&labelColor=1b1b1b)
 
-**A fire inside a dungeon no longer sets the forest outside it alight, and the extinguish key moves to `` ` ``.**
+**A creature on fire now carries fire into the forest, a fire inside a dungeon no longer sets the forest outside it alight, and the extinguish key moves to `` ` ``.**
 
 | You | It |
 |---|---|
 | **Fight Brenna in the Smouldering Tomb** | Her fire still lights what will burn inside the tomb, but the trees and grass around its entrance stay untouched |
 | **Burn anything in any dungeon or crypt** | It burns and spreads inside, as before; no ground fire is lit in there, and none reaches the land outside |
+| **Set a creature alight** | A bear hit with a torch, a skeleton shot with a fire arrow, a boar that ran through a blaze: while it burns it lights the grass under it and any tree, log or burnable piece within 2 m, so it can carry fire into the forest. The fire is booked to whoever set it alight. Off with `fireset creaturefire false` |
 | **Put out a fire** | Press **`` ` ``** (backquote, left of 1) instead of G. A config still on the old G moves over by itself; a key you chose stays yours |
-| **Update the server and players** | The crypt fix runs on the server (or whoever hosts); the new key comes with each player's own 1.0.5. A 1.0.4 player can still join a 1.0.5 server, with a version notice |
+| **Update the server and players** | The crypt fix and the creature fire run on the server (or whoever hosts); the new key comes with each player's own 1.0.5, and so does the watch on burning creatures, since a creature is run by the game of the player near it. A 1.0.4 player can still join a 1.0.5 server, with a version notice; creatures near only them just do not carry fire |
 
 ---
 
@@ -321,6 +322,7 @@ All safe to leave alone. They are in `BepInEx/config/com.raveniron.firefront.cfg
 | Fire | `BurnDurationSeconds` · `SpreadMaturityFraction` · `SpreadRadius` | how long a piece burns, how long before it spreads, and how far |
 | Fire | `MaxConcurrentBurning` · `QueueSize` · `SpreadCheckInterval` | how many things burn at once, how many wait, how often spread is checked |
 | Fire | `BurnTreesAndLogs` · `BurnPlayerBuildings` · `FireInAshlands` | what may catch fire, and where |
+| Fire | `BurningCreaturesSpreadFire` · `BurningCreatureFireRadius` | whether a creature on fire lights what it passes, and how far around it (default on, 2 m) |
 | Fire | `TreeDestructionRate` | the chance a dead tree collapses rather than standing as a snag |
 | Fire | `FireRampEnabled` · `FireRampDurationSeconds` · `FireRampStartFraction` | how a new fire builds to full strength |
 | Ground | `GroundSpreadEnabled` · `GroundCellSize` · `GroundSpreadRadius` · `GroundBurnDurationSeconds` · `GroundMaxConcurrent` | ground fire: on or off, cell size, reach, burn time, cap |

@@ -22,6 +22,8 @@ namespace FireFront.Config
         public static ConfigEntry<float> TreeDestructionRate;
         public static ConfigEntry<bool> BurnPlayerBuildings;
         public static ConfigEntry<bool> FireInAshlands;
+        public static ConfigEntry<bool> BurningCreaturesSpreadFire;
+        public static ConfigEntry<float> BurningCreatureFireRadius;
         public static ConfigEntry<string> VfxPrefabName;
         public static ConfigEntry<bool> UseProceduralVfx;
         public static ConfigEntry<bool> FireSmokeEnabled;
@@ -423,6 +425,24 @@ namespace FireFront.Config
                 "(vanilla fire, spread from outside, console commands, a restored save), and the " +
                 "Ashlands' own fire works as it does without FireFront. WatchTheWorldBurn does " +
                 "not change it. Read by the server; set it there.");
+
+            // 1.0.5. New keys, so their defaults reach existing installs without a ledger rung.
+            BurningCreaturesSpreadFire = config.Bind(
+                "Fire", "BurningCreaturesSpreadFire", true,
+                "A creature that is on fire (a bear hit with a torch, a skeleton shot with a fire " +
+                "arrow, a boar that ran through a blaze) lights what it passes: the grass under it " +
+                "and any tree, log or burnable piece within BurningCreatureFireRadius, about once a " +
+                "second for as long as it burns. Players never carry fire. The fire is booked to the " +
+                "player whose fire hit set the creature alight, if there was one. Every normal rule " +
+                "still applies (Ashlands, water, dungeons, BurnPlayerBuildings, BurnTreesAndLogs). " +
+                "Read by the server; set it there.");
+
+            BurningCreatureFireRadius = config.Bind(
+                "Fire", "BurningCreatureFireRadius", 2f,
+                new ConfigDescription(
+                    "Meters around a burning creature that it sets alight each second (grass cells " +
+                    "and burnable objects). Read by the server.",
+                    new AcceptableValueRange<float>(0.5f, 4f)));
 
             VfxPrefabName = config.Bind(
                 "Visuals", "VfxPrefabName", "",

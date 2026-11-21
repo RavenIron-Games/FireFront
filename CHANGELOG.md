@@ -2,6 +2,18 @@
 
 ## 1.0.5
 
+- **A creature on fire lights what it passes.** Set a bear alight with a torch, shoot a skeleton
+  with a fire arrow, or let a boar run through a blaze, and for as long as it burns it lights the
+  grass under it and any tree, log or burnable piece within 2 m, about once a second, so a
+  burning animal can carry fire into the forest. Players never carry fire. The fire is booked to
+  the player whose fire hit set the creature alight; a creature lit any other way, FireFront's
+  own fire included, is booked to nobody. All the usual rules hold: nothing in the Ashlands, in
+  water, in dungeons or in rain that stops fire, and `BurnPlayerBuildings` still protects
+  builds. Two new server settings, `BurningCreaturesSpreadFire` (on) and
+  `BurningCreatureFireRadius` (2 m), with `fireset creaturefire` and `fireset creaturefireradius`.
+  A creature is run by the game of the player near it, so that player needs 1.0.5 for it to
+  carry fire. This adds one new message (`FireFront_CreatureFire`); an older server ignores it,
+  so the wire protocol stays 1.
 - **Fire inside a dungeon no longer lights the forest outside it.** Dungeons and crypts sit high
   above the map, directly over their entrance, and FireFront's ground fire is laid out by map
   position only, each patch placed on the land below. So anything burning inside one (Brenna's

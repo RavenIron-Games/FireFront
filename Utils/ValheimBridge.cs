@@ -3910,6 +3910,7 @@ namespace FireFront.Utils
         private const string RpcGroundSyncRequest = "FireFront_GroundSyncRequest";
         private const string RpcObjectFireSync = "FireFront_ObjectFireSync";
         private const string RpcVersion = "FireFront_Version"; // 0.24: Fire/VersionCheck.cs
+        private const string RpcCreatureFire = "FireFront_CreatureFire"; // 1.0.5: Fire/CreatureFireWatch.cs
 
         /// <summary>Client → server: run this whitelisted dev command there; replies stream back on the status-response channel.</summary>
         public static void SendCommandRelayToServer(string commandLine)
@@ -4149,7 +4150,7 @@ namespace FireFront.Utils
         // A client cannot register with the server's own uid (ZNet.RPC_PeerInfo refuses it as
         // already connected), so "matches the connection" also means "is not the server".
         //
-        // Scoped, deliberately: the twelve FireFront methods and vanilla's RPC_Damage, whose
+        // Scoped, deliberately: the FireFront methods below and vanilla's RPC_Damage, whose
         // sender the tree, log and wear-and-tear prefixes act on. FireFront polices the traffic
         // it consumes and nothing else. Vanilla and other mods stamp their own uid
         // (InvokeRoutedRPC writes m_id) and would pass anyway; a mod that does something
@@ -4173,6 +4174,7 @@ namespace FireFront.Utils
             RpcGroundSyncRequest.GetStableHashCode(),
             RpcObjectFireSync.GetStableHashCode(),
             RpcVersion.GetStableHashCode(),
+            RpcCreatureFire.GetStableHashCode(),
             "RPC_Damage".GetStableHashCode(),
         };
 
@@ -4358,7 +4360,8 @@ namespace FireFront.Utils
             System.Action<long> onGroundSyncRequest,
             System.Action<long, ZPackage> onPaintAssign,
             System.Action<long, ZPackage> onObjectFireSync,
-            System.Action<long, string, int> onVersion)
+            System.Action<long, string, int> onVersion,
+            System.Action<long, Vector3, long> onCreatureFire)
         {
             if (ZRoutedRpc.instance == null)
             {
@@ -4388,7 +4391,8 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.Register<ZPackage>(RpcPaintAssign, onPaintAssign);
                 ZRoutedRpc.instance.Register<ZPackage>(RpcObjectFireSync, onObjectFireSync);
                 ZRoutedRpc.instance.Register<string, int>(RpcVersion, onVersion);
-                FireLogger.Info($"[IGNITE-TRACE] All 13 FireFront RPCs registered successfully (IsServer={IsServer()}).");
+                ZRoutedRpc.instance.Register<Vector3, long>(RpcCreatureFire, onCreatureFire);
+                FireLogger.Info($"[IGNITE-TRACE] All 14 FireFront RPCs registered successfully (IsServer={IsServer()}).");
                 if (IsServer())
                 {
                     if (RoutedSenderGuardArmed)
@@ -4473,6 +4477,54 @@ namespace FireFront.Utils
             try { ZRoutedRpc.instance.InvokeRoutedRPC(peer, RpcVersion, version, protocol); }
             catch (System.Exception ex) { FireLogger.Debug($"SendVersionTo threw: {ex.Message}"); }
         }
+
+        /// <summary>
+        /// 1.0.5, client -> server: "a creature this game owns is on fire at this position", with the
+        /// player id of whoever set it alight (0 = nobody known). A NEW message, so the wire protocol
+        /// stays 1: a server older than 1.0.5 has no handler and ZRoutedRpc drops an unknown method
+        /// hash without a word (HandleRoutedRPC is a TryGetValue), so nothing an older build reads changes.
+        /// </summary>
+        public static void SendCreatureFireToServer(Vector3 position, long igniterPlayerId)
+        {
+            if (ZRoutedRpc.instance == null) return;
+            try { ZRoutedRpc.instance.InvokeRoutedRPC(GetServerPeerId(), RpcCreatureFire, position, igniterPlayerId); }
+            catch (System.Exception ex) { FireLogger.Debug($"SendCreatureFireToServer threw: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// 1.0.5: every live, non-player creature THIS game owns that carries vanilla's Burning status
+        /// effect. Public members only (Character.m_nview is protected in the real assembly, whatever
+        /// the publicized reference says), and never throws.
+        /// </summary>
+        public static void CollectOwnedBurningCreatures(List<Character> into)
+        {
+            into.Clear();
+            try
+            {
+                List<Character> all = Character.GetAllCharacters();
+                if (all == null) return;
+                int burning = SEMan.s_statusEffectBurning;
+                for (int i = 0; i < all.Count; i++)
+                {
+                    Character c = all[i];
+                    if (c == null || c.IsPlayer() || c.IsDead() || !c.IsOwner()) continue;
+                    SEMan seman = c.GetSEMan();
+                    if (seman == null || seman.GetStatusEffect(burning) == null) continue;
+                    into.Add(c);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                if (!_burningCreatureScanFailureLogged)
+                {
+                    _burningCreatureScanFailureLogged = true;
+                    FireLogger.Warn($"[CREATURE-FIRE] could not read burning creatures ({ex.GetType().Name}: {ex.Message}); " +
+                                    "creatures on fire will not light anything this session.");
+                }
+                into.Clear();
+            }
+        }
+        private static bool _burningCreatureScanFailureLogged;
 
         /// <summary>The uid of every connected peer that has finished its handshake.</summary>
         public static void CollectReadyPeerIds(List<long> into)

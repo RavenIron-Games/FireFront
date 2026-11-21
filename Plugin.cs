@@ -20,7 +20,8 @@ namespace FireFront
         /// different numbers do not, and both sides say so. Change it when, and only when, any
         /// FireFront RPC's name, argument list or payload layout changes. 1 = 0.24.0, the first
         /// build that sends it; anything older sends nothing.
-        /// Still 1 at 1.0.2 through 1.0.5: the cell size 1.0.2 appends to the ground-fire sync comes after
+        /// Still 1 at 1.0.2 through 1.0.5: 1.0.5 adds a message (FireFront_CreatureFire) but changes none, and an
+        /// older peer drops an unknown routed method without a word. The cell size 1.0.2 appends to the ground-fire sync comes after
         /// everything an older build reads, so each side still reads the other's packages whole.
         /// </summary>
         public const int WireProtocol = 1;

@@ -32,6 +32,8 @@ Two presets override keys that still read true in the file: `LowSpecPreset` (Low
 | Fire | `BurnPlayerBuildings` | both | `burnbuildings` |  |  |
 | Fire | `BurnTreesAndLogs` | both | `trees` |  |  |
 | Fire | `FireInAshlands` | server | `ashlands` |  | client copy is dead |
+| Fire | `BurningCreaturesSpreadFire` | server | `creaturefire` |  | client copy is dead (1.0.5) |
+| Fire | `BurningCreatureFireRadius` | server | `creaturefireradius` |  | client copy is dead (1.0.5) |
 | Fire | `FireKeepsYouWarm` | both | `firewarmth` |  |  |
 | Fire | `FireRampDurationSeconds` | server | `rampduration` |  | client copy is dead |
 | Fire | `FireRampEnabled` | server | `rampenabled` | LowSpec + Apocalypse | client copy is dead |
@@ -248,6 +250,13 @@ File and line per reader, at `c4ab08c`. Status-line echoes and the `fireset` set
 - Fire/FireManager.cs:3876,3891 - BuildCandidateList(): gates whether trees/logs are scanned into the cached spread-candidate pool - server (called only from SpreadPass)
 - Fire/FireManager.cs:3950 - IgniteBurnablesNear(): passed to ValheimBridge.CollectBurnableZdosNear as a filter - server (called only from StartFire, server-gated)
 - Fire/FireManager.cs:1558 - StatusLine() echo - status line, does not count
+
+</details>
+<details><summary><code>BurningCreaturesSpreadFire</code> / <code>BurningCreatureFireRadius</code> (server, 1.0.5)</summary>
+
+- Fire/FireManager.cs IgniteFromBurningCreature(), the only reader; it runs on the server (from the FireFront_CreatureFire handler, or directly from Fire/CreatureFireWatch.cs on a server or host)
+- A client's watcher reports every burning creature it owns whatever its own copy says; the server decides, as with the RPC_Damage patches
+- Fire/FireManager.cs StatusLine() echo - status line, does not count
 
 </details>
 <details><summary><code>FireInAshlands</code> (server)</summary>

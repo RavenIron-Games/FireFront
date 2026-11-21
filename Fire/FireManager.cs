@@ -800,7 +800,7 @@ namespace FireFront.Fire
             if (routedRpc != null && !ReferenceEquals(routedRpc, _registeredRpcInstance))
             {
                 _registeredRpcInstance = routedRpc; // guarded by reference, so a reconnect's fresh instance re-registers
-                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest, HandlePaintAssign, HandleObjectFireSync, VersionCheck.OnVersion);
+                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest, HandlePaintAssign, HandleObjectFireSync, VersionCheck.OnVersion, HandleCreatureFireRequest);
 
                 // A fresh ZRoutedRpc means a fresh world, so everything this machine was drawing on
                 // behalf of the old one is stale. FireManager lives on the plugin's own GameObject
@@ -824,6 +824,9 @@ namespace FireFront.Fire
             {
                 TryPlayerExtinguish();
             }
+
+            // 1.0.5: on every machine, for the creatures it owns (usually the nearby player's game).
+            CreatureFireWatch.Tick();
 
             ApplyFireWarmth();
 
@@ -1482,6 +1485,9 @@ namespace FireFront.Fire
             _queue.Clear();
             _queuedIgniters.Clear();
             _spreadIgniter = 0L;
+            _creatureFireWindowStart = 0f;
+            _creatureFireInWindow = 0;
+            CreatureFireWatch.Reset();
             _dousedUntil.Clear();
             _groundBurning.Clear();
             _groundExhausted.Clear();
@@ -1864,6 +1870,7 @@ namespace FireFront.Fire
                    $"fires {_events.Count}, " +
                    $"trees {FireConfig.BurnTreesAndLogs.Value}, " +
                    $"burnbuildings {FireConfig.BurnPlayerBuildings.Value}, ashlands {FireConfig.FireInAshlands.Value}, " +
+                   $"creaturefire {FireConfig.BurningCreaturesSpreadFire.Value} ({FireConfig.BurningCreatureFireRadius.Value:F1} m), " +
                    $"vfx '{FireConfig.VfxPrefabName.Value}', procedural {FireConfig.UseProceduralVfx.Value}, " +
                    $"treeflames {FireConfig.TreeFlameScaling.Value} (max {FireConfig.EffectiveMaxFlameHeight}m, tallcap {FireConfig.EffectiveTallFireMaxConcurrent}, sparks {FireConfig.EffectiveCrownSparksEnabled}), " +
                    $"hurts {FireConfig.FireHurtsEnabled.Value} (playerOnly {FireConfig.FireHurtsPlayerOnly.Value}, {FireConfig.FireDamagePerTick.Value}dmg/{FireConfig.FireDamageTickInterval.Value}s), " +
@@ -1972,6 +1979,97 @@ namespace FireFront.Fire
                     TryIgniteGroundCell(new GroundCellKey(originKey.X + dx, originKey.Z + dz), y);
                 }
             }
+        }
+
+        // ---- 1.0.5: burning creatures (Fire/CreatureFireWatch.cs) ---------------------------
+
+        // Server-wide ceiling on creature-fire reports handled per second, from every peer
+        // together. Each one sweeps the ZDO zones around a point, so a forest full of burning
+        // greydwarfs must not turn into dozens of sweeps a frame. A report over the ceiling is
+        // dropped, not queued: the creature reports again next second while it still burns.
+        private const int CreatureFireMaxPerSecond = 16;
+        private float _creatureFireWindowStart;
+        private int _creatureFireInWindow;
+        private readonly List<ValheimBridge.ZdoBurnable> _creatureZdoScratch = new List<ValheimBridge.ZdoBurnable>();
+
+        /// <summary>
+        /// Server-side handler for FireFront_CreatureFire: a client reports a creature it owns is on
+        /// fire at <paramref name="position"/>. Bounded like the other requests: the position must be
+        /// finite and near where the server last saw the sender, and the igniter must be a player
+        /// online now (else it is booked to nobody).
+        /// </summary>
+        private void HandleCreatureFireRequest(long sender, Vector3 position, long igniterPlayerId)
+        {
+            if (!ValheimBridge.IsServer()) return;
+            if (float.IsNaN(position.x) || float.IsNaN(position.y) || float.IsNaN(position.z) ||
+                float.IsInfinity(position.x) || float.IsInfinity(position.y) || float.IsInfinity(position.z))
+            {
+                AuthLog.Refused(sender, "creature-fire", "refused a creature-fire report: the position is not finite");
+                return;
+            }
+            if (!RequestTargetInReach(sender, position, MaxIgniteReach))
+            {
+                AuthLog.Refused(sender, "creature-fire-reach", $"refused a creature-fire report at ({position.x:F0},{position.z:F0}): " +
+                                        $"more than {MaxIgniteReach:F0} m from where the server last saw the player");
+                return;
+            }
+            if (igniterPlayerId != 0L && !ValheimBridge.IsOnlinePlayerId(igniterPlayerId))
+            {
+                FireLogger.Debug($"[CREATURE-FIRE] igniter {igniterPlayerId} in peer {sender}'s report is not an online player — booked as natural.");
+                igniterPlayerId = 0L;
+            }
+            IgniteFromBurningCreature(position, igniterPlayerId);
+        }
+
+        /// <summary>
+        /// Server only: a creature on fire stands at <paramref name="position"/>. Lights every tree,
+        /// log and burnable piece within BurningCreatureFireRadius, then the grass cells in the same
+        /// radius, booked to <paramref name="igniterPlayerId"/> (0 = nobody). Every rule any other
+        /// fire obeys still holds: TryIgnite and TryIgniteGroundCell carry the Ashlands, soak, cap
+        /// and water checks, and IgniteGroundNear the dungeon line; rain is checked here the way the
+        /// spread pass checks it for a burning object. Called by the RPC handler above, and directly
+        /// by CreatureFireWatch on a server or host for the creatures it owns itself.
+        /// </summary>
+        public void IgniteFromBurningCreature(Vector3 position, long igniterPlayerId)
+        {
+            if (!ValheimBridge.IsServer()) return;
+            if (!FireConfig.Enabled.Value || !FireConfig.BurningCreaturesSpreadFire.Value) return;
+            if (position.y > InteriorHeight) return;
+            if (AshlandsBarsFireAt(position)) return; // quiet: an Ashlands creature burns all the time
+            if (FireConfig.EffectiveRainSuppressesObjectFire && ValheimBridge.IsRainingAt(position)) return;
+
+            float now = Time.time;
+            if (now - _creatureFireWindowStart >= 1f) { _creatureFireWindowStart = now; _creatureFireInWindow = 0; }
+            if (_creatureFireInWindow >= CreatureFireMaxPerSecond) return;
+            _creatureFireInWindow++;
+
+            float radius = Mathf.Clamp(FireConfig.BurningCreatureFireRadius.Value, 0.5f, 4f);
+            int lit = 0;
+
+            ValheimBridge.CollectBurnableZdosNear(position, radius,
+                FireConfig.BurnTreesAndLogs.Value, FireConfig.BurnPlayerBuildings.Value, _creatureZdoScratch);
+            for (int i = 0; i < _creatureZdoScratch.Count; i++)
+            {
+                ValheimBridge.ZdoBurnable candidate = _creatureZdoScratch[i];
+                // The ZDO-level refusals first, so nothing is built and claimed only to be refused.
+                if (_burning.ContainsKey(candidate.Id) || _queue.Contains(candidate.Id)) continue;
+                if (IsSoaked(candidate.Id) || AshlandsBarsFireAt(candidate.Position)) continue;
+                Component target = ValheimBridge.ComponentFromZdoid(candidate.Id);
+                if (target == null) continue;
+                TryIgnite(target, igniterPlayerId);
+                lit++;
+            }
+            _creatureZdoScratch.Clear();
+
+            // Ground cells take their igniter from _spreadIgniter (TryIgniteGroundCell), the same
+            // channel a burning object's spread uses, so the trail is booked to the same player.
+            long saved = _spreadIgniter;
+            _spreadIgniter = igniterPlayerId;
+            try { IgniteGroundNear(position, radius); }
+            finally { _spreadIgniter = saved; }
+
+            FireLogger.Debug($"[CREATURE-FIRE] burning creature at ({position.x:F1},{position.y:F1},{position.z:F1}): " +
+                             $"{lit} object(s) tried, ground within {radius:F1} m (igniter {igniterPlayerId}).");
         }
 
         /// <summary>
