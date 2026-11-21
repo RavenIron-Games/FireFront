@@ -1874,7 +1874,7 @@ namespace FireFront.Fire
                    $"fires {_events.Count}, " +
                    $"trees {FireConfig.BurnTreesAndLogs.Value}, " +
                    $"burnbuildings {FireConfig.BurnPlayerBuildings.Value}, ashlands {FireConfig.FireInAshlands.Value}, " +
-                   $"creaturefire {FireConfig.BurningCreaturesSpreadFire.Value} ({FireConfig.BurningCreatureFireRadius.Value:F1} m, {FireConfig.BurningCreatureCarrySeconds.Value:F0} s), " +
+                   $"creaturefire {FireConfig.BurningCreaturesSpreadFire.Value} (ground {FireConfig.BurningCreatureFireRadius.Value:F1} m, trees {FireConfig.BurningCreatureTreeRadius.Value:F1} m, carry {FireConfig.BurningCreatureCarrySeconds.Value:F0} s, burn {FireConfig.BurningCreatureBurnSeconds.Value:F0} s), " +
                    $"vfx '{FireConfig.VfxPrefabName.Value}', procedural {FireConfig.UseProceduralVfx.Value}, " +
                    $"treeflames {FireConfig.TreeFlameScaling.Value} (max {FireConfig.EffectiveMaxFlameHeight}m, tallcap {FireConfig.EffectiveTallFireMaxConcurrent}, sparks {FireConfig.EffectiveCrownSparksEnabled}), " +
                    $"hurts {FireConfig.FireHurtsEnabled.Value} (playerOnly {FireConfig.FireHurtsPlayerOnly.Value}, {FireConfig.FireDamagePerTick.Value}dmg/{FireConfig.FireDamageTickInterval.Value}s), " +
@@ -2187,20 +2187,24 @@ namespace FireFront.Fire
             _creatureFireInWindow++;
 
             float radius = Mathf.Clamp(FireConfig.BurningCreatureFireRadius.Value, 0.5f, 4f);
+            // Trees and other objects reach further than grass: an object's position is its base, and a
+            // tree's branches spread 3-4 m from the trunk, so a creature running UNDER a canopy should
+            // set it alight. At 2 m the second test lit one tree in 60 reports.
+            float objectRadius = Mathf.Clamp(FireConfig.BurningCreatureTreeRadius.Value, 0.5f, 6f);
             float length = Vector3.Distance(from, position);
             int lit = 0;
 
             // Objects: ONE zone sweep around the middle of the path, kept to those within the radius
             // of the path itself (a capsule), so a sprinting creature catches the trunks it brushes.
             Vector3 mid = (from + position) * 0.5f;
-            ValheimBridge.CollectBurnableZdosNear(mid, length * 0.5f + radius,
+            ValheimBridge.CollectBurnableZdosNear(mid, length * 0.5f + objectRadius,
                 FireConfig.BurnTreesAndLogs.Value, FireConfig.BurnPlayerBuildings.Value, _creatureZdoScratch);
-            float radiusSqr = radius * radius;
+            float objectRadiusSqr = objectRadius * objectRadius;
             for (int i = 0; i < _creatureZdoScratch.Count; i++)
             {
                 ValheimBridge.ZdoBurnable candidate = _creatureZdoScratch[i];
                 Vector3 c = candidate.Position;
-                if (FireMath.SqrDistanceToSegment(c.x, c.y, c.z, from.x, from.y, from.z, position.x, position.y, position.z) > radiusSqr) continue;
+                if (FireMath.SqrDistanceToSegment(c.x, c.y, c.z, from.x, from.y, from.z, position.x, position.y, position.z) > objectRadiusSqr) continue;
                 // The ZDO-level refusals first, so nothing is built and claimed only to be refused.
                 if (_burning.ContainsKey(candidate.Id) || _queue.Contains(candidate.Id)) continue;
                 if (IsSoaked(candidate.Id) || AshlandsBarsFireAt(candidate.Position)) continue;
@@ -2226,7 +2230,7 @@ namespace FireFront.Fire
 
             FireLogger.Debug($"[CREATURE-FIRE] burning creature {creature} at ({position.x:F1},{position.y:F1},{position.z:F1}), " +
                              $"path {length:F1} m, {now - burn.FirstAt:F0}/{carry:F0} s into this burn: {lit} object(s) tried, " +
-                             $"ground within {radius:F1} m of the path (igniter {igniterPlayerId}).");
+                             $"objects within {objectRadius:F1} m and ground within {radius:F1} m of the path (igniter {igniterPlayerId}).");
         }
 
         /// <summary>

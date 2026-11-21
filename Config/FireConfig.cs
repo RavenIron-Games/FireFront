@@ -25,6 +25,8 @@ namespace FireFront.Config
         public static ConfigEntry<bool> BurningCreaturesSpreadFire;
         public static ConfigEntry<float> BurningCreatureFireRadius;
         public static ConfigEntry<float> BurningCreatureCarrySeconds;
+        public static ConfigEntry<float> BurningCreatureTreeRadius;
+        public static ConfigEntry<float> BurningCreatureBurnSeconds;
         public static ConfigEntry<string> VfxPrefabName;
         public static ConfigEntry<bool> UseProceduralVfx;
         public static ConfigEntry<bool> FireSmokeEnabled;
@@ -453,6 +455,25 @@ namespace FireFront.Config
                     "as long as it lived. Past this it still burns and still hurts, but lights nothing " +
                     "more until it has stopped burning for a few seconds. Read by the server.",
                     new AcceptableValueRange<float>(3f, 120f)));
+
+            BurningCreatureTreeRadius = config.Bind(
+                "Fire", "BurningCreatureTreeRadius", 4f,
+                new ConfigDescription(
+                    "Meters from a burning creature's path within which trees, logs and burnable pieces " +
+                    "catch. Wider than the grass radius because a tree is measured at its trunk and its " +
+                    "branches spread a few metres out: a creature running under a canopy sets it alight. " +
+                    "Read by the server.",
+                    new AcceptableValueRange<float>(0.5f, 6f)));
+
+            BurningCreatureBurnSeconds = config.Bind(
+                "Fire", "BurningCreatureBurnSeconds", 12f,
+                new ConfigDescription(
+                    "How long a creature hit with fire (a torch, a fire arrow, a hearth) stays alight. " +
+                    "Vanilla's burn is about 5 s, too short to carry fire anywhere; this keeps it going " +
+                    "for longer WITHOUT more damage (once vanilla's own burn damage is dealt, the rest is " +
+                    "harmless). 0 = vanilla's time. Read by the game that runs the creature, usually the " +
+                    "nearest player's; fireset sets the server's copy too.",
+                    new AcceptableValueRange<float>(0f, 30f)));
 
             VfxPrefabName = config.Bind(
                 "Visuals", "VfxPrefabName", "",

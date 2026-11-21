@@ -47,7 +47,7 @@ namespace FireFront.Commands
                 args => FireDebug(args));
 
             new Terminal.ConsoleCommand("fireset",
-                "FireFront: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|ashlands|creaturefire|creaturefireradius|creaturefireseconds|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|charredember|charredembercover|charredsmoke|charredsmokeseconds|enabled> <value>",
+                "FireFront: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|ashlands|creaturefire|creaturefireradius|creaturefireseconds|creaturefiretreeradius|creatureburnseconds|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|charredember|charredembercover|charredsmoke|charredsmokeseconds|enabled> <value>",
                 args => FireSet(args));
 
             new Terminal.ConsoleCommand("firelistprefabs",
@@ -297,7 +297,7 @@ namespace FireFront.Commands
         {
             if (args.Length < 3)
             {
-                Say(args, "Usage: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|ashlands|creaturefire|creaturefireradius|creaturefireseconds|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|charredember|charredembercover|charredsmoke|charredsmokeseconds|enabled> <value>");
+                Say(args, "Usage: fireset <burnduration|firematurity|spreadradius|maxburning|queuesize|spreadinterval|trees|burnbuildings|ashlands|creaturefire|creaturefireradius|creaturefireseconds|creaturefiretreeradius|creatureburnseconds|vfx|procedural|groundenabled|groundcellsize|groundradius|groundburnduration|groundmax|groundvfxmax|grounddamagemax|firehurts|firehurtsplayeronly|firehurtsradius|firedamage|firetickinterval|extinguishradius|douseimmunity|rainsuppress|rainmultiplier|rainobjects|rainobjectmultiplier|scorchmarks|scorchlifetime|dirtpaint|dirtpaintradius|rampenabled|rampduration|rampstart|exhaustionenabled|fuelregrow|windbias|windupwindchance|windinfluence|dousingradius|persistfires|firebreaks|treeregrowth|treeregrowthseconds|groundleashenabled|groundleashdistance|lowspec|debug|burntheworld|smouldering|smoulderafter|treeflames|crownsparks|maxflameheight|tallfiremax|firewarmth|firewarmthradius|firesmoke|waterblocks|maxkills|fireshadows|heathaze|barkchar|treefire|treetick|treekillfraction|treedestruction|charreddelay|charredcoalmin|charredcoalmax|charredhealth|charredcrumble|charredglow|charredember|charredembercover|charredsmoke|charredsmokeseconds|enabled> <value>");
                 return;
             }
 
@@ -545,6 +545,14 @@ namespace FireFront.Commands
                     break;
                 case "creaturefire":
                     if (bool.TryParse(raw, out bool cf)) { FireConfig.BurningCreaturesSpreadFire.Value = cf; Ok(args, key, cf); }
+                    else Bad(args, raw);
+                    break;
+                case "creaturefiretreeradius":
+                    if (InvariantNumbers.TryParseFloat(raw, out float cft)) { FireConfig.BurningCreatureTreeRadius.Value = cft; Ok(args, key, FireConfig.BurningCreatureTreeRadius.Value); }
+                    else Bad(args, raw);
+                    break;
+                case "creatureburnseconds":
+                    if (InvariantNumbers.TryParseFloat(raw, out float cbs)) { FireConfig.BurningCreatureBurnSeconds.Value = cbs; Ok(args, key, FireConfig.BurningCreatureBurnSeconds.Value); }
                     else Bad(args, raw);
                     break;
                 case "creaturefireseconds":
@@ -1033,6 +1041,8 @@ namespace FireFront.Commands
                 { "creaturefire", FireConfig.BurningCreaturesSpreadFire },
                 { "creaturefireradius", FireConfig.BurningCreatureFireRadius },
                 { "creaturefireseconds", FireConfig.BurningCreatureCarrySeconds },
+                { "creaturefiretreeradius", FireConfig.BurningCreatureTreeRadius },
+                { "creatureburnseconds", FireConfig.BurningCreatureBurnSeconds },
                 { "vfx", FireConfig.VfxPrefabName },
                 { "procedural", FireConfig.UseProceduralVfx },
                 { "groundenabled", FireConfig.GroundSpreadEnabled },
