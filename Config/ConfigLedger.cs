@@ -29,13 +29,14 @@ namespace FireFront.Config
     ///   1 = 0.21.3: Visuals.SmoulderAfterFraction still at 0.45 moves to 0.65; the orphan
     ///       Debug.VerboseLogging is dropped.
     ///   2 = 0.21.9: Ground.GroundVfxMaxConcurrent still at 30 moves to 200 - at 30 against a
-    ///       GroundMaxConcurrent of 50, two cells in five burned invisibly. Current.
+    ///       GroundMaxConcurrent of 50, two cells in five burned invisibly.
+    ///   3 = 1.0.5: Controls.ExtinguishKey still at G moves to BackQuote (`). Current.
     /// </summary>
     public static class ConfigLedger
     {
         public const string MetaSection = "Meta";
         public const string VersionKey = "ConfigVersion";
-        public const int CurrentVersion = 2;
+        public const int CurrentVersion = 3;
 
         /// <summary>One slot's every old default, from Wings' shape. A stored value equal to ANY of them is the mod's own old default, not admin work.</summary>
         public sealed class Rebase
@@ -70,6 +71,14 @@ namespace FireFront.Config
                     // not a choice anyone made, so it has to follow or the fix reaches nobody who
                     // already has a config file. Anything else in that slot is admin work and is kept.
                     new Rebase { Section = "Ground", Key = "GroundVfxMaxConcurrent", OldDefaults = new[] { "30" } },
+                }
+            },
+            { 3, new[]
+                {
+                    // 1.0.5 moved the extinguish key G -> BackQuote (`). BepInEx writes a lone key with
+                    // no modifiers as its KeyCode name, so a stored "G" is the mod's own old default.
+                    // "G + LeftShift" or any other key is someone's choice and is kept.
+                    new Rebase { Section = "Controls", Key = "ExtinguishKey", OldDefaults = new[] { "G" } },
                 }
             },
         };

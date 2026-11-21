@@ -17,13 +17,14 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 
 ![NEW IN 1.0.5](https://img.shields.io/badge/NEW_IN_1.0.5-FIRE_STAYS_IN_THE_CRYPT-8b1e1e?style=for-the-badge&labelColor=1b1b1b)
 
-**A fire inside a dungeon no longer sets the forest outside it alight.**
+**A fire inside a dungeon no longer sets the forest outside it alight, and the extinguish key moves to `` ` ``.**
 
 | You | It |
 |---|---|
 | **Fight Brenna in the Smouldering Tomb** | Her fire still lights what will burn inside the tomb, but the trees and grass around its entrance stay untouched |
 | **Burn anything in any dungeon or crypt** | It burns and spreads inside, as before; no ground fire is lit in there, and none reaches the land outside |
-| **Update the server** | The fix runs where the fire is simulated, so the server (or whoever hosts) needs 1.0.5; 1.0.4 players can still play on it, with a version notice on joining |
+| **Put out a fire** | Press **`` ` ``** (backquote, left of 1) instead of G. A config still on the old G moves over by itself; a key you chose stays yours |
+| **Update the server and players** | The crypt fix runs on the server (or whoever hosts); the new key comes with each player's own 1.0.5. A 1.0.4 player can still join a 1.0.5 server, with a version notice |
 
 ---
 
@@ -195,13 +196,13 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 
 ![THE TOOLBOX](https://img.shields.io/badge/THE_TOOLBOX-QUICK_START_%C2%B7_KEYS_%C2%B7_HOW--TO-1b1b1b?style=for-the-badge&labelColor=8b1e1e)
 
-**First ten minutes:** install with your mod manager, on the server too → find a quiet stand of trees → light one with a torch or a fire arrow → watch the wind take it → press **G**, or craft Dousing Bombs (3 Resin + 2 Leather scraps) and throw a line ahead of the front.
+**First ten minutes:** install with your mod manager, on the server too → find a quiet stand of trees → light one with a torch or a fire arrow → watch the wind take it → press **`` ` ``** (backquote, left of 1), or craft Dousing Bombs (3 Resin + 2 Leather scraps) and throw a line ahead of the front.
 
 Press `` ` `` to open the console.
 
 | Key | | Command | |
 |---|---|---|---|
-| **G** | put out what you look at, and the fire around you | `firestatus` | what is burning, and every setting in force |
+| **`` ` ``** | put out what you look at, and the fire around you | `firestatus` | what is burning, and every setting in force |
 | | | `ignite` | light what is under your crosshair |
 | | | `startfire [radius]` | light everything burnable around you |
 | | | `stopfire` | put out what is under your crosshair |
@@ -216,7 +217,7 @@ Press `` ` `` to open the console.
 
 `fireset` changes the copy on your own machine and asks the server, which applies it only for its admins, whether typed or moved from a config manager; its answer comes back the same way. `firestatus` asks the server too and needs no admin.
 
-`stopfire` puts out only the one thing under your crosshair, unlike **G**, which also clears the fire around you. It checks the admin flag your own game holds, which can say no even to a real admin on a dedicated server; **G** needs no admin. `firedebug` turns verbose logging on or off on your own machine; on a client connected to a server it also sends the new value to the server like `fireset debug`, which the server applies only for its admins.
+`stopfire` puts out only the one thing under your crosshair, unlike **`` ` ``**, which also clears the fire around you. It checks the admin flag your own game holds, which can say no even to a real admin on a dedicated server; **G** needs no admin. `firedebug` turns verbose logging on or off on your own machine; on a client connected to a server it also sends the new value to the server like `fireset debug`, which the server applies only for its admins.
 
 </details>
 
@@ -334,7 +335,7 @@ All safe to leave alone. They are in `BepInEx/config/com.raveniron.firefront.cfg
 | Trees | `TreeRegrowthEnabled` · `TreeRegrowthSeconds` | whether and when burnt trees grow back |
 | Visuals | `UseVanillaDirtPaint` · `DirtPaintRadius` | lasting bare dirt where ground fire burned |
 | Controls | `DouseImmunitySeconds` | how long something put out stays soaked |
-| Controls · Items | `ExtinguishGroundRadius` · `DousingBombRadius` | the most a player's **G** or Dousing Bomb may clear; each player's own copy asks, up to this |
+| Controls · Items | `ExtinguishGroundRadius` · `DousingBombRadius` | the most a player's **`` ` ``** key or Dousing Bomb may clear; each player's own copy asks, up to this |
 
 </details>
 
@@ -343,7 +344,7 @@ All safe to leave alone. They are in `BepInEx/config/com.raveniron.firefront.cfg
 
 | Section | Settings |
 |---|---|
-| **Controls** | `ExtinguishKey` (default **G**) · `ExtinguishGroundRadius` |
+| **Controls** | `ExtinguishKey` (default **`` ` ``**, the backquote key left of 1; G before 1.0.5) · `ExtinguishGroundRadius` |
 | **Items** | `DousingBombRadius` |
 | **Fire** | `FireKeepsYouWarm` · `FireWarmthRadius` |
 | **Visuals** | `UseProceduralVfx` · `VfxPrefabName` · `FireSmokeEnabled` · `TreeFlameScaling` · `CrownSparksEnabled` · `MaxFlameHeight` · `TallFireMaxConcurrent` · `FireShadowsEnabled` · `HeatHazeEnabled` · `BarkCharEnabled` · `SmoulderingVfxEnabled` · `SmoulderAfterFraction` · `ScorchMarksEnabled` · `ScorchMarkLifetimeSeconds` |

@@ -213,7 +213,7 @@ File and line per reader, at `c4ab08c`. Status-line echoes and the `fireset` set
 </details>
 <details><summary><code>ExtinguishKey</code> (client)</summary>
 
-- Fire/FireManager.cs:718 - `if (FireConfig.ExtinguishKey.Value.IsDown()) TryPlayerExtinguish();`, checked every Update() frame BEFORE the server-authority gate at line 764, so the statement executes on every peer's process but only has any effect on the peer with a live local player/crosshair
+- Default `` ` `` (BackQuote) since 1.0.5, G before; config layout 3 moves a stored G. Fire/FireManager.cs:718 - `if (FireConfig.ExtinguishKey.Value.IsDown()) TryPlayerExtinguish();`, checked every Update() frame BEFORE the server-authority gate at line 764, so the statement executes on every peer's process but only has any effect on the peer with a live local player/crosshair
 
 </details>
 <details><summary><code>BurnDurationSeconds</code> (both)</summary>

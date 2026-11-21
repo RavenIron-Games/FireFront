@@ -50,7 +50,7 @@ namespace FireFront.Utils
 
 namespace UnityEngine
 {
-    public enum KeyCode { None = 0, G = 103 }
+    public enum KeyCode { None = 0, BackQuote = 96, G = 103 }
 
     /// <summary>Only the clamps FireConfig uses when it reads a value back. Same semantics as Unity's.</summary>
     public static class Mathf

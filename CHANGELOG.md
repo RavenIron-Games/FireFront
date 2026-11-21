@@ -10,6 +10,11 @@
   Objects in there still burn and still spread to each other, and fire outside, creature fire
   included, is unchanged. The wire protocol stays 1, so 1.0.4 and 1.0.5 play together; the fix
   needs only the server, or the player hosting, to run 1.0.5.
+- **The extinguish key is now `` ` `` (backquote, left of 1), not G.** A config file that still
+  holds the old default G moves to the new key on first boot (config layout version 3); a key you
+  picked yourself, G with a modifier included, is kept and named in the log. To keep G, set
+  `ExtinguishKey = G` again after that boot. The key is read by each player's own game, so this
+  changes on each player's machine as they update.
 
 ## 1.0.4 — 2026-11-01
 

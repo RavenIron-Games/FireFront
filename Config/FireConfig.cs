@@ -624,10 +624,11 @@ namespace FireFront.Config
                     new AcceptableValueRange<float>(0.1f, 10f)));
 
             ExtinguishKey = config.Bind(
-                "Controls", "ExtinguishKey", new KeyboardShortcut(KeyCode.G),
+                "Controls", "ExtinguishKey", new KeyboardShortcut(KeyCode.BackQuote),
                 "Hold/press this key to extinguish fire: the burning object under your crosshair " +
                 "(if any) plus any ground fire within ExtinguishGroundRadius of you. Rebindable — " +
-                "change this if G conflicts with something you use.");
+                "change this if ` (BackQuote, left of 1) conflicts with something you use. " +
+                "The default was G before 1.0.5; a stored G moves to BackQuote once, anything else is kept.");
 
             ExtinguishGroundRadius = config.Bind(
                 "Controls", "ExtinguishGroundRadius", 15f,

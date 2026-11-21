@@ -79,7 +79,7 @@ namespace FireFront.Fire
 
         private readonly Dictionary<ZDOID, BurningState> _burning = new Dictionary<ZDOID, BurningState>();
 
-        // Objects that were deliberately extinguished (bomb, G key, stopfire)
+        // Objects that were deliberately extinguished (bomb, extinguish key, stopfire)
         // and can't re-ignite until the value — same "soaked" logic as doused
         // ground cells in ExtinguishGroundNear. Pruned each cycle; in-memory
         // only (a restart forgetting a minute of wetness is acceptable).
@@ -1138,7 +1138,7 @@ namespace FireFront.Fire
         }
 
         /// <summary>
-        /// Server-side handler for a client's extinguish request — the G key
+        /// Server-side handler for a client's extinguish request — the extinguish key
         /// and the Dousing Bomb both land here (the bomb passes ZDOID.None and
         /// its impact point). Since 0.17.5 the radius also clears burning
         /// OBJECTS, not just ground cells: a bomb landing on a burning tree
