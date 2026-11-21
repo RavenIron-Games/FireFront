@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.5
+
+- **Fire inside a dungeon no longer lights the forest outside it.** Dungeons and crypts sit high
+  above the map, directly over their entrance, and FireFront's ground fire is laid out by map
+  position only, each patch placed on the land below. So anything burning inside one (Brenna's
+  fire in the Smouldering Tomb, most often) lit the grass under the dungeon, and that fire then
+  spread into the forest around the entrance. Nothing inside a dungeon lights ground fire now.
+  Objects in there still burn and still spread to each other, and fire outside, creature fire
+  included, is unchanged. The wire protocol stays 1, so 1.0.4 and 1.0.5 play together; the fix
+  needs only the server, or the player hosting, to run 1.0.5.
+
 ## 1.0.4 — 2026-11-01
 
 Updated due to the Valheim 1.0.21 patch. Rebuilt and checked against Valheim 1.0.21 (network

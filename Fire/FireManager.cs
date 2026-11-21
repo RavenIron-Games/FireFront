@@ -1975,6 +1975,13 @@ namespace FireFront.Fire
         }
 
         /// <summary>
+        /// Above this height a position is inside an interior (dungeon, crypt), not on the
+        /// ground: vanilla's own 'not on the ground' guard, also used by RandomEventOverrideAt.
+        /// </summary>
+        private const float InteriorHeight = 3000f;
+        private bool _interiorGroundRefusalLogged;
+
+        /// <summary>
         /// Ignite every ground cell within radius of a world position. Used
         /// for object-to-ground seeding (a burning tree/piece lighting the
         /// ground around its own fixed position — bounded, not compounding)
@@ -1991,10 +1998,27 @@ namespace FireFront.Fire
         /// event: TryIgniteGroundCell seeds _fireOrigin from the first cell and
         /// captures no igniter, so lightning fires are natural — attributed to
         /// nobody — by construction.
+        ///
+        /// Nothing above <see cref="InteriorHeight"/> seeds ground fire (1.0.5). Dungeons and
+        /// other interiors sit about 5000 m up, directly over their entrance, and the ground
+        /// grid is keyed by x/z alone with each cell's height taken from a terrain raycast
+        /// down from 5000 m. So a piece burning in a crypt (Brenna's fire in the Smouldering
+        /// Tomb, say) used to light the forest floor under it, outside the crypt. Objects in
+        /// an interior still burn and still spread to each other; that spread measures in 3D.
         /// </summary>
         public void IgniteGroundNear(Vector3 origin, float radius)
         {
             if (!FireConfig.GroundSpreadEnabled.Value) return;
+            if (origin.y > InteriorHeight)
+            {
+                if (!_interiorGroundRefusalLogged)
+                {
+                    _interiorGroundRefusalLogged = true;
+                    FireLogger.Debug($"[IGNITE-TRACE] IgniteGroundNear at ({origin.x:F1},{origin.y:F1},{origin.z:F1}): " +
+                                     $"refused, above {InteriorHeight:F0} m (an interior); no ground fire there. Logged once.");
+                }
+                return;
+            }
 
             float size = FireConfig.GroundCellSize.Value;
             int range = Mathf.CeilToInt(radius / size);

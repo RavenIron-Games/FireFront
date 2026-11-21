@@ -2,7 +2,7 @@
 # 🔥 FireFront
 
 ![FIREFRONT](https://img.shields.io/badge/FIREFRONT-FIRE_THAT_ACTUALLY_SPREADS-c9a227?style=for-the-badge&labelColor=1b1b1b)
-![VERSION](https://img.shields.io/badge/VERSION-1.0.4-8b1e1e?style=for-the-badge&labelColor=1b1b1b)
+![VERSION](https://img.shields.io/badge/VERSION-1.0.5-8b1e1e?style=for-the-badge&labelColor=1b1b1b)
 ![CLIENT & SERVER](https://img.shields.io/badge/CLIENT_%26_SERVER-SAME_VERSION_ON_BOTH-1f4e79?style=for-the-badge&labelColor=1b1b1b)
 
 > *Every hearth in Midgard holds a little of Muspelheim, and it has never forgiven the stones that keep it in. Give it one dry wall and a wind at its back, and it will walk to the treeline to settle the score. Sweep your paths. Watch for rain.*
@@ -15,13 +15,15 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 
 ---
 
-![NEW IN 1.0.4](https://img.shields.io/badge/NEW_IN_1.0.4-VALHEIM_1.0.21-8b1e1e?style=for-the-badge&labelColor=1b1b1b)
+![NEW IN 1.0.5](https://img.shields.io/badge/NEW_IN_1.0.5-FIRE_STAYS_IN_THE_CRYPT-8b1e1e?style=for-the-badge&labelColor=1b1b1b)
 
-**This version is FireFront rebuilt for Valheim 1.0.21. Nothing else is new: fire spreads, burns and goes out exactly as it did.**
+**A fire inside a dungeon no longer sets the forest outside it alight.**
 
 | You | It |
 |---|---|
-| **Update the server and every player together** | Valheim 1.0.21 uses network version 41, so the server and every player move to it, and to this build, at the same time |
+| **Fight Brenna in the Smouldering Tomb** | Her fire still lights what will burn inside the tomb, but the trees and grass around its entrance stay untouched |
+| **Burn anything in any dungeon or crypt** | It burns and spreads inside, as before; no ground fire is lit in there, and none reaches the land outside |
+| **Update the server** | The fix runs where the fire is simulated, so the server (or whoever hosts) needs 1.0.5; 1.0.4 players can still play on it, with a version notice on joining |
 
 ---
 
