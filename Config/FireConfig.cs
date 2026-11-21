@@ -22,6 +22,10 @@ namespace FireFront.Config
         public static ConfigEntry<float> TreeDestructionRate;
         public static ConfigEntry<bool> BurnPlayerBuildings;
         public static ConfigEntry<bool> FireInAshlands;
+        public static ConfigEntry<bool> BurningCreaturesSpreadFire;
+        public static ConfigEntry<float> BurningCreatureFireRadius;
+        public static ConfigEntry<float> BurningCreatureCarrySeconds;
+        public static ConfigEntry<float> BurningCreatureTreeRadius;
         public static ConfigEntry<string> VfxPrefabName;
         public static ConfigEntry<bool> UseProceduralVfx;
         public static ConfigEntry<bool> FireSmokeEnabled;
@@ -424,6 +428,43 @@ namespace FireFront.Config
                 "Ashlands' own fire works as it does without FireFront. WatchTheWorldBurn does " +
                 "not change it. Read by the server; set it there.");
 
+            // 1.0.5. New keys, so their defaults reach existing installs without a ledger rung.
+            BurningCreaturesSpreadFire = config.Bind(
+                "Fire", "BurningCreaturesSpreadFire", true,
+                "A creature on fire (a bear hit with a torch, a skeleton shot with a fire arrow, a " +
+                "boar that ran through a blaze) lights what it passes while it burns: the grass along " +
+                "its path (within BurningCreatureFireRadius) and any tree, log or burnable piece within " +
+                "BurningCreatureTreeRadius of it, " +
+                "for up to BurningCreatureCarrySeconds per burn. Players and tames never carry fire. " +
+                "The fire is booked to the player whose fire last hit the creature, if any. Every normal rule " +
+                "still applies (Ashlands, water, dungeons, BurnPlayerBuildings, BurnTreesAndLogs). " +
+                "Read by the server; set it there.");
+
+            BurningCreatureFireRadius = config.Bind(
+                "Fire", "BurningCreatureFireRadius", 2f,
+                new ConfigDescription(
+                    "Meters either side of a burning creature's path in which grass catches. Trees, logs " +
+                    "and pieces use BurningCreatureTreeRadius. Read by the server.",
+                    new AcceptableValueRange<float>(0.5f, 4f)));
+
+            BurningCreatureCarrySeconds = config.Bind(
+                "Fire", "BurningCreatureCarrySeconds", 30f,
+                new ConfigDescription(
+                    "The longest one burn lets a creature carry fire, in seconds. A creature standing in " +
+                    "the fire it started keeps catching again, so without a limit it would carry fire for " +
+                    "as long as it lived. Past this it still burns and still hurts, but lights nothing " +
+                    "more until it has stopped burning for a few seconds. Read by the server.",
+                    new AcceptableValueRange<float>(3f, 120f)));
+
+            BurningCreatureTreeRadius = config.Bind(
+                "Fire", "BurningCreatureTreeRadius", 4f,
+                new ConfigDescription(
+                    "Meters from a burning creature's path within which trees, logs and burnable pieces " +
+                    "catch. Wider than the grass radius because a tree is measured at its trunk and its " +
+                    "branches spread a few metres out: a creature running under a canopy sets it alight. " +
+                    "Read by the server.",
+                    new AcceptableValueRange<float>(0.5f, 6f)));
+
             VfxPrefabName = config.Bind(
                 "Visuals", "VfxPrefabName", "",
                 "Name of a registered vanilla prefab to spawn on burning targets. " +
@@ -624,10 +665,11 @@ namespace FireFront.Config
                     new AcceptableValueRange<float>(0.1f, 10f)));
 
             ExtinguishKey = config.Bind(
-                "Controls", "ExtinguishKey", new KeyboardShortcut(KeyCode.G),
+                "Controls", "ExtinguishKey", new KeyboardShortcut(KeyCode.BackQuote),
                 "Hold/press this key to extinguish fire: the burning object under your crosshair " +
                 "(if any) plus any ground fire within ExtinguishGroundRadius of you. Rebindable — " +
-                "change this if G conflicts with something you use.");
+                "change this if ` (BackQuote, left of 1) conflicts with something you use. " +
+                "The default was G before 1.0.5; a stored G moves to BackQuote once, anything else is kept.");
 
             ExtinguishGroundRadius = config.Bind(
                 "Controls", "ExtinguishGroundRadius", 15f,

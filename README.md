@@ -2,7 +2,7 @@
 # 🔥 FireFront
 
 ![FIREFRONT](https://img.shields.io/badge/FIREFRONT-FIRE_THAT_ACTUALLY_SPREADS-c9a227?style=for-the-badge&labelColor=1b1b1b)
-![VERSION](https://img.shields.io/badge/VERSION-1.0.4-8b1e1e?style=for-the-badge&labelColor=1b1b1b)
+![VERSION](https://img.shields.io/badge/VERSION-1.0.5-8b1e1e?style=for-the-badge&labelColor=1b1b1b)
 ![CLIENT & SERVER](https://img.shields.io/badge/CLIENT_%26_SERVER-SAME_VERSION_ON_BOTH-1f4e79?style=for-the-badge&labelColor=1b1b1b)
 
 > *Every hearth in Midgard holds a little of Muspelheim, and it has never forgiven the stones that keep it in. Give it one dry wall and a wind at its back, and it will walk to the treeline to settle the score. Sweep your paths. Watch for rain.*
@@ -15,13 +15,17 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 
 ---
 
-![NEW IN 1.0.4](https://img.shields.io/badge/NEW_IN_1.0.4-VALHEIM_1.0.21-8b1e1e?style=for-the-badge&labelColor=1b1b1b)
+![NEW IN 1.0.5](https://img.shields.io/badge/NEW_IN_1.0.5-BURNING_BEASTS_SPREAD_FIRE-8b1e1e?style=for-the-badge&labelColor=1b1b1b)
 
-**This version is FireFront rebuilt for Valheim 1.0.21. Nothing else is new: fire spreads, burns and goes out exactly as it did.**
+**A creature on fire now carries fire into the forest, a fire inside a dungeon no longer sets the forest outside it alight, and the extinguish key moves to `` ` ``.**
 
 | You | It |
 |---|---|
-| **Update the server and every player together** | Valheim 1.0.21 uses network version 41, so the server and every player move to it, and to this build, at the same time |
+| **Fight Brenna in the Smouldering Tomb** | Her fire still lights what will burn inside the tomb, but the trees and grass around its entrance stay untouched |
+| **Burn anything in any dungeon or crypt** | It burns and spreads inside, as before; no ground fire is lit in there, and none reaches the land outside |
+| **Set a creature alight** | A bear hit with a torch, a skeleton shot with a fire arrow, a boar that ran through a blaze: while it burns it lights the grass along its path and any tree, log or burnable piece it passes within 4 m, so a burning animal running through the forest sets it alight. One burn carries fire for up to 30 s. The fire is booked to whoever set it alight. Tames never carry fire. Off with `fireset creaturefire false` |
+| **Put out a fire** | Press **`` ` ``** (backquote, left of 1) instead of G. A config still on the old G moves over by itself; a key you chose stays yours |
+| **Update the server and players** | The crypt fix and the creature fire run on the server (or whoever hosts); the new key comes with each player's own 1.0.5, and so does the watch on burning creatures, since a creature is run by the game of the player near it. A 1.0.4 player can still join a 1.0.5 server, with a version notice; creatures near only them just do not carry fire |
 
 ---
 
@@ -99,7 +103,7 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 
 | You | It |
 |---|---|
-| **Press G** | puts out what you are looking at, plus the ground fire around you |
+| **Press `` ` ``** (backquote) | puts out what you are looking at, plus the ground fire around you |
 | **Throw a Dousing Bomb** | puts out everything within about 6 m of where it lands, ground fire and burning buildings alike |
 | **Craft Dousing Bombs** | by hand, anywhere: 3 Resin + 2 Leather scraps makes 3 |
 | **Douse a line** | anything put out stays soaked for about 90 seconds and cannot relight, so a line of bombs cuts a real break ahead of the front |
@@ -193,13 +197,13 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 
 ![THE TOOLBOX](https://img.shields.io/badge/THE_TOOLBOX-QUICK_START_%C2%B7_KEYS_%C2%B7_HOW--TO-1b1b1b?style=for-the-badge&labelColor=8b1e1e)
 
-**First ten minutes:** install with your mod manager, on the server too → find a quiet stand of trees → light one with a torch or a fire arrow → watch the wind take it → press **G**, or craft Dousing Bombs (3 Resin + 2 Leather scraps) and throw a line ahead of the front.
+**First ten minutes:** install with your mod manager, on the server too → find a quiet stand of trees → light one with a torch or a fire arrow → watch the wind take it → press **`` ` ``** (backquote, left of 1), or craft Dousing Bombs (3 Resin + 2 Leather scraps) and throw a line ahead of the front.
 
 Press `` ` `` to open the console.
 
 | Key | | Command | |
 |---|---|---|---|
-| **G** | put out what you look at, and the fire around you | `firestatus` | what is burning, and every setting in force |
+| **`` ` ``** | put out what you look at, and the fire around you | `firestatus` | what is burning, and every setting in force |
 | | | `ignite` | light what is under your crosshair |
 | | | `startfire [radius]` | light everything burnable around you |
 | | | `stopfire` | put out what is under your crosshair |
@@ -214,7 +218,7 @@ Press `` ` `` to open the console.
 
 `fireset` changes the copy on your own machine and asks the server, which applies it only for its admins, whether typed or moved from a config manager; its answer comes back the same way. `firestatus` asks the server too and needs no admin.
 
-`stopfire` puts out only the one thing under your crosshair, unlike **G**, which also clears the fire around you. It checks the admin flag your own game holds, which can say no even to a real admin on a dedicated server; **G** needs no admin. `firedebug` turns verbose logging on or off on your own machine; on a client connected to a server it also sends the new value to the server like `fireset debug`, which the server applies only for its admins.
+`stopfire` puts out only the one thing under your crosshair, unlike **`` ` ``**, which also clears the fire around you. It checks the admin flag your own game holds, which can say no even to a real admin on a dedicated server; **`` ` ``** needs no admin. `firedebug` turns verbose logging on or off on your own machine; on a client connected to a server it also sends the new value to the server like `fireset debug`, which the server applies only for its admins.
 
 </details>
 
@@ -318,6 +322,7 @@ All safe to leave alone. They are in `BepInEx/config/com.raveniron.firefront.cfg
 | Fire | `BurnDurationSeconds` · `SpreadMaturityFraction` · `SpreadRadius` | how long a piece burns, how long before it spreads, and how far |
 | Fire | `MaxConcurrentBurning` · `QueueSize` · `SpreadCheckInterval` | how many things burn at once, how many wait, how often spread is checked |
 | Fire | `BurnTreesAndLogs` · `BurnPlayerBuildings` · `FireInAshlands` | what may catch fire, and where |
+| Fire | `BurningCreaturesSpreadFire` · `BurningCreatureFireRadius` · `BurningCreatureTreeRadius` · `BurningCreatureCarrySeconds` | whether a creature on fire lights what it passes, how far around its path for grass and for trees, and how long one burn carries fire (default on, 2 m, 4 m, 30 s) |
 | Fire | `TreeDestructionRate` | the chance a dead tree collapses rather than standing as a snag |
 | Fire | `FireRampEnabled` · `FireRampDurationSeconds` · `FireRampStartFraction` | how a new fire builds to full strength |
 | Ground | `GroundSpreadEnabled` · `GroundCellSize` · `GroundSpreadRadius` · `GroundBurnDurationSeconds` · `GroundMaxConcurrent` | ground fire: on or off, cell size, reach, burn time, cap |
@@ -332,7 +337,7 @@ All safe to leave alone. They are in `BepInEx/config/com.raveniron.firefront.cfg
 | Trees | `TreeRegrowthEnabled` · `TreeRegrowthSeconds` | whether and when burnt trees grow back |
 | Visuals | `UseVanillaDirtPaint` · `DirtPaintRadius` | lasting bare dirt where ground fire burned |
 | Controls | `DouseImmunitySeconds` | how long something put out stays soaked |
-| Controls · Items | `ExtinguishGroundRadius` · `DousingBombRadius` | the most a player's **G** or Dousing Bomb may clear; each player's own copy asks, up to this |
+| Controls · Items | `ExtinguishGroundRadius` · `DousingBombRadius` | the most a player's **`` ` ``** key or Dousing Bomb may clear; each player's own copy asks, up to this |
 
 </details>
 
@@ -341,7 +346,7 @@ All safe to leave alone. They are in `BepInEx/config/com.raveniron.firefront.cfg
 
 | Section | Settings |
 |---|---|
-| **Controls** | `ExtinguishKey` (default **G**) · `ExtinguishGroundRadius` |
+| **Controls** | `ExtinguishKey` (default **`` ` ``**, the backquote key left of 1; G before 1.0.5) · `ExtinguishGroundRadius` |
 | **Items** | `DousingBombRadius` |
 | **Fire** | `FireKeepsYouWarm` · `FireWarmthRadius` |
 | **Visuals** | `UseProceduralVfx` · `VfxPrefabName` · `FireSmokeEnabled` · `TreeFlameScaling` · `CrownSparksEnabled` · `MaxFlameHeight` · `TallFireMaxConcurrent` · `FireShadowsEnabled` · `HeatHazeEnabled` · `BarkCharEnabled` · `SmoulderingVfxEnabled` · `SmoulderAfterFraction` · `ScorchMarksEnabled` · `ScorchMarkLifetimeSeconds` |

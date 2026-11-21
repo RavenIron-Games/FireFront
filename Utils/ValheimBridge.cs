@@ -3910,6 +3910,7 @@ namespace FireFront.Utils
         private const string RpcGroundSyncRequest = "FireFront_GroundSyncRequest";
         private const string RpcObjectFireSync = "FireFront_ObjectFireSync";
         private const string RpcVersion = "FireFront_Version"; // 0.24: Fire/VersionCheck.cs
+        private const string RpcCreatureFire = "FireFront_CreatureFire"; // 1.0.5: Fire/CreatureFireWatch.cs
 
         /// <summary>Client → server: run this whitelisted dev command there; replies stream back on the status-response channel.</summary>
         public static void SendCommandRelayToServer(string commandLine)
@@ -4149,7 +4150,7 @@ namespace FireFront.Utils
         // A client cannot register with the server's own uid (ZNet.RPC_PeerInfo refuses it as
         // already connected), so "matches the connection" also means "is not the server".
         //
-        // Scoped, deliberately: the twelve FireFront methods and vanilla's RPC_Damage, whose
+        // Scoped, deliberately: the FireFront methods below and vanilla's RPC_Damage, whose
         // sender the tree, log and wear-and-tear prefixes act on. FireFront polices the traffic
         // it consumes and nothing else. Vanilla and other mods stamp their own uid
         // (InvokeRoutedRPC writes m_id) and would pass anyway; a mod that does something
@@ -4173,6 +4174,7 @@ namespace FireFront.Utils
             RpcGroundSyncRequest.GetStableHashCode(),
             RpcObjectFireSync.GetStableHashCode(),
             RpcVersion.GetStableHashCode(),
+            RpcCreatureFire.GetStableHashCode(),
             "RPC_Damage".GetStableHashCode(),
         };
 
@@ -4358,7 +4360,8 @@ namespace FireFront.Utils
             System.Action<long> onGroundSyncRequest,
             System.Action<long, ZPackage> onPaintAssign,
             System.Action<long, ZPackage> onObjectFireSync,
-            System.Action<long, string, int> onVersion)
+            System.Action<long, string, int> onVersion,
+            System.Action<long, ZPackage> onCreatureFire)
         {
             if (ZRoutedRpc.instance == null)
             {
@@ -4388,7 +4391,8 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.Register<ZPackage>(RpcPaintAssign, onPaintAssign);
                 ZRoutedRpc.instance.Register<ZPackage>(RpcObjectFireSync, onObjectFireSync);
                 ZRoutedRpc.instance.Register<string, int>(RpcVersion, onVersion);
-                FireLogger.Info($"[IGNITE-TRACE] All 13 FireFront RPCs registered successfully (IsServer={IsServer()}).");
+                ZRoutedRpc.instance.Register<ZPackage>(RpcCreatureFire, onCreatureFire);
+                FireLogger.Info($"[IGNITE-TRACE] All 14 FireFront RPCs registered successfully (IsServer={IsServer()}).");
                 if (IsServer())
                 {
                     if (RoutedSenderGuardArmed)
@@ -4472,6 +4476,98 @@ namespace FireFront.Utils
             if (ZRoutedRpc.instance == null) return;
             try { ZRoutedRpc.instance.InvokeRoutedRPC(peer, RpcVersion, version, protocol); }
             catch (System.Exception ex) { FireLogger.Debug($"SendVersionTo threw: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// 1.0.5, client -> server: "a creature this game owns is on fire at this position", with the
+        /// player id of whoever set it alight (0 = nobody known). A NEW message, so the wire protocol
+        /// stays 1: a server older than 1.0.5 has no handler and ZRoutedRpc drops an unknown method
+        /// hash without a word (HandleRoutedRPC is a TryGetValue), so nothing an older build reads changes.
+        /// </summary>
+        /// Payload (one ZPackage; three generic arguments have broken Valheim's dispatcher here before):
+        /// the creature's ZDOID, its position, the igniter's player id. The id lets the server check
+        /// the report names a real creature the sender owns, standing where the report says.
+        public static void SendCreatureFireToServer(ZDOID creature, Vector3 position, long igniterPlayerId)
+        {
+            if (ZRoutedRpc.instance == null) return;
+            try
+            {
+                var pkg = new ZPackage();
+                pkg.Write(creature);
+                pkg.Write(position);
+                pkg.Write(igniterPlayerId);
+                ZRoutedRpc.instance.InvokeRoutedRPC(GetServerPeerId(), RpcCreatureFire, pkg);
+            }
+            catch (System.Exception ex) { FireLogger.Debug($"SendCreatureFireToServer threw: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// 1.0.5: every live, non-player creature THIS game owns that carries vanilla's Burning status
+        /// effect. Public members only (Character.m_nview is protected in the real assembly, whatever
+        /// the publicized reference says), and never throws.
+        /// </summary>
+        public static void CollectOwnedBurningCreatures(List<Character> into)
+        {
+            into.Clear();
+            try
+            {
+                List<Character> all = Character.GetAllCharacters();
+                if (all == null) return;
+                int burning = SEMan.s_statusEffectBurning;
+                for (int i = 0; i < all.Count; i++)
+                {
+                    Character c = all[i];
+                    if (c == null || c.IsPlayer() || c.IsDead() || !c.IsOwner()) continue;
+                    SEMan seman = c.GetSEMan();
+                    if (seman == null || seman.GetStatusEffect(burning) == null) continue;
+                    into.Add(c);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                if (!_burningCreatureScanFailureLogged)
+                {
+                    _burningCreatureScanFailureLogged = true;
+                    FireLogger.Warn($"[CREATURE-FIRE] could not read burning creatures ({ex.GetType().Name}: {ex.Message}); " +
+                                    "creatures on fire will not light anything this session.");
+                }
+                into.Clear();
+            }
+        }
+        private static bool _burningCreatureScanFailureLogged;
+
+        // Prefab hash -> "a non-player Character". Prefabs never change in a session.
+        private static readonly Dictionary<int, bool> _creaturePrefabs = new Dictionary<int, bool>();
+
+        /// <summary>
+        /// 1.0.5, server side: does <paramref name="id"/> name a live non-player creature? Reads the ZDO
+        /// and the prefab only, building nothing. Gives the creature's synced position and its owner.
+        /// </summary>
+        public static bool TryGetCreatureZdo(ZDOID id, out Vector3 position, out long owner)
+        {
+            position = Vector3.zero;
+            owner = 0L;
+            try
+            {
+                ZDO zdo = ZDOMan.instance?.GetZDO(id);
+                if (zdo == null || ZNetScene.instance == null) return false;
+                int prefab = zdo.GetPrefab();
+                if (!_creaturePrefabs.TryGetValue(prefab, out bool isCreature))
+                {
+                    GameObject go = ZNetScene.instance.GetPrefab(prefab);
+                    isCreature = go != null && go.GetComponent<Character>() != null && go.GetComponent<Player>() == null;
+                    _creaturePrefabs[prefab] = isCreature;
+                }
+                if (!isCreature) return false;
+                position = zdo.GetPosition();
+                owner = zdo.GetOwner();
+                return true;
+            }
+            catch (System.Exception ex)
+            {
+                FireLogger.Debug($"[CREATURE-FIRE] TryGetCreatureZdo({id}) threw: {ex.Message}");
+                return false;
+            }
         }
 
         /// <summary>The uid of every connected peer that has finished its handshake.</summary>

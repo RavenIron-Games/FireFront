@@ -110,5 +110,24 @@ namespace FireFront.Fire
             float d2 = dx * dx + dz * dz;
             return !float.IsNaN(d2) && d2 <= reach * reach;
         }
+
+        /// <summary>
+        /// 1.0.5: squared distance from point p to the segment a-b, in 3D. A zero-length segment is the
+        /// point a. Used to keep a burning creature's path sweep to what lies along the path. NaN in,
+        /// +infinity out, so a bad position is never "close".
+        /// </summary>
+        public static float SqrDistanceToSegment(float px, float py, float pz,
+                                                 float ax, float ay, float az,
+                                                 float bx, float by, float bz)
+        {
+            float abx = bx - ax, aby = by - ay, abz = bz - az;
+            float apx = px - ax, apy = py - ay, apz = pz - az;
+            float len2 = abx * abx + aby * aby + abz * abz;
+            float t = len2 > 1e-8f ? (apx * abx + apy * aby + apz * abz) / len2 : 0f;
+            if (t < 0f) t = 0f; else if (t > 1f) t = 1f;
+            float dx = apx - abx * t, dy = apy - aby * t, dz = apz - abz * t;
+            float d2 = dx * dx + dy * dy + dz * dz;
+            return float.IsNaN(d2) ? float.PositiveInfinity : d2;
+        }
     }
 }

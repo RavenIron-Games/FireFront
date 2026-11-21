@@ -70,6 +70,17 @@ namespace FireFront.Tests
                 FireMath.SyncCellSize(true, 0.5f, 1f) == 0.5f && FireMath.SyncCellSize(true, 10f, 1f) == 10f);
 
             // --- WithinReach: ignite/extinguish targets near the asking player ------------------
+            // 1.0.5: a burning creature's path sweep.
+            check("segment: a point beside the middle is its offset away",
+                near(FireMath.SqrDistanceToSegment(5f, 0f, 2f, 0f, 0f, 0f, 10f, 0f, 0f), 4f));
+            check("segment: past the end measures to the end",
+                near(FireMath.SqrDistanceToSegment(13f, 0f, 4f, 0f, 0f, 0f, 10f, 0f, 0f), 25f));
+            check("segment: before the start measures to the start",
+                near(FireMath.SqrDistanceToSegment(-3f, 0f, 0f, 0f, 0f, 0f, 10f, 0f, 0f), 9f));
+            check("segment: zero length is the point",
+                near(FireMath.SqrDistanceToSegment(3f, 4f, 0f, 0f, 0f, 0f, 0f, 0f, 0f), 25f));
+            check("segment: NaN is never close",
+                float.IsPositiveInfinity(FireMath.SqrDistanceToSegment(float.NaN, 0f, 0f, 0f, 0f, 0f, 1f, 0f, 0f)));
             check("reach: 200 m away is within 320", FireMath.WithinReach(0f, 0f, 200f, 0f, 320f));
             check("reach: on the edge counts", FireMath.WithinReach(0f, 0f, 0f, 320f, 320f));
             check("reach: across the map is refused", !FireMath.WithinReach(0f, 0f, 5000f, -3000f, 320f));

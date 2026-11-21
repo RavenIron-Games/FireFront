@@ -95,6 +95,21 @@ namespace FireFront.Tests
             var absent = ConfigLedger.Plan(Snapshot("[Visuals]", "MaxFlameHeight = 30"), 0);
             Check("Plan: a file without the key plans nothing for it", absent.ResetToDefault.Count == 0 && absent.Kept.Count == 0);
 
+            // --- Plan: the 1.0.5 extinguish key ----------------------------------------------
+            // A stored lone "G" is the old default and moves to BackQuote; a shortcut with a
+            // modifier, or any other key, is a player's choice and stays.
+            var oldKey = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 2", "[Controls]", "ExtinguishKey = G"), 2);
+            Check("Plan: the old extinguish key G moves (from a version-2 file)",
+                oldKey.ResetToDefault.Count == 1 && oldKey.ResetToDefault.Contains("Controls::ExtinguishKey"));
+            var chosenKey = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 2", "[Controls]", "ExtinguishKey = G + LeftShift"), 2);
+            Check("Plan: 'G + LeftShift' is someone's choice and is kept",
+                chosenKey.ResetToDefault.Count == 0 && chosenKey.Kept.Count == 1 && chosenKey.Kept[0].Value == "G + LeftShift");
+            var otherKey = ConfigLedger.Plan(Snapshot("[Controls]", "ExtinguishKey = H"), 0);
+            Check("Plan: another key is kept", otherKey.ResetToDefault.Count == 0 && otherKey.Kept.Count == 1);
+            var doneKey = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 3", "[Controls]", "ExtinguishKey = G"), 3);
+            Check("Plan: a version-3 file's G was chosen after 1.0.5 and is left alone",
+                doneKey.ResetToDefault.Count == 0 && doneKey.Kept.Count == 0);
+
             // --- Plan: the 0.21.9 ground-visual cap -------------------------------------------
             // A stored 30 is the mod's OWN old default, not a decision: at GroundMaxConcurrent 50
             // it left two cells in five burning invisibly, which is the bug 0.21.9 fixes. Without
