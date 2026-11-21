@@ -2123,7 +2123,7 @@ namespace FireFront.Fire
 
         /// <summary>
         /// Server only: <paramref name="creature"/> is on fire at <paramref name="position"/>. Lights
-        /// every tree, log and burnable piece within BurningCreatureFireRadius of the path it took
+        /// every tree, log and burnable piece within BurningCreatureTreeRadius of the path it took
         /// since its last report, and the grass along that path, booked to
         /// <paramref name="igniterPlayerId"/> (0 = nobody).
         ///

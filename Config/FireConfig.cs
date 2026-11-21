@@ -433,7 +433,8 @@ namespace FireFront.Config
                 "Fire", "BurningCreaturesSpreadFire", true,
                 "A creature on fire (a bear hit with a torch, a skeleton shot with a fire arrow, a " +
                 "boar that ran through a blaze) lights what it passes while it burns: the grass along " +
-                "its path and any tree, log or burnable piece within BurningCreatureFireRadius of it, " +
+                "its path (within BurningCreatureFireRadius) and any tree, log or burnable piece within " +
+                "BurningCreatureTreeRadius of it, " +
                 "for up to BurningCreatureCarrySeconds per burn. Players and tames never carry fire. " +
                 "The fire is booked to the player whose fire last hit the creature, if any. Every normal rule " +
                 "still applies (Ashlands, water, dungeons, BurnPlayerBuildings, BurnTreesAndLogs). " +
@@ -442,8 +443,8 @@ namespace FireFront.Config
             BurningCreatureFireRadius = config.Bind(
                 "Fire", "BurningCreatureFireRadius", 2f,
                 new ConfigDescription(
-                    "Meters around a burning creature that it sets alight each second (grass cells " +
-                    "and burnable objects). Read by the server.",
+                    "Meters either side of a burning creature's path in which grass catches. Trees, logs " +
+                    "and pieces use BurningCreatureTreeRadius. Read by the server.",
                     new AcceptableValueRange<float>(0.5f, 4f)));
 
             BurningCreatureCarrySeconds = config.Bind(

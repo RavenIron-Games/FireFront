@@ -103,7 +103,7 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 
 | You | It |
 |---|---|
-| **Press G** | puts out what you are looking at, plus the ground fire around you |
+| **Press `` ` ``** (backquote) | puts out what you are looking at, plus the ground fire around you |
 | **Throw a Dousing Bomb** | puts out everything within about 6 m of where it lands, ground fire and burning buildings alike |
 | **Craft Dousing Bombs** | by hand, anywhere: 3 Resin + 2 Leather scraps makes 3 |
 | **Douse a line** | anything put out stays soaked for about 90 seconds and cannot relight, so a line of bombs cuts a real break ahead of the front |

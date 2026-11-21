@@ -25,6 +25,6 @@ Thumbs.db
 # Release zips belong in dist/ (ignored) and on the GitHub release, not in source control.
 /*.zip
 
-# tools/ is LOCAL ONLY (owner, 2026-11-21: "gitignore the tools folder"): the robot (tools/autotest),
+# tools/ is LOCAL ONLY: the robot (tools/autotest),
 # packaging and test-server scripts. A fresh clone has no tools/: copy it in from the shared checkout.
 tools/
