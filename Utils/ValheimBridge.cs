@@ -2550,9 +2550,20 @@ namespace FireFront.Utils
         /// finding on PR #3. The quad is therefore fitted to FIVE terrain rays, centre and four
         /// corners, and lifted along the fitted normal by what its highest-standing sample needs.
         /// </summary>
-        public static bool SpawnScorchMark(Vector3 position, float size, float lifetimeSeconds)
+        public static bool SpawnScorchMark(Vector3 position, float size, float lifetimeSeconds) =>
+            SpawnGroundDecal(position, size, lifetimeSeconds, retardant: false);
+
+        /// <summary>
+        /// 1.0.6: an orange retardant stain under a Dousing arrow's drop. Same ground fit as a scorch
+        /// mark, but alpha-blended orange (the scorch multiply only darkens, it cannot colour), and
+        /// every one is kept: the stain is a strip, not a scatter.
+        /// </summary>
+        public static bool SpawnRetardantMark(Vector3 position, float size, float lifetimeSeconds) =>
+            SpawnGroundDecal(position, size, lifetimeSeconds, retardant: true);
+
+        private static bool SpawnGroundDecal(Vector3 position, float size, float lifetimeSeconds, bool retardant)
         {
-            if (!ScorchMarkKept(position)) return true; // see ScorchMarkKept: by cell, so every peer agrees; not a failure
+            if (!retardant && !ScorchMarkKept(position)) return true; // see ScorchMarkKept: by cell, so every peer agrees; not a failure
             ScorchCell(position, out int cx, out int cz);
             float jx = (SharedMedia.ProceduralTextures.Hash(cx, cz, 11) - 0.5f) * 0.8f;
             float jz = (SharedMedia.ProceduralTextures.Hash(cx, cz, 13) - 0.5f) * 0.8f;
@@ -2623,12 +2634,12 @@ namespace FireFront.Utils
             }
             pos = centre + normal * lift; // off the surface, along its normal, not straight up
 
-            var quad = new GameObject("FireFrontScorchMark");
+            var quad = new GameObject(retardant ? "FireFrontRetardantMark" : "FireFrontScorchMark");
             quad.transform.position = pos;
             quad.transform.rotation = Quaternion.FromToRotation(Vector3.up, normal) * Quaternion.Euler(90f, yaw, 0f);
             quad.transform.localScale = new Vector3(scale, scale, 1f);
 
-            Material shared = GetOrCreateScorchMaterial();
+            Material shared = retardant ? GetOrCreateRetardantMaterial() : GetOrCreateScorchMaterial();
             // The multiply decal wants BLACK vertices (its fog rides on the vertex colour, see
             // FireFrontTextureGenerator.GetOrCreateScorchMultiplyMaterial); the alpha-disc
             // fallback multiplies its texture by the vertex colour and wants white.
@@ -2639,7 +2650,7 @@ namespace FireFront.Utils
             renderer.receiveShadows = false;
             if (shared != null) renderer.sharedMaterial = shared;
 
-            if (_scorchLogged < 5)
+            if (!retardant && _scorchLogged < 5)
             {
                 _scorchLogged++;
                 FireLogger.Info($"[SCORCH] mark {_scorchLogged}: at {pos.x:F1},{pos.y:F1},{pos.z:F1} size {scale:F1} terrain-hits={1 + cornerHits}/5 lift={lift:F2}m normal-tilt={Vector3.Angle(Vector3.up, normal):F0}deg shader={(shared != null && shared.shader != null ? shared.shader.name : "none")} blend={(shared != null && shared.HasProperty("_SrcBlend") ? shared.GetFloat("_SrcBlend") + "/" + shared.GetFloat("_DstBlend") : "n/a")}");
@@ -2717,6 +2728,39 @@ namespace FireFront.Utils
 
             _cachedScorchMaterial = new Material(shader) { mainTexture = GetOrCreateScorchTexture() };
             return _cachedScorchMaterial;
+        }
+
+        private static Material _cachedRetardantMaterial;
+        private static Texture2D _cachedRetardantTexture;
+
+        /// <summary>The retardant stain: alpha-blended orange on the soot blot's shape, white vertices.</summary>
+        private static Material GetOrCreateRetardantMaterial()
+        {
+            if (_cachedRetardantMaterial != null) return _cachedRetardantMaterial;
+            Shader shader = FindUsableParticleShader();
+            if (shader == null) return null;
+            if (_cachedRetardantTexture == null)
+            {
+                const int size = 128;
+                Color32[] px = SharedMedia.ProceduralTextures.SootBlot(size, 20261122);
+                for (int i = 0; i < px.Length; i++)
+                {
+                    // The blot's grey is 255 outside and about 77 at the heart: its darkness is the stain.
+                    float stain = Mathf.Clamp01((255f - px[i].r) / 178f);
+                    px[i] = new Color32(232, 92, 40, (byte)(stain * 0.42f * 255f));
+                }
+                _cachedRetardantTexture = new Texture2D(size, size, TextureFormat.RGBA32, true, false)
+                {
+                    name = "FireFront_retardant",
+                    wrapMode = TextureWrapMode.Clamp,
+                    filterMode = FilterMode.Trilinear,
+                };
+                _cachedRetardantTexture.SetPixels32(px);
+                _cachedRetardantTexture.Apply(true, true);
+            }
+            _cachedRetardantMaterial = new Material(shader) { name = "FireFront_retardant", mainTexture = _cachedRetardantTexture };
+            _cachedRetardantMaterial.renderQueue = 2951; // just after the scorch decal
+            return _cachedRetardantMaterial;
         }
 
         private static Texture2D _cachedSootTexture;

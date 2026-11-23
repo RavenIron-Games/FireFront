@@ -289,6 +289,14 @@ namespace FireFront.Patches
         private Vector3 _last;
         private float _stillFor;
         private bool _stopped;
+        private Vector3 _lastStain;
+        private bool _haveStain;
+        private int _stains;
+        private const float StainSpacing = 2f;      // along the flight
+        private const float StainHalfWidth = 1.5f;  // three 3 m quads across: a strip about 6 m wide
+        private const float StainMaxHeight = 30f;   // the same height the drop works from
+        private const float StainDelay = 1.5f;      // about when the cloud reaches the ground
+        private const int MaxStainsPerArrow = 120;
 
         public static void Attach(Projectile p)
         {
@@ -395,10 +403,36 @@ namespace FireFront.Patches
             return ps;
         }
 
+        private void LayStain(Vector3 pos)
+        {
+            if (_stains >= MaxStainsPerArrow || pos.y > 3000f) return;
+            if (_haveStain)
+            {
+                float dx = pos.x - _lastStain.x, dz = pos.z - _lastStain.z;
+                if (dx * dx + dz * dz < StainSpacing * StainSpacing) return;
+            }
+            Vector3 dir = _haveStain ? new Vector3(pos.x - _lastStain.x, 0f, pos.z - _lastStain.z) : transform.forward;
+            dir.y = 0f;
+            if (dir.sqrMagnitude < 0.0001f) dir = Vector3.forward;
+            Vector3 side = Vector3.Cross(Vector3.up, dir.normalized) * StainHalfWidth;
+            _lastStain = pos;
+            _haveStain = true;
+
+            float ground = ValheimBridge.GetGroundHeight(pos, out bool sampled);
+            if (!sampled || pos.y - ground > StainMaxHeight || pos.y - ground < -1f) return;
+            float lifetime = Mathf.Clamp(FireConfig.DousingArrowSoakSeconds.Value, 10f, 1800f);
+            Vector3 at = new Vector3(pos.x, ground, pos.z);
+            RetardantStains.Enqueue(at - side, StainDelay, lifetime);
+            RetardantStains.Enqueue(at, StainDelay, lifetime);
+            RetardantStains.Enqueue(at + side, StainDelay, lifetime);
+            _stains += 3;
+        }
+
         private void Update()
         {
             if (_stopped || _systems == null) return;
             Vector3 pos = transform.position;
+            LayStain(pos);
             float moved = (pos - _last).sqrMagnitude;
             _last = pos;
             _stillFor = moved < 0.0025f ? _stillFor + Time.deltaTime : 0f;
@@ -406,6 +440,40 @@ namespace FireFront.Patches
             {
                 _stopped = true;
                 foreach (ParticleSystem ps in _systems) if (ps != null) ps.Stop(false, ParticleSystemStopBehavior.StopEmitting);
+            }
+        }
+    }
+
+    /// <summary>The DousingRain stain queue: marks wait StainDelay, then go down. Lives on its own
+    /// object because the arrow (and its rain) is gone long before the last stain lands.</summary>
+    public class RetardantStains : MonoBehaviour
+    {
+        private static RetardantStains _instance;
+        private readonly List<(float at, Vector3 pos, float lifetime)> _queue = new List<(float, Vector3, float)>();
+        private const int MaxQueued = 600;
+
+        public static void Enqueue(Vector3 pos, float delay, float lifetime)
+        {
+            if (_instance == null)
+            {
+                var go = new GameObject("FireFront_RetardantStains");
+                Object.DontDestroyOnLoad(go);
+                _instance = go.AddComponent<RetardantStains>();
+            }
+            if (_instance._queue.Count >= MaxQueued) return;
+            _instance._queue.Add((Time.time + delay, pos, lifetime));
+        }
+
+        private void Update()
+        {
+            float now = Time.time;
+            int spawned = 0;
+            for (int i = _queue.Count - 1; i >= 0 && spawned < 12; i--)
+            {
+                if (now < _queue[i].at) continue;
+                ValheimBridge.SpawnRetardantMark(_queue[i].pos, 3f / 1.9f, _queue[i].lifetime);
+                _queue.RemoveAt(i);
+                spawned++;
             }
         }
     }
