@@ -2361,7 +2361,9 @@ namespace FireFront.Fire
                     done += SoakGroundNear(points[i], radius, soak);
                     objects += SoakObjectsNear(points[i], objectRadius, soak);
                 }
-                FireLogger.Debug($"[ARROW-TRAIL] dousing {(kind == ArrowTrailKindDousingImpact ? "impact" : "trail")} of {points.Count} point(s): " +
+                Vector3 first = points[0], last = points[points.Count - 1];
+                FireLogger.Debug($"[ARROW-TRAIL] dousing {(kind == ArrowTrailKindDousingImpact ? "impact" : "trail")} of {points.Count} point(s) " +
+                                 $"from ({first.x:F0},{first.z:F0}) to ({last.x:F0},{last.z:F0}): " +
                                  $"{done} ground cell(s) and {objects} object(s) soaked for {soak:F0} s within {radius:F1} m.");
             }
         }

@@ -167,7 +167,11 @@ namespace FireFront.Patches
         private const float EmberMaxHeight = 80f;
         private const float EmberClearOfShooter = 5f;
         private const float DousingSpacing = 4f;    // the drop is 24 m wide: a report every 4 m is plenty
-        private const float DousingMaxHeight = 30f;  // the air tanker drops from height
+        // A large air tanker drops from altitude. 1.0.6 test: at 30 m a shot at a fire from range was
+        // already higher than that over the flames, so the red poured on them on screen and nothing
+        // reached them (no stain there, 4 objects out of 63, no landing splash). The curtain pours for
+        // the whole flight, so the drop must too.
+        private const float DousingMaxHeight = 150f;
         private const int FlushAt = 16;
         private const int MaxPointsPerArrow = 120;
 
@@ -318,7 +322,7 @@ namespace FireFront.Patches
         private bool _haveStain;
         private int _stains;
         private const float StainSpacing = 4f;      // rows along the flight
-        private const float StainMaxHeight = 30f;   // the same height the drop works from
+        private const float StainMaxHeight = 150f;  // the same height the drop works from (DousingMaxHeight)
         private const float StainDelay = 1.8f;      // about when the curtain reaches the ground
         private const int MaxStainsPerArrow = 240;
 

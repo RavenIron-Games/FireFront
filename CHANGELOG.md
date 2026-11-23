@@ -40,7 +40,7 @@
     moment it is loosed a heavy dark-red retardant column pours from it and breaks into a wide
     billowing curtain. Every fire within 12 m of its flight line goes out (`DousingArrowRadius`), a 24 m swath,
     burning trees 3 m further for their canopies,
-    from up to 30 m up, and the ground under it stays soaked for 2 minutes
+    from as high as it flies (up to 150 m), and the ground under it stays soaked for 2 minutes
     (`DousingArrowSoakSeconds`), burning or not, stained red, darkest down the middle. Trees and
     buildings under it are soaked too, so fire cannot walk across the strip from tree to tree, and
     where the arrow lands the splash reaches 1.6 times as far (about 19 m), so a shot straight into a
