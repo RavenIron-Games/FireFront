@@ -123,7 +123,20 @@ namespace FireFront.Tests
             var doneBurn = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 4", "[Fire]", "BurnPlayerBuildings = true"), 4);
             Check("Plan: a version-4 file's true was chosen after 1.0.6 and is left alone",
                 doneBurn.ResetToDefault.Count == 0 && doneBurn.Kept.Count == 0);
-            Check("Plan: current version is 4", ConfigLedger.CurrentVersion == 4);
+            // --- Plan: the 1.0.6 longer grass burn ---------------------------------------------
+            var oldBurnTime = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 4", "[Ground]", "GroundBurnDurationSeconds = 8",
+                "GroundMaxConcurrent = 50", "[Damage]", "GroundDamageMaxConcurrent = 50"), 4);
+            Check("Plan: 8 s / 50 / 50 still at the old defaults all move (from a version-4 file)",
+                oldBurnTime.ResetToDefault.Count == 3 && oldBurnTime.ResetToDefault.Contains("Ground::GroundBurnDurationSeconds") &&
+                oldBurnTime.ResetToDefault.Contains("Ground::GroundMaxConcurrent") && oldBurnTime.ResetToDefault.Contains("Damage::GroundDamageMaxConcurrent"));
+            var tunedBurnTime = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 4", "[Ground]", "GroundBurnDurationSeconds = 12",
+                "GroundMaxConcurrent = 80"), 4);
+            Check("Plan: an admin's own burn time and cap are kept",
+                tunedBurnTime.ResetToDefault.Count == 0 && tunedBurnTime.Kept.Count == 2);
+            var doneBurnTime = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 5", "[Ground]", "GroundBurnDurationSeconds = 8"), 5);
+            Check("Plan: a version-5 file's 8 was chosen after 1.0.6 and is left alone",
+                doneBurnTime.ResetToDefault.Count == 0 && doneBurnTime.Kept.Count == 0);
+            Check("Plan: current version is 5", ConfigLedger.CurrentVersion == 5);
 
             // --- Plan: the 0.21.9 ground-visual cap -------------------------------------------
             // A stored 30 is the mod's OWN old default, not a decision: at GroundMaxConcurrent 50

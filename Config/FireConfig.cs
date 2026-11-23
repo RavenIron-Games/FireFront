@@ -498,7 +498,7 @@ namespace FireFront.Config
                     new AcceptableValueRange<float>(10f, 1800f)));
 
             DousingArrowRadius = config.Bind(
-                "Arrows", "DousingArrowRadius", 3f,
+                "Arrows", "DousingArrowRadius", 5f,
                 new ConfigDescription(
                     "Dousing arrow, the air tanker: meters either side of its flight line in which every " +
                     "fire, ground or object, goes out and the ground is soaked. Read by the server.",
@@ -610,14 +610,16 @@ namespace FireFront.Config
                     new AcceptableValueRange<float>(1f, 20f)));
 
             GroundBurnDurationSeconds = config.Bind(
-                "Ground", "GroundBurnDurationSeconds", 8f,
+                "Ground", "GroundBurnDurationSeconds", 20f,
                 new ConfigDescription(
-                    "Seconds a ground cell stays burning before it goes out.",
+                    "Seconds a ground cell stays burning before it goes out. 20 since 1.0.6 (was 8: grass " +
+                    "burned out too fast); a file still holding 8 moves to 20 on first boot.",
                     new AcceptableValueRange<float>(1f, 120f)));
 
             GroundMaxConcurrent = config.Bind(
-                "Ground", "GroundMaxConcurrent", 50,
+                "Ground", "GroundMaxConcurrent", 125,
                 new ConfigDescription(
+                    "125 since 1.0.6 (was 50, raised with the longer grass burn so the front keeps its pace). " +
                     "Hard cap on concurrently burning ground cells. Cheap (no real objects), so this can be much higher than MaxConcurrentBurning.",
                     new AcceptableValueRange<int>(1, 2000)));
 
@@ -644,8 +646,9 @@ namespace FireFront.Config
                     new AcceptableValueRange<int>(0, 2000)));
 
             GroundDamageMaxConcurrent = config.Bind(
-                "Damage", "GroundDamageMaxConcurrent", 50,
+                "Damage", "GroundDamageMaxConcurrent", 125,
                 new ConfigDescription(
+                    "125 since 1.0.6, matching GroundMaxConcurrent. " +
                     "Max ground-fire cells that get a damage zone at once, INDEPENDENT of " +
                     "GroundVfxMaxConcurrent. Was accidentally sharing the low visual cap through " +
                     "0.12.1, meaning only ~30 of up to 200 burning cells could ever hurt anyone — " +

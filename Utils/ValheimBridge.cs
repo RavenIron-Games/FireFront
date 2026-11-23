@@ -2747,7 +2747,7 @@ namespace FireFront.Utils
                 {
                     // The blot's grey is 255 outside and about 77 at the heart: its darkness is the stain.
                     float stain = Mathf.Clamp01((255f - px[i].r) / 178f);
-                    px[i] = new Color32(232, 92, 40, (byte)(stain * 0.42f * 255f));
+                    px[i] = new Color32(196, 52, 26, (byte)(stain * 0.40f * 255f)); // retardant red, deeper than orange
                 }
                 _cachedRetardantTexture = new Texture2D(size, size, TextureFormat.RGBA32, true, false)
                 {

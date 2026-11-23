@@ -276,8 +276,9 @@ namespace FireFront.Patches
     }
 
     /// <summary>
-    /// The Dousing arrow's water: a curtain of droplets and spray pouring from the arrow from the
-    /// moment it leaves the bow, an air tanker's drop. Purely visual, built on every game that sees
+    /// The Dousing arrow's retardant drop, after CAL FIRE's: a heavy dark-red column leaves the arrow
+    /// from the moment it is loosed and breaks into a wide billowing curtain that sinks to the ground,
+    /// where it leaves a red strip, darkest down the middle. Purely visual, built on every game that sees
     /// the arrow; world-space particles, so the water keeps falling where it was released. Stops
     /// pouring once the arrow stops moving (it has landed), and goes with the arrow when vanilla
     /// removes it.
@@ -292,11 +293,13 @@ namespace FireFront.Patches
         private Vector3 _lastStain;
         private bool _haveStain;
         private int _stains;
-        private const float StainSpacing = 2f;      // along the flight
-        private const float StainHalfWidth = 1.5f;  // three 3 m quads across: a strip about 6 m wide
+        private const float StainSpacing = 2.5f;    // rows along the flight
         private const float StainMaxHeight = 30f;   // the same height the drop works from
-        private const float StainDelay = 1.5f;      // about when the cloud reaches the ground
-        private const int MaxStainsPerArrow = 120;
+        private const float StainDelay = 1.8f;      // about when the curtain reaches the ground
+        private const int MaxStainsPerArrow = 240;
+
+        /// <summary>Half the drop's width, metres: the server's soak radius as this game knows it.</summary>
+        private static float HalfWidth => Mathf.Clamp(FireConfig.DousingArrowRadius.Value, 0.5f, 8f);
 
         public static void Attach(Projectile p)
         {
@@ -310,23 +313,29 @@ namespace FireFront.Patches
         private void Build()
         {
             Material mat = FireFrontTextureGenerator.GetOrCreateSmokeMaterial();
+            float w = HalfWidth;
             _systems = new[]
             {
-                // The retardant cloud: dense red-orange puffs that billow out wide behind the arrow
-                // and sink slowly, an air tanker's drop.
-                MakeSystem("Cloud", mat, rate: 70f, life: (3.0f, 5.0f), size: (0.9f, 2.0f), gravity: 0.22f,
-                           c0: new Color(0.93f, 0.30f, 0.14f, 0.85f), c1: new Color(1.00f, 0.42f, 0.22f, 0.70f),
-                           shapeRadius: 0.4f, stretch: false, max: 360, growth: 4.0f, noise: 0.6f),
-                // Heavier streaks falling out of the cloud to the ground.
-                MakeSystem("Streaks", mat, rate: 120f, life: (1.5f, 2.5f), size: (0.08f, 0.18f), gravity: 1.2f,
-                           c0: new Color(0.90f, 0.28f, 0.12f, 0.80f), c1: new Color(0.98f, 0.40f, 0.20f, 0.60f),
-                           shapeRadius: 0.5f, stretch: true, max: 360, growth: 1f, noise: 0f),
+                // The load leaving the tank: a heavy dark-red column that drops straight down fast.
+                MakeSystem("Column", mat, rate: 110f, life: (0.9f, 1.4f), size: (0.7f, 1.2f), gravity: 1.1f,
+                           c0: new Color(0.62f, 0.10f, 0.05f, 0.95f), c1: new Color(0.75f, 0.16f, 0.07f, 0.90f),
+                           width: 0.4f, stretch: false, max: 260, growth: 2.6f, noise: 0.25f),
+                // The curtain it breaks into: wide across the flight, billowing, sinking slowly.
+                MakeSystem("Curtain", mat, rate: 90f, life: (3.5f, 6.0f), size: (1.4f, 2.6f), gravity: 0.2f,
+                           c0: new Color(0.80f, 0.20f, 0.09f, 0.80f), c1: new Color(0.94f, 0.34f, 0.15f, 0.65f),
+                           width: w * 1.4f, stretch: false, max: 520, growth: 3.4f, noise: 0.85f),
+                // Heavier streaks falling out of the curtain to the ground, the full width.
+                MakeSystem("Streaks", mat, rate: 160f, life: (1.5f, 2.6f), size: (0.08f, 0.2f), gravity: 1.25f,
+                           c0: new Color(0.70f, 0.14f, 0.06f, 0.85f), c1: new Color(0.88f, 0.28f, 0.12f, 0.65f),
+                           width: w * 1.6f, stretch: true, max: 480, growth: 1f, noise: 0f),
             };
             _last = transform.position;
         }
 
+        /// <param name="width">Full width of the emitter ACROSS the flight (the arrow's local x; vanilla
+        /// points a projectile along its velocity), so the curtain spreads sideways, not along the line.</param>
         private ParticleSystem MakeSystem(string name, Material mat, float rate, (float, float) life, (float, float) size,
-                                          float gravity, Color c0, Color c1, float shapeRadius, bool stretch, int max,
+                                          float gravity, Color c0, Color c1, float width, bool stretch, int max,
                                           float growth, float noise)
         {
             var go = new GameObject(name);
@@ -339,7 +348,7 @@ namespace FireFront.Patches
             main.playOnAwake = false;
             main.loop = true;
             main.startLifetime = new ParticleSystem.MinMaxCurve(life.Item1, life.Item2);
-            main.startSpeed = new ParticleSystem.MinMaxCurve(0f, 0.4f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(0f, 0.3f);
             main.startSize = new ParticleSystem.MinMaxCurve(size.Item1, size.Item2);
             main.startColor = new ParticleSystem.MinMaxGradient(c0, c1);
             main.gravityModifier = gravity;
@@ -351,15 +360,15 @@ namespace FireFront.Patches
             emission.rateOverDistance = rate * 0.15f;
 
             var shape = ps.shape;
-            shape.shapeType = ParticleSystemShapeType.Sphere;
-            shape.radius = shapeRadius;
+            shape.shapeType = ParticleSystemShapeType.Box;
+            shape.scale = new Vector3(Mathf.Max(0.2f, width), 0.4f, 0.8f);
 
             var col = ps.colorOverLifetime;
             col.enabled = true;
             var g = new Gradient();
             g.SetKeys(
                 new[] { new GradientColorKey(Color.white, 0f), new GradientColorKey(Color.white, 1f) },
-                new[] { new GradientAlphaKey(0.9f, 0f), new GradientAlphaKey(0.7f, 0.6f), new GradientAlphaKey(0f, 1f) });
+                new[] { new GradientAlphaKey(0.95f, 0f), new GradientAlphaKey(0.75f, 0.6f), new GradientAlphaKey(0f, 1f) });
             col.color = new ParticleSystem.MinMaxGradient(g);
 
             if (!stretch)
@@ -371,7 +380,7 @@ namespace FireFront.Patches
             }
             if (noise > 0f)
             {
-                // Billowing: the cloud churns and spreads sideways as it sinks.
+                // Billowing: the curtain churns and spreads as it sinks.
                 var n = ps.noise;
                 n.enabled = true;
                 n.strength = noise;
@@ -385,7 +394,7 @@ namespace FireFront.Patches
             collision.type = ParticleSystemCollisionType.World;
             collision.mode = ParticleSystemCollisionMode.Collision3D;
             collision.quality = ParticleSystemCollisionQuality.Low;
-            collision.lifetimeLoss = 1f; // water that reaches the ground is gone
+            collision.lifetimeLoss = 1f; // retardant that reaches the ground is gone (the stain takes over)
             collision.bounce = 0f;
 
             var r = go.GetComponent<ParticleSystemRenderer>();
@@ -403,6 +412,10 @@ namespace FireFront.Patches
             return ps;
         }
 
+        // Across the strip, as fractions of the half width: the middle twice, so it stains darkest
+        // down the centre and thins toward the edges, like a real drop's coverage.
+        private static readonly float[] StainOffsets = { -0.72f, -0.36f, 0f, 0f, 0.36f, 0.72f };
+
         private void LayStain(Vector3 pos)
         {
             if (_stains >= MaxStainsPerArrow || pos.y > 3000f) return;
@@ -414,18 +427,19 @@ namespace FireFront.Patches
             Vector3 dir = _haveStain ? new Vector3(pos.x - _lastStain.x, 0f, pos.z - _lastStain.z) : transform.forward;
             dir.y = 0f;
             if (dir.sqrMagnitude < 0.0001f) dir = Vector3.forward;
-            Vector3 side = Vector3.Cross(Vector3.up, dir.normalized) * StainHalfWidth;
+            Vector3 across = Vector3.Cross(Vector3.up, dir.normalized);
             _lastStain = pos;
             _haveStain = true;
 
             float ground = ValheimBridge.GetGroundHeight(pos, out bool sampled);
             if (!sampled || pos.y - ground > StainMaxHeight || pos.y - ground < -1f) return;
             float lifetime = Mathf.Clamp(FireConfig.DousingArrowSoakSeconds.Value, 10f, 1800f);
+            float w = HalfWidth;
+            float quad = Mathf.Max(1.5f, w * 0.85f); // each patch, metres across
             Vector3 at = new Vector3(pos.x, ground, pos.z);
-            RetardantStains.Enqueue(at - side, StainDelay, lifetime);
-            RetardantStains.Enqueue(at, StainDelay, lifetime);
-            RetardantStains.Enqueue(at + side, StainDelay, lifetime);
-            _stains += 3;
+            foreach (float f in StainOffsets)
+                RetardantStains.Enqueue(at + across * (f * w), StainDelay, lifetime, quad);
+            _stains += StainOffsets.Length;
         }
 
         private void Update()
@@ -449,10 +463,10 @@ namespace FireFront.Patches
     public class RetardantStains : MonoBehaviour
     {
         private static RetardantStains _instance;
-        private readonly List<(float at, Vector3 pos, float lifetime)> _queue = new List<(float, Vector3, float)>();
-        private const int MaxQueued = 600;
+        private readonly List<(float at, Vector3 pos, float lifetime, float size)> _queue = new List<(float, Vector3, float, float)>();
+        private const int MaxQueued = 1200;
 
-        public static void Enqueue(Vector3 pos, float delay, float lifetime)
+        public static void Enqueue(Vector3 pos, float delay, float lifetime, float size)
         {
             if (_instance == null)
             {
@@ -461,17 +475,18 @@ namespace FireFront.Patches
                 _instance = go.AddComponent<RetardantStains>();
             }
             if (_instance._queue.Count >= MaxQueued) return;
-            _instance._queue.Add((Time.time + delay, pos, lifetime));
+            _instance._queue.Add((Time.time + delay, pos, lifetime, size));
         }
 
         private void Update()
         {
             float now = Time.time;
             int spawned = 0;
-            for (int i = _queue.Count - 1; i >= 0 && spawned < 12; i--)
+            for (int i = _queue.Count - 1; i >= 0 && spawned < 16; i--)
             {
                 if (now < _queue[i].at) continue;
-                ValheimBridge.SpawnRetardantMark(_queue[i].pos, 3f / 1.9f, _queue[i].lifetime);
+                // The spawner scales by 1.6-2.2 (the scorch mark's jitter): divide that out.
+                ValheimBridge.SpawnRetardantMark(_queue[i].pos, _queue[i].size / 1.9f, _queue[i].lifetime);
                 _queue.RemoveAt(i);
                 spawned++;
             }

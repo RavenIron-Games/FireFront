@@ -38,7 +38,7 @@ namespace FireFront.Config
     {
         public const string MetaSection = "Meta";
         public const string VersionKey = "ConfigVersion";
-        public const int CurrentVersion = 4;
+        public const int CurrentVersion = 5;
 
         /// <summary>One slot's every old default, from Wings' shape. A stored value equal to ANY of them is the mod's own old default, not admin work.</summary>
         public sealed class Rebase
@@ -90,6 +90,17 @@ namespace FireFront.Config
                     // is the mod's own old default and follows; a stored "false" already says the same.
                     // An admin who wants builds to burn sets it to true again after this boot, once.
                     new Rebase { Section = "Fire", Key = "BurnPlayerBuildings", OldDefaults = new[] { "true" } },
+                }
+            },
+            { 5, new[]
+                {
+                    // 1.0.6 test: "grass burns out too fast". A ground cell burns 20 s, not 8; the ground
+                    // cap and the ground damage cap rise by the same 2.5x, 50 -> 125, so the front keeps
+                    // its pace (a longer burn with the old cap would hit the cap sooner and crawl).
+                    // net472 writes the float 8 as "8" and the ints as "50".
+                    new Rebase { Section = "Ground", Key = "GroundBurnDurationSeconds", OldDefaults = new[] { "8" } },
+                    new Rebase { Section = "Ground", Key = "GroundMaxConcurrent", OldDefaults = new[] { "50" } },
+                    new Rebase { Section = "Damage", Key = "GroundDamageMaxConcurrent", OldDefaults = new[] { "50" } },
                 }
             },
         };

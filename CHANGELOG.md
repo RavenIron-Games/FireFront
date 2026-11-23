@@ -14,6 +14,11 @@
   and grass only, never a piece, whether a player built it or it came with the world. A building
   can still catch the ordinary way, from fire that spreads to it, and burning animals still set
   forests alight as before. Needs only the server, or the player hosting, to run 1.0.6.
+- **Grass burns longer: 20 seconds a patch, not 8.** It burned out too fast. The limit on
+  ground cells burning at once rises with it, 50 to 125 (`GroundMaxConcurrent`, and
+  `GroundDamageMaxConcurrent` to match), so a front moves as fast as before and stays thicker.
+  A config file still holding the old 8, 50 and 50 moves to the new values on first boot
+  (config layout version 5); a value an admin chose is kept.
 - **A fire arrow that lands on the ground lights the grass there.** Before, grass caught only
   from a burning tree, log, building or creature, so an arrow into open grass, most of the
   Plains, did nothing. Any fire projectile a player shoots or throws counts: fire arrows, fire
@@ -30,9 +35,11 @@
     spreading and without lighting the trees or buildings beside it, a controlled burn. The burnt
     strip then holds as a firebreak for 3 minutes (`EmberArrowFirebreakSeconds`): a wildfire
     that reaches it stops there.
-  - **Dousing arrow** (8 Wood, 4 Resin, 2 Leather scraps, 2 Feathers): the air tanker. Every
-    fire within 3 m of its flight line goes out (`DousingArrowRadius`), from up to 30 m up, and
-    the ground under it stays soaked for 2 minutes (`DousingArrowSoakSeconds`), burning or not.
+  - **Dousing arrow** (8 Wood, 4 Resin, 2 Leather scraps, 2 Feathers): the air tanker. From the
+    moment it is loosed a heavy dark-red retardant column pours from it and breaks into a wide
+    billowing curtain. Every fire within 5 m of its flight line goes out (`DousingArrowRadius`),
+    from up to 30 m up, and the ground under it stays soaked for 2 minutes
+    (`DousingArrowSoakSeconds`), burning or not, stained red, darkest down the middle.
     Fire it over the front, or along a line the fire must not cross.
   The shooter and the server both need 1.0.6.
 
