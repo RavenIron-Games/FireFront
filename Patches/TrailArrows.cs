@@ -304,20 +304,22 @@ namespace FireFront.Patches
             Material mat = FireFrontTextureGenerator.GetOrCreateSmokeMaterial();
             _systems = new[]
             {
-                // Droplets: thin streaks that fall and die on the ground.
-                MakeSystem("Drops", mat, rate: 160f, life: (1.2f, 2.2f), size: (0.05f, 0.12f), gravity: 1.3f,
-                           c0: new Color(0.70f, 0.85f, 1.00f, 0.75f), c1: new Color(0.85f, 0.93f, 1.00f, 0.55f),
-                           shapeRadius: 0.35f, stretch: true, max: 400),
-                // Spray: a soft spreading curtain round the droplets.
-                MakeSystem("Spray", mat, rate: 30f, life: (1.0f, 1.8f), size: (0.8f, 1.8f), gravity: 0.45f,
-                           c0: new Color(0.80f, 0.90f, 1.00f, 0.28f), c1: new Color(0.92f, 0.96f, 1.00f, 0.18f),
-                           shapeRadius: 0.6f, stretch: false, max: 80),
+                // The retardant cloud: dense red-orange puffs that billow out wide behind the arrow
+                // and sink slowly, an air tanker's drop.
+                MakeSystem("Cloud", mat, rate: 70f, life: (3.0f, 5.0f), size: (0.9f, 2.0f), gravity: 0.22f,
+                           c0: new Color(0.93f, 0.30f, 0.14f, 0.85f), c1: new Color(1.00f, 0.42f, 0.22f, 0.70f),
+                           shapeRadius: 0.4f, stretch: false, max: 360, growth: 4.0f, noise: 0.6f),
+                // Heavier streaks falling out of the cloud to the ground.
+                MakeSystem("Streaks", mat, rate: 120f, life: (1.5f, 2.5f), size: (0.08f, 0.18f), gravity: 1.2f,
+                           c0: new Color(0.90f, 0.28f, 0.12f, 0.80f), c1: new Color(0.98f, 0.40f, 0.20f, 0.60f),
+                           shapeRadius: 0.5f, stretch: true, max: 360, growth: 1f, noise: 0f),
             };
             _last = transform.position;
         }
 
         private ParticleSystem MakeSystem(string name, Material mat, float rate, (float, float) life, (float, float) size,
-                                          float gravity, Color c0, Color c1, float shapeRadius, bool stretch, int max)
+                                          float gravity, Color c0, Color c1, float shapeRadius, bool stretch, int max,
+                                          float growth, float noise)
         {
             var go = new GameObject(name);
             go.transform.SetParent(transform, false);
@@ -356,7 +358,18 @@ namespace FireFront.Patches
             {
                 var sol = ps.sizeOverLifetime;
                 sol.enabled = true;
-                sol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(new Keyframe(0f, 0.5f), new Keyframe(1f, 1.8f)));
+                sol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
+                    new Keyframe(0f, 0.4f), new Keyframe(0.3f, growth * 0.6f), new Keyframe(1f, growth)));
+            }
+            if (noise > 0f)
+            {
+                // Billowing: the cloud churns and spreads sideways as it sinks.
+                var n = ps.noise;
+                n.enabled = true;
+                n.strength = noise;
+                n.frequency = 0.35f;
+                n.scrollSpeed = 0.25f;
+                n.quality = ParticleSystemNoiseQuality.Low;
             }
 
             var collision = ps.collision;
