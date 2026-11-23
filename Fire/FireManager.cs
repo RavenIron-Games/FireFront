@@ -47,6 +47,7 @@ namespace FireFront.Fire
         public bool YIsReal;  // false = Y is inherited from the igniter, not measured. See IsStandingInFire.
         public int EventId;   // which fire event this cell belongs to (0 = unassigned/legacy)
         public long Igniter;  // 1.0.2: who lit THIS fire, inherited along spread; 0 = natural/unknown
+        public bool Firebreak; // 1.0.6: an Ember arrow's controlled burn: never spreads or lights objects
     }
 
     public class FireManager : MonoBehaviour
@@ -800,7 +801,7 @@ namespace FireFront.Fire
             if (routedRpc != null && !ReferenceEquals(routedRpc, _registeredRpcInstance))
             {
                 _registeredRpcInstance = routedRpc; // guarded by reference, so a reconnect's fresh instance re-registers
-                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest, HandlePaintAssign, HandleObjectFireSync, VersionCheck.OnVersion, HandleCreatureFireRequest, HandleGroundIgniteRequest);
+                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest, HandlePaintAssign, HandleObjectFireSync, VersionCheck.OnVersion, HandleCreatureFireRequest, HandleGroundIgniteRequest, HandleArrowTrailRequest);
 
                 // A fresh ZRoutedRpc means a fresh world, so everything this machine was drawing on
                 // behalf of the old one is stale. FireManager lives on the plugin's own GameObject
@@ -1601,7 +1602,8 @@ namespace FireFront.Fire
             {
                 sb.Append("ground\t").Append(InvariantNumbers.Format(kv.Key.X)).Append('\t').Append(InvariantNumbers.Format(kv.Key.Z)).Append('\t')
                   .Append(InvariantNumbers.Format(kv.Value.Y)).Append('\t').Append(InvariantNumbers.Format(kv.Value.ExpireAt - now)).Append('\t')
-                  .Append(InvariantNumbers.Format(kv.Value.Igniter)).Append('\n'); // field 5, 1.0.2: who lit it. Older builds stop at 4.
+                  .Append(InvariantNumbers.Format(kv.Value.Igniter)).Append('\t') // field 5, 1.0.2: who lit it. Older builds stop at 4.
+                  .Append(kv.Value.Firebreak ? "1" : "0").Append('\n'); // field 6, 1.0.6: a controlled burn
             }
             foreach (KeyValuePair<GroundCellKey, float> kv in _groundExhausted)
             {
@@ -1677,7 +1679,8 @@ namespace FireFront.Fire
                             // A save written by 1.0.0 can hold Ashlands fire; it is dropped, not restored.
                             if (AshlandsBarsFireAt(CellCenter(key, y))) { skipped++; break; }
                             _groundBurning[key] = new GroundCellState { ExpireAt = now + remaining, Y = y, YIsReal = true,
-                                                                        Igniter = FireMath.IgniterField(f, 5) }; // 0 from a pre-1.0.2 store
+                                                                        Igniter = FireMath.IgniterField(f, 5), // 0 from a pre-1.0.2 store
+                                                                        Firebreak = f.Length > 6 && f[6] == "1" };
                             _groundIgnitedSinceFlush.Add((key, y)); // clients learn of it at the next flush
                             // Queued rather than built here: the restore installs the whole fire at
                             // once, and building fifty ground objects in one frame is the boot spike
@@ -2173,6 +2176,184 @@ namespace FireFront.Fire
                              $"{_groundBurning.Count - before} ground cell(s) lit within {radius:F1} m (igniter {igniterPlayerId}).");
         }
 
+        // ---- 1.0.6: trail arrows (Patches/TrailArrows.cs) ----------------------------------------
+
+        public const int ArrowTrailKindEmber = 0;
+        public const int ArrowTrailKindDousing = 1;
+        public const int ArrowTrailMaxPoints = 32;          // per report; the patch flushes at 16
+        private const int ArrowTrailMaxPerPeerPerSecond = 10;
+        private const int FirebreakMaxCells = 800;          // controlled-burn cells alight at once, server-wide
+        private const float EmberRadius = 0.75f;            // around each ember: one to four 1 m cells
+        private readonly Dictionary<long, (float start, int count)> _arrowTrailPeerWindow = new Dictionary<long, (float, int)>();
+        private readonly List<Vector3> _arrowTrailScratch = new List<Vector3>();
+        private float _arrowTrailNextPrune;
+
+        /// <summary>
+        /// Server-side handler for FireFront_ArrowTrail: points on the ground under an Ember or Dousing
+        /// arrow's flight. Payload (kind, igniter, count, points). Refused whole if it cannot be read,
+        /// holds more than ArrowTrailMaxPoints, or any point is not finite or out of reach of where the
+        /// server last saw the sender; ten reports per peer per second.
+        /// </summary>
+        private void HandleArrowTrailRequest(long sender, ZPackage pkg)
+        {
+            if (!ValheimBridge.IsServer()) return;
+            int kind;
+            long igniterPlayerId;
+            _arrowTrailScratch.Clear();
+            try
+            {
+                kind = pkg.ReadInt();
+                igniterPlayerId = pkg.ReadLong();
+                int count = pkg.ReadInt();
+                if (count < 0 || count > ArrowTrailMaxPoints)
+                {
+                    AuthLog.Refused(sender, "arrow-trail", $"refused an arrow-trail report of {count} points (limit {ArrowTrailMaxPoints})");
+                    return;
+                }
+                for (int i = 0; i < count; i++) _arrowTrailScratch.Add(pkg.ReadVector3());
+            }
+            catch (System.Exception)
+            {
+                AuthLog.Refused(sender, "arrow-trail", "refused an arrow-trail report: the package could not be read");
+                return;
+            }
+            if (kind != ArrowTrailKindEmber && kind != ArrowTrailKindDousing) return;
+
+            float now = Time.time;
+            if (now >= _arrowTrailNextPrune)
+            {
+                _arrowTrailNextPrune = now + 10f;
+                var stale = new List<long>();
+                foreach (KeyValuePair<long, (float start, int count)> kv in _arrowTrailPeerWindow)
+                    if (now - kv.Value.start > 5f) stale.Add(kv.Key);
+                foreach (long peer in stale) _arrowTrailPeerWindow.Remove(peer);
+            }
+            if (!_arrowTrailPeerWindow.TryGetValue(sender, out (float start, int count) window) || now - window.start >= 1f)
+                window = (now, 0);
+            if (window.count >= ArrowTrailMaxPerPeerPerSecond) return;
+            _arrowTrailPeerWindow[sender] = (window.start, window.count + 1);
+
+            for (int i = 0; i < _arrowTrailScratch.Count; i++)
+            {
+                Vector3 p = _arrowTrailScratch[i];
+                if (float.IsNaN(p.x) || float.IsNaN(p.y) || float.IsNaN(p.z) ||
+                    float.IsInfinity(p.x) || float.IsInfinity(p.y) || float.IsInfinity(p.z))
+                {
+                    AuthLog.Refused(sender, "arrow-trail", "refused an arrow-trail report: a point is not finite");
+                    return;
+                }
+                if (!RequestTargetInReach(sender, p, MaxIgniteReach))
+                {
+                    AuthLog.Refused(sender, "arrow-trail-reach", $"refused an arrow-trail report at ({p.x:F0},{p.z:F0}): " +
+                                            $"more than {MaxIgniteReach:F0} m from where the server last saw the player");
+                    return;
+                }
+            }
+            if (igniterPlayerId != 0L && !ValheimBridge.IsOnlinePlayerId(igniterPlayerId)) igniterPlayerId = 0L;
+            ApplyArrowTrail(kind, _arrowTrailScratch, igniterPlayerId);
+        }
+
+        /// <summary>
+        /// Server only. Ember (kind 0): a controlled burn along the points; each lights the grass within
+        /// EmberRadius as firebreak cells, which burn out without spreading or lighting objects and then
+        /// hold for EmberArrowFirebreakSeconds. Dousing (kind 1), the air tanker: every fire within
+        /// DousingArrowRadius of each point goes out, and the ground there, burning or not, is soaked for
+        /// DousingArrowSoakSeconds. Called by the RPC handler, and directly by the patch on a server or host.
+        /// </summary>
+        public void ApplyArrowTrail(int kind, List<Vector3> points, long igniterPlayerId)
+        {
+            if (!ValheimBridge.IsServer() || points == null || points.Count == 0) return;
+            if (!FireConfig.Enabled.Value) return;
+            int done = 0;
+            if (kind == ArrowTrailKindEmber)
+            {
+                int budget = FirebreakMaxCells;
+                foreach (GroundCellState s in _groundBurning.Values) if (s.Firebreak) budget--;
+                for (int i = 0; i < points.Count && budget > 0; i++)
+                {
+                    if (points[i].y > InteriorHeight) continue;
+                    done += LightFirebreakNear(points[i], EmberRadius, igniterPlayerId, ref budget);
+                }
+                FireLogger.Debug($"[ARROW-TRAIL] ember trail of {points.Count} point(s): {done} firebreak cell(s) lit (igniter {igniterPlayerId}).");
+            }
+            else if (kind == ArrowTrailKindDousing)
+            {
+                float radius = Mathf.Clamp(FireConfig.DousingArrowRadius.Value, 0.5f, 8f);
+                float soak = Mathf.Clamp(FireConfig.DousingArrowSoakSeconds.Value, 10f, 1800f);
+                for (int i = 0; i < points.Count; i++)
+                {
+                    ExtinguishAt(points[i], radius);
+                    done += SoakGroundNear(points[i], radius, soak);
+                }
+                FireLogger.Debug($"[ARROW-TRAIL] dousing trail of {points.Count} point(s): {done} ground cell(s) soaked for {soak:F0} s within {radius:F1} m.");
+            }
+        }
+
+        /// <summary>Lights firebreak cells within radius of a point; returns how many. Same refusals as
+        /// TryIgniteGroundCell (burning, spent or soaked, Ashlands, dirt path, water) but no event cap or
+        /// leash: a controlled burn must not be dropped because a wildfire nearby is at its cap.</summary>
+        private int LightFirebreakNear(Vector3 point, float radius, long igniterPlayerId, ref int budget)
+        {
+            float size = FireConfig.GroundCellSize.Value;
+            int range = Mathf.CeilToInt(radius / size);
+            float radiusSqr = radius * radius;
+            GroundCellKey originKey = KeyOf(point);
+            float now = Time.time;
+            int lit = 0;
+            for (int dx = -range; dx <= range; dx++)
+            {
+                for (int dz = -range; dz <= range; dz++)
+                {
+                    if (budget <= 0) return lit;
+                    var key = new GroundCellKey(originKey.X + dx, originKey.Z + dz);
+                    Vector3 center = CellCenter(key, point.y);
+                    if ((center - point).sqrMagnitude > radiusSqr) continue;
+                    if (_groundBurning.ContainsKey(key)) continue;
+                    if (_groundExhausted.TryGetValue(key, out float until) && now < until) continue;
+                    if (AshlandsBarsFireAt(center)) continue;
+                    if (FireConfig.EffectiveGroundFirebreaksEnabled && IsFirebreakAt(center)) continue;
+                    float realY = ValheimBridge.GetGroundHeight(center, out bool sampled);
+                    if (FireConfig.EffectiveGroundWaterBlocksSpreadEnabled && realY <= ValheimBridge.GetWaterLevel()) continue;
+
+                    if (_fireStartTime < 0f) _fireStartTime = now;
+                    if (_fireOrigin == null) _fireOrigin = center;
+                    _groundBurning[key] = new GroundCellState
+                    {
+                        ExpireAt = now + FireConfig.GroundBurnDurationSeconds.Value, Y = realY, YIsReal = sampled,
+                        EventId = EventForPosition(center, igniterPlayerId), Igniter = igniterPlayerId, Firebreak = true,
+                    };
+                    SpawnGroundVfxFor(key, CellCenter(key, realY));
+                    _groundIgnitedSinceFlush.Add((key, realY));
+                    budget--;
+                    lit++;
+                }
+            }
+            return lit;
+        }
+
+        /// <summary>Marks every ground cell within radius as soaked until now + seconds (never shortening
+        /// a longer hold). Burning cells there were already put out by ExtinguishAt. Returns the count.</summary>
+        private int SoakGroundNear(Vector3 point, float radius, float seconds)
+        {
+            float size = FireConfig.GroundCellSize.Value;
+            int range = Mathf.CeilToInt(radius / size);
+            float radiusSqr = radius * radius;
+            GroundCellKey originKey = KeyOf(point);
+            float until = Time.time + seconds;
+            int n = 0;
+            for (int dx = -range; dx <= range; dx++)
+            {
+                for (int dz = -range; dz <= range; dz++)
+                {
+                    var key = new GroundCellKey(originKey.X + dx, originKey.Z + dz);
+                    if ((CellCenter(key, point.y) - point).sqrMagnitude > radiusSqr) continue;
+                    if (!_groundExhausted.TryGetValue(key, out float held) || held < until) _groundExhausted[key] = until;
+                    n++;
+                }
+            }
+            return n;
+        }
+
         private void PruneCreatureFireState(float now)
         {
             _creatureFireNextPrune = now + 10f;
@@ -2471,8 +2652,9 @@ namespace FireFront.Fire
             // The exhausted dict holds burnout regrow timers AND douse immunity
             // (see ExtinguishGroundNear), so it must stay consultable when
             // either feature is on — not only fuel exhaustion.
-            if ((FireConfig.EffectiveGroundFuelExhaustionEnabled || FireConfig.EffectiveDouseImmunitySeconds > 0f) &&
-                _groundExhausted.TryGetValue(key, out float exhaustedUntil) && Time.time < exhaustedUntil) return;
+            // 1.0.6: consulted whatever those two settings say, since an Ember arrow's firebreak and a
+            // Dousing arrow's soak write it too. An entry only exists if something wrote one.
+            if (_groundExhausted.TryGetValue(key, out float exhaustedUntil) && Time.time < exhaustedUntil) return;
 
             Vector3 approxCenter = CellCenter(key, y);
 
@@ -3705,10 +3887,13 @@ namespace FireFront.Fire
             }
             foreach (GroundCellKey key in _groundScratch)
             {
-                float y = _groundBurning[key].Y;
+                GroundCellState gone = _groundBurning[key];
+                float y = gone.Y;
                 _groundBurning.Remove(key);
-                if (FireConfig.EffectiveGroundFuelExhaustionEnabled)
-                    _groundExhausted[key] = now + FireConfig.GroundFuelRegrowSeconds.Value;
+                float regrow = FireConfig.EffectiveGroundFuelExhaustionEnabled ? FireConfig.GroundFuelRegrowSeconds.Value : 0f;
+                // 1.0.6: an Ember arrow's burnt strip holds as a firebreak for its own time.
+                if (gone.Firebreak) regrow = Mathf.Max(regrow, Mathf.Clamp(FireConfig.EmberArrowFirebreakSeconds.Value, 10f, 1800f));
+                if (regrow > 0f) _groundExhausted[key] = now + regrow;
                 RemoveGroundVfxFor(key);
                 LeaveScorchMark(key, y);
                 FireLogger.Debug($"Ground burned out at cell ({key.X},{key.Z})");
@@ -3719,7 +3904,7 @@ namespace FireFront.Fire
             // a long player-sustained fire (one that never fully dies) would keep
             // _groundExhausted growing for the entire session with no eviction —
             // this is what caused the runaway entry count.
-            if ((FireConfig.EffectiveGroundFuelExhaustionEnabled || FireConfig.EffectiveDouseImmunitySeconds > 0f) && _groundExhausted.Count > 0)
+            if (_groundExhausted.Count > 0)
             {
                 _exhaustedScratch.Clear();
                 foreach (KeyValuePair<GroundCellKey, float> kv in _groundExhausted)
@@ -4936,6 +5121,7 @@ namespace FireFront.Fire
                 foreach (GroundCellKey key in _groundScratch)
                 {
                     GroundCellState cellState = _groundBurning[key];
+                    if (cellState.Firebreak) continue; // 1.0.6: a controlled burn passes nothing on
                     _spreadIgniter = cellState.Igniter;
                     float y = cellState.Y;
                     Vector3 origin = CellCenter(key, y);

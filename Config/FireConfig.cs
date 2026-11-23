@@ -24,6 +24,9 @@ namespace FireFront.Config
         public static ConfigEntry<bool> FireInAshlands;
         public static ConfigEntry<bool> BurningCreaturesSpreadFire;
         public static ConfigEntry<bool> FireProjectilesLightGrass;
+        public static ConfigEntry<float> EmberArrowFirebreakSeconds;
+        public static ConfigEntry<float> DousingArrowRadius;
+        public static ConfigEntry<float> DousingArrowSoakSeconds;
         public static ConfigEntry<float> FireProjectileGrassRadius;
         public static ConfigEntry<float> BurningCreatureFireRadius;
         public static ConfigEntry<float> BurningCreatureCarrySeconds;
@@ -483,6 +486,30 @@ namespace FireFront.Config
                 new ConfigDescription(
                     "Meters around a fire arrow's landing point in which grass catches. Read by the server.",
                     new AcceptableValueRange<float>(0.5f, 4f)));
+
+            // 1.0.6: the trail arrows (Patches/TrailArrows.cs). New keys, no ledger rung.
+            EmberArrowFirebreakSeconds = config.Bind(
+                "Arrows", "EmberArrowFirebreakSeconds", 180f,
+                new ConfigDescription(
+                    "Ember arrow: a low shot drops embers on the ground under its flight. Each lights a " +
+                    "small patch of grass that burns out without spreading and without lighting trees or " +
+                    "buildings next to it, a controlled burn. The burnt strip then holds as a firebreak " +
+                    "for this many seconds: no fire crosses it. Read by the server.",
+                    new AcceptableValueRange<float>(10f, 1800f)));
+
+            DousingArrowRadius = config.Bind(
+                "Arrows", "DousingArrowRadius", 3f,
+                new ConfigDescription(
+                    "Dousing arrow, the air tanker: meters either side of its flight line in which every " +
+                    "fire, ground or object, goes out and the ground is soaked. Read by the server.",
+                    new AcceptableValueRange<float>(0.5f, 8f)));
+
+            DousingArrowSoakSeconds = config.Bind(
+                "Arrows", "DousingArrowSoakSeconds", 120f,
+                new ConfigDescription(
+                    "Dousing arrow: seconds the soaked strip holds, burning or not, before fire can cross " +
+                    "it again. Put a line ahead of the front and it stops there. Read by the server.",
+                    new AcceptableValueRange<float>(10f, 1800f)));
 
             VfxPrefabName = config.Bind(
                 "Visuals", "VfxPrefabName", "",

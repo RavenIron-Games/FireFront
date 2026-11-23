@@ -3913,6 +3913,7 @@ namespace FireFront.Utils
         private const string RpcVersion = "FireFront_Version"; // 0.24: Fire/VersionCheck.cs
         private const string RpcCreatureFire = "FireFront_CreatureFire"; // 1.0.5: Fire/CreatureFireWatch.cs
         private const string RpcGroundIgnite = "FireFront_GroundIgnite"; // 1.0.6: Patches/FireProjectileGroundPatch.cs
+        private const string RpcArrowTrail = "FireFront_ArrowTrail"; // 1.0.6: Patches/TrailArrows.cs
 
         /// <summary>Client → server: run this whitelisted dev command there; replies stream back on the status-response channel.</summary>
         public static void SendCommandRelayToServer(string commandLine)
@@ -4178,6 +4179,7 @@ namespace FireFront.Utils
             RpcVersion.GetStableHashCode(),
             RpcCreatureFire.GetStableHashCode(),
             RpcGroundIgnite.GetStableHashCode(),
+            RpcArrowTrail.GetStableHashCode(),
             "RPC_Damage".GetStableHashCode(),
         };
 
@@ -4365,7 +4367,8 @@ namespace FireFront.Utils
             System.Action<long, ZPackage> onObjectFireSync,
             System.Action<long, string, int> onVersion,
             System.Action<long, ZPackage> onCreatureFire,
-            System.Action<long, ZPackage> onGroundIgnite)
+            System.Action<long, ZPackage> onGroundIgnite,
+            System.Action<long, ZPackage> onArrowTrail)
         {
             if (ZRoutedRpc.instance == null)
             {
@@ -4397,7 +4400,8 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.Register<string, int>(RpcVersion, onVersion);
                 ZRoutedRpc.instance.Register<ZPackage>(RpcCreatureFire, onCreatureFire);
                 ZRoutedRpc.instance.Register<ZPackage>(RpcGroundIgnite, onGroundIgnite);
-                FireLogger.Info($"[IGNITE-TRACE] All 15 FireFront RPCs registered successfully (IsServer={IsServer()}).");
+                ZRoutedRpc.instance.Register<ZPackage>(RpcArrowTrail, onArrowTrail);
+                FireLogger.Info($"[IGNITE-TRACE] All 16 FireFront RPCs registered successfully (IsServer={IsServer()}).");
                 if (IsServer())
                 {
                     if (RoutedSenderGuardArmed)
@@ -4504,6 +4508,25 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.InvokeRoutedRPC(GetServerPeerId(), RpcCreatureFire, pkg);
             }
             catch (System.Exception ex) { FireLogger.Debug($"SendCreatureFireToServer threw: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// 1.0.6, client -> server: points on the ground under a trail arrow's flight (kind 0 = Ember
+        /// arrow, 1 = Dousing arrow). ZPackage(kind, igniter, count, points...).
+        /// </summary>
+        public static void SendArrowTrailToServer(int kind, long igniterPlayerId, List<Vector3> points)
+        {
+            if (ZRoutedRpc.instance == null || points == null || points.Count == 0) return;
+            try
+            {
+                var pkg = new ZPackage();
+                pkg.Write(kind);
+                pkg.Write(igniterPlayerId);
+                pkg.Write(points.Count);
+                for (int i = 0; i < points.Count; i++) pkg.Write(points[i]);
+                ZRoutedRpc.instance.InvokeRoutedRPC(GetServerPeerId(), RpcArrowTrail, pkg);
+            }
+            catch (System.Exception ex) { FireLogger.Debug($"SendArrowTrailToServer threw: {ex.Message}"); }
         }
 
         /// <summary>

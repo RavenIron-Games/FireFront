@@ -22,6 +22,19 @@
   fire projectiles (a Fuling shaman's, a Surtling's) never light grass. All the usual rules hold:
   nothing in the Ashlands, on water, on a dirt path or in a dungeon, and in rain it lights but
   does not spread. The shooter and the server both need 1.0.6.
+- **Two new firefighting arrows, crafted at the workbench, 20 a craft.** Both act along their
+  whole flight, not only where they land, and both carry a wood arrow's damage with no fire or
+  frost.
+  - **Ember arrow** (8 Wood, 4 Coal, 2 Feathers): shot low over grass (within 6 m of the
+    ground), it drops embers under its flight. They light a narrow strip that burns out without
+    spreading and without lighting the trees or buildings beside it, a controlled burn. The burnt
+    strip then holds as a firebreak for 3 minutes (`EmberArrowFirebreakSeconds`): a wildfire
+    that reaches it stops there.
+  - **Dousing arrow** (8 Wood, 4 Resin, 2 Leather scraps, 2 Feathers): the air tanker. Every
+    fire within 3 m of its flight line goes out (`DousingArrowRadius`), from up to 30 m up, and
+    the ground under it stays soaked for 2 minutes (`DousingArrowSoakSeconds`), burning or not.
+    Fire it over the front, or along a line the fire must not cross.
+  The shooter and the server both need 1.0.6.
 
 ## 1.0.5 — 2026-11-21
 
