@@ -800,7 +800,7 @@ namespace FireFront.Fire
             if (routedRpc != null && !ReferenceEquals(routedRpc, _registeredRpcInstance))
             {
                 _registeredRpcInstance = routedRpc; // guarded by reference, so a reconnect's fresh instance re-registers
-                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest, HandlePaintAssign, HandleObjectFireSync, VersionCheck.OnVersion, HandleCreatureFireRequest);
+                ValheimBridge.RegisterFireRpcs(HandleIgniteRequest, HandleFireEventBroadcast, HandleGroundFireSync, HandleExtinguishRequest, HandleConfigSetRequest, HandleStatusRequest, HandleStatusResponse, HandleCommandRelay, HandleFireDamage, HandleGroundSyncRequest, HandlePaintAssign, HandleObjectFireSync, VersionCheck.OnVersion, HandleCreatureFireRequest, HandleGroundIgniteRequest);
 
                 // A fresh ZRoutedRpc means a fresh world, so everything this machine was drawing on
                 // behalf of the old one is stale. FireManager lives on the plugin's own GameObject
@@ -2081,6 +2081,96 @@ namespace FireFront.Fire
                 igniterPlayerId = 0L;
             }
             IgniteFromBurningCreature(creature, position, igniterPlayerId);
+        }
+
+        // ---- 1.0.6: fire projectiles that land on bare ground (Patches/FireProjectileGroundPatch.cs) ----
+
+        // Per peer: a bow looses about one arrow a second, a fire staff a few bolts; this leaves room
+        // for both and stops a modified client flooding the grid.
+        private const int GroundIgniteMaxPerPeerPerSecond = 6;
+        private readonly Dictionary<long, (float start, int count)> _groundIgnitePeerWindow = new Dictionary<long, (float, int)>();
+        private float _groundIgniteNextPrune;
+
+        /// <summary>
+        /// Server-side handler for FireFront_GroundIgnite: a client reports that a fire projectile
+        /// its player shot landed on bare ground. Payload (position, igniter id). Bounded like the
+        /// creature report: finite position, within reach of where the server last saw the sender,
+        /// six per peer per second, and the igniter must be a player online now (else natural).
+        /// </summary>
+        private void HandleGroundIgniteRequest(long sender, ZPackage pkg)
+        {
+            if (!ValheimBridge.IsServer()) return;
+            Vector3 position;
+            long igniterPlayerId;
+            try
+            {
+                position = pkg.ReadVector3();
+                igniterPlayerId = pkg.ReadLong();
+            }
+            catch (System.Exception)
+            {
+                AuthLog.Refused(sender, "ground-ignite", "refused a ground-ignite report: the package could not be read");
+                return;
+            }
+            if (float.IsNaN(position.x) || float.IsNaN(position.y) || float.IsNaN(position.z) ||
+                float.IsInfinity(position.x) || float.IsInfinity(position.y) || float.IsInfinity(position.z))
+            {
+                AuthLog.Refused(sender, "ground-ignite", "refused a ground-ignite report: the position is not finite");
+                return;
+            }
+
+            float now = Time.time;
+            if (now >= _groundIgniteNextPrune)
+            {
+                _groundIgniteNextPrune = now + 10f;
+                var stale = new List<long>();
+                foreach (KeyValuePair<long, (float start, int count)> kv in _groundIgnitePeerWindow)
+                    if (now - kv.Value.start > 5f) stale.Add(kv.Key);
+                foreach (long peer in stale) _groundIgnitePeerWindow.Remove(peer);
+            }
+            if (!_groundIgnitePeerWindow.TryGetValue(sender, out (float start, int count) window) || now - window.start >= 1f)
+                window = (now, 0);
+            if (window.count >= GroundIgniteMaxPerPeerPerSecond) return;
+            _groundIgnitePeerWindow[sender] = (window.start, window.count + 1);
+
+            if (!RequestTargetInReach(sender, position, MaxIgniteReach))
+            {
+                AuthLog.Refused(sender, "ground-ignite-reach", $"refused a ground-ignite report at ({position.x:F0},{position.z:F0}): " +
+                                        $"more than {MaxIgniteReach:F0} m from where the server last saw the player");
+                return;
+            }
+            if (igniterPlayerId != 0L && !ValheimBridge.IsOnlinePlayerId(igniterPlayerId))
+            {
+                FireLogger.Debug($"[GROUND-IGNITE] igniter {igniterPlayerId} in peer {sender}'s report is not an online player; booked as natural.");
+                igniterPlayerId = 0L;
+            }
+            IgniteGroundFromProjectile(position, igniterPlayerId);
+        }
+
+        /// <summary>
+        /// Server only: a player's fire projectile landed on bare ground at <paramref name="position"/>.
+        /// Lights the grass within FireProjectileGrassRadius, booked to <paramref name="igniterPlayerId"/>.
+        /// Lights no object directly: a burning ground cell reaches nearby objects the usual way.
+        /// Rain does not stop it (rain stops spread, not ignition): the cells it lights do not pass
+        /// fire on while rain falls on them. Every other rule (Ashlands, water, dirt paths, caps) is in
+        /// IgniteGroundNear and TryIgniteGroundCell. Called by the RPC handler above, and directly by
+        /// the patch on a server or listen host.
+        /// </summary>
+        public void IgniteGroundFromProjectile(Vector3 position, long igniterPlayerId)
+        {
+            if (!ValheimBridge.IsServer()) return;
+            if (!FireConfig.Enabled.Value || !FireConfig.FireProjectilesLightGrass.Value) return;
+            if (position.y > InteriorHeight) return;
+            if (AshlandsBarsFireAt(position)) { NoteAshlandsRefusal("a fire projectile on the ground", position); return; }
+
+            float radius = Mathf.Clamp(FireConfig.FireProjectileGrassRadius.Value, 0.5f, 4f);
+            int before = _groundBurning.Count;
+            long saved = _spreadIgniter;
+            _spreadIgniter = igniterPlayerId;
+            try { IgniteGroundNear(position, radius); }
+            finally { _spreadIgniter = saved; }
+            FireLogger.Debug($"[GROUND-IGNITE] fire projectile landed at ({position.x:F1},{position.y:F1},{position.z:F1}): " +
+                             $"{_groundBurning.Count - before} ground cell(s) lit within {radius:F1} m (igniter {igniterPlayerId}).");
         }
 
         private void PruneCreatureFireState(float now)

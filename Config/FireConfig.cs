@@ -23,6 +23,8 @@ namespace FireFront.Config
         public static ConfigEntry<bool> BurnPlayerBuildings;
         public static ConfigEntry<bool> FireInAshlands;
         public static ConfigEntry<bool> BurningCreaturesSpreadFire;
+        public static ConfigEntry<bool> FireProjectilesLightGrass;
+        public static ConfigEntry<float> FireProjectileGrassRadius;
         public static ConfigEntry<float> BurningCreatureFireRadius;
         public static ConfigEntry<float> BurningCreatureCarrySeconds;
         public static ConfigEntry<float> BurningCreatureTreeRadius;
@@ -466,6 +468,21 @@ namespace FireFront.Config
                     "branches spread a few metres out: a creature running under a canopy sets it alight. " +
                     "Read by the server.",
                     new AcceptableValueRange<float>(0.5f, 6f)));
+
+            // 1.0.6. New keys, so their defaults reach existing installs without a ledger rung.
+            FireProjectilesLightGrass = config.Bind(
+                "Fire", "FireProjectilesLightGrass", true,
+                "A player's fire arrow (or any other fire projectile a player shoots or throws) that " +
+                "lands on the ground lights the grass where it lands, within FireProjectileGrassRadius. " +
+                "Only bare ground counts: an arrow that hits a tree, a log or a building lights that the " +
+                "usual way. Creatures' fire projectiles never light grass. Every normal rule still " +
+                "applies (Ashlands, water, dirt paths, dungeons; in rain it lights but does not spread). Read by the server; set it there.");
+
+            FireProjectileGrassRadius = config.Bind(
+                "Fire", "FireProjectileGrassRadius", 1.5f,
+                new ConfigDescription(
+                    "Meters around a fire arrow's landing point in which grass catches. Read by the server.",
+                    new AcceptableValueRange<float>(0.5f, 4f)));
 
             VfxPrefabName = config.Bind(
                 "Visuals", "VfxPrefabName", "",

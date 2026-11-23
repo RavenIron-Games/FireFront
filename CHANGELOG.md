@@ -14,6 +14,14 @@
   and grass only, never a piece, whether a player built it or it came with the world. A building
   can still catch the ordinary way, from fire that spreads to it, and burning animals still set
   forests alight as before. Needs only the server, or the player hosting, to run 1.0.6.
+- **A fire arrow that lands on the ground lights the grass there.** Before, grass caught only
+  from a burning tree, log, building or creature, so an arrow into open grass, most of the
+  Plains, did nothing. Any fire projectile a player shoots or throws counts: fire arrows, fire
+  staff bolts. It lights the grass within 1.5 m of where it lands (`FireProjectileGrassRadius`),
+  booked to that player; off with `FireProjectilesLightGrass = false` on the server. Creatures'
+  fire projectiles (a Fuling shaman's, a Surtling's) never light grass. All the usual rules hold:
+  nothing in the Ashlands, on water, on a dirt path or in a dungeon, and in rain it lights but
+  does not spread. The shooter and the server both need 1.0.6.
 
 ## 1.0.5 — 2026-11-21
 
