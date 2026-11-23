@@ -193,18 +193,31 @@ namespace FireFront.Patches
             return -1;
         }
 
+        // The shooter's game stamps the arrow's kind (+1) on its ZDO, because m_ammo is set only there
+        // (Projectile.Setup runs on the shooter): every other game reads the stamp to draw the water.
+        private static readonly int TrailKindKey = "FireFront_TrailKind".GetStableHashCode();
+
         public static void OnFixedUpdate(Projectile p)
         {
             if (!Trails.TryGetValue(p, out Trail t))
             {
+                ZNetView nview = p.GetComponent<ZNetView>();
+                if (nview == null || !nview.IsValid()) return;
+                if (!nview.IsOwner())
+                {
+                    // Someone else's arrow: draw the air tanker's water if it is a Dousing arrow.
+                    ZDO zdo = nview.GetZDO();
+                    if (zdo != null && zdo.GetInt(TrailKindKey) - 1 == FireManager.ArrowTrailKindDousing) DousingRain.Attach(p);
+                    return;
+                }
                 int kind = KindOf(p);
                 if (kind < 0) return;
-                ZNetView nview = p.GetComponent<ZNetView>();
-                if (nview == null || !nview.IsValid() || !nview.IsOwner()) return;
                 if (!(OwnerField?.GetValue(p) is Player player)) return;
                 PruneDead();
                 t = new Trail { Kind = kind, Igniter = player.GetPlayerID() };
                 Trails[p] = t;
+                nview.GetZDO()?.Set(TrailKindKey, kind + 1);
+                if (kind == FireManager.ArrowTrailKindDousing) DousingRain.Attach(p);
             }
             if (DidHitField != null && (bool)DidHitField.GetValue(p)) return;
             if (t.Taken >= MaxPointsPerArrow) return;
@@ -259,6 +272,128 @@ namespace FireFront.Patches
             t.Points.Clear();
             if (ValheimBridge.IsServer()) FireManager.Instance?.ApplyArrowTrail(t.Kind, batch, t.Igniter);
             else ValheimBridge.SendArrowTrailToServer(t.Kind, t.Igniter, batch);
+        }
+    }
+
+    /// <summary>
+    /// The Dousing arrow's water: a curtain of droplets and spray pouring from the arrow from the
+    /// moment it leaves the bow, an air tanker's drop. Purely visual, built on every game that sees
+    /// the arrow; world-space particles, so the water keeps falling where it was released. Stops
+    /// pouring once the arrow stops moving (it has landed), and goes with the arrow when vanilla
+    /// removes it.
+    /// </summary>
+    public class DousingRain : MonoBehaviour
+    {
+        private const string ChildName = "FireFront_DousingRain";
+        private ParticleSystem[] _systems;
+        private Vector3 _last;
+        private float _stillFor;
+        private bool _stopped;
+
+        public static void Attach(Projectile p)
+        {
+            if (p == null || p.transform.Find(ChildName) != null) return;
+            if (ZNet.instance != null && ZNet.instance.IsDedicated()) return; // nobody sees it there
+            var go = new GameObject(ChildName);
+            go.transform.SetParent(p.transform, false);
+            go.AddComponent<DousingRain>().Build();
+        }
+
+        private void Build()
+        {
+            Material mat = FireFrontTextureGenerator.GetOrCreateSmokeMaterial();
+            _systems = new[]
+            {
+                // Droplets: thin streaks that fall and die on the ground.
+                MakeSystem("Drops", mat, rate: 160f, life: (1.2f, 2.2f), size: (0.05f, 0.12f), gravity: 1.3f,
+                           c0: new Color(0.70f, 0.85f, 1.00f, 0.75f), c1: new Color(0.85f, 0.93f, 1.00f, 0.55f),
+                           shapeRadius: 0.35f, stretch: true, max: 400),
+                // Spray: a soft spreading curtain round the droplets.
+                MakeSystem("Spray", mat, rate: 30f, life: (1.0f, 1.8f), size: (0.8f, 1.8f), gravity: 0.45f,
+                           c0: new Color(0.80f, 0.90f, 1.00f, 0.28f), c1: new Color(0.92f, 0.96f, 1.00f, 0.18f),
+                           shapeRadius: 0.6f, stretch: false, max: 80),
+            };
+            _last = transform.position;
+        }
+
+        private ParticleSystem MakeSystem(string name, Material mat, float rate, (float, float) life, (float, float) size,
+                                          float gravity, Color c0, Color c1, float shapeRadius, bool stretch, int max)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(transform, false);
+            var ps = go.AddComponent<ParticleSystem>();
+            ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+
+            var main = ps.main;
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+            main.playOnAwake = false;
+            main.loop = true;
+            main.startLifetime = new ParticleSystem.MinMaxCurve(life.Item1, life.Item2);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(0f, 0.4f);
+            main.startSize = new ParticleSystem.MinMaxCurve(size.Item1, size.Item2);
+            main.startColor = new ParticleSystem.MinMaxGradient(c0, c1);
+            main.gravityModifier = gravity;
+            main.maxParticles = max;
+
+            var emission = ps.emission;
+            emission.rateOverTime = rate;
+            // Rate over distance too, so a fast arrow leaves an unbroken line rather than dots.
+            emission.rateOverDistance = rate * 0.15f;
+
+            var shape = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.Sphere;
+            shape.radius = shapeRadius;
+
+            var col = ps.colorOverLifetime;
+            col.enabled = true;
+            var g = new Gradient();
+            g.SetKeys(
+                new[] { new GradientColorKey(Color.white, 0f), new GradientColorKey(Color.white, 1f) },
+                new[] { new GradientAlphaKey(0.9f, 0f), new GradientAlphaKey(0.7f, 0.6f), new GradientAlphaKey(0f, 1f) });
+            col.color = new ParticleSystem.MinMaxGradient(g);
+
+            if (!stretch)
+            {
+                var sol = ps.sizeOverLifetime;
+                sol.enabled = true;
+                sol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(new Keyframe(0f, 0.5f), new Keyframe(1f, 1.8f)));
+            }
+
+            var collision = ps.collision;
+            collision.enabled = true;
+            collision.type = ParticleSystemCollisionType.World;
+            collision.mode = ParticleSystemCollisionMode.Collision3D;
+            collision.quality = ParticleSystemCollisionQuality.Low;
+            collision.lifetimeLoss = 1f; // water that reaches the ground is gone
+            collision.bounce = 0f;
+
+            var r = go.GetComponent<ParticleSystemRenderer>();
+            if (stretch)
+            {
+                r.renderMode = ParticleSystemRenderMode.Stretch;
+                r.velocityScale = 0.06f;
+                r.lengthScale = 2f;
+            }
+            else r.renderMode = ParticleSystemRenderMode.Billboard;
+            if (mat != null) r.sharedMaterial = mat;
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            r.receiveShadows = false;
+            ps.Play();
+            return ps;
+        }
+
+        private void Update()
+        {
+            if (_stopped || _systems == null) return;
+            Vector3 pos = transform.position;
+            float moved = (pos - _last).sqrMagnitude;
+            _last = pos;
+            _stillFor = moved < 0.0025f ? _stillFor + Time.deltaTime : 0f;
+            if (_stillFor > 0.15f)
+            {
+                _stopped = true;
+                foreach (ParticleSystem ps in _systems) if (ps != null) ps.Stop(false, ParticleSystemStopBehavior.StopEmitting);
+            }
         }
     }
 
