@@ -84,7 +84,7 @@ namespace FireFront.Patches
             if (db == null) return;
             if (_ember == null)
                 _ember = Clone(db, "ArrowFire", EmberPrefab, EmberName,
-                    "Shot low over grass, it drops embers along its flight: a controlled burn that never spreads, " +
+                    "Shot over grass, it drops embers along its whole flight: a controlled burn that never spreads, " +
                     "then holds as a firebreak. Lay one ahead of a wildfire and the fire stops there.");
             if (_dousing == null)
                 _dousing = Clone(db, "ArrowFrost", DousingPrefab, DousingName,
@@ -162,7 +162,10 @@ namespace FireFront.Patches
         // ---- in flight ---------------------------------------------------------------------------
 
         private const float EmberSpacing = 1f;       // one ember per ground cell
-        private const float EmberMaxHeight = 6f;     // embers from higher up go out before they land
+        // The whole flight, from the shooter to where it lands (1.0.6 test: at 6 m a level shot laid
+        // embers only at the shooter's feet and burned him). Starts EmberClearOfShooter out.
+        private const float EmberMaxHeight = 80f;
+        private const float EmberClearOfShooter = 5f;
         private const float DousingSpacing = 2f;
         private const float DousingMaxHeight = 30f;  // the air tanker drops from height
         private const int FlushAt = 16;
@@ -172,6 +175,7 @@ namespace FireFront.Patches
         {
             public int Kind;
             public long Igniter;
+            public Vector3 From; // where the shooter stood when it was loosed
             public Vector3 Last;
             public bool HaveLast;
             public int Taken;
@@ -214,7 +218,7 @@ namespace FireFront.Patches
                 if (kind < 0) return;
                 if (!(OwnerField?.GetValue(p) is Player player)) return;
                 PruneDead();
-                t = new Trail { Kind = kind, Igniter = player.GetPlayerID() };
+                t = new Trail { Kind = kind, Igniter = player.GetPlayerID(), From = player.transform.position };
                 Trails[p] = t;
                 nview.GetZDO()?.Set(TrailKindKey, kind + 1);
                 if (kind == FireManager.ArrowTrailKindDousing) DousingRain.Attach(p);
@@ -238,6 +242,7 @@ namespace FireFront.Patches
             float height = pos.y - ground;
             float max = t.Kind == FireManager.ArrowTrailKindEmber ? EmberMaxHeight : DousingMaxHeight;
             if (height < -1f || height > max) return;
+            if (t.Kind == FireManager.ArrowTrailKindEmber && !ClearOfShooter(t, pos)) return;
 
             t.Points.Add(new Vector3(pos.x, ground, pos.z));
             t.Taken++;
@@ -259,7 +264,7 @@ namespace FireFront.Patches
                 {
                     var landing = new Vector3(hitPoint.x, ground, hitPoint.z);
                     if (t.Kind == FireManager.ArrowTrailKindDousing) impact = new List<Vector3> { landing };
-                    else if (t.Taken < MaxPointsPerArrow) t.Points.Add(landing);
+                    else if (t.Taken < MaxPointsPerArrow && ClearOfShooter(t, landing)) t.Points.Add(landing);
                 }
             }
             Flush(t);
@@ -269,6 +274,12 @@ namespace FireFront.Patches
                 else ValheimBridge.SendArrowTrailToServer(FireManager.ArrowTrailKindDousingImpact, t.Igniter, impact);
             }
             Trails.Remove(p);
+        }
+
+        private static bool ClearOfShooter(Trail t, Vector3 at)
+        {
+            float dx = at.x - t.From.x, dz = at.z - t.From.z;
+            return dx * dx + dz * dz >= EmberClearOfShooter * EmberClearOfShooter;
         }
 
         private static void PruneDead()
@@ -521,6 +532,7 @@ namespace FireFront.Patches
             float r = HalfWidth * 1.6f;
             float quad = Mathf.Max(1.5f, r * 0.7f);
             Vector3 at = new Vector3(pos.x, ground, pos.z);
+            RetardantSound.SplashAt(at);
             RetardantStains.Enqueue(at, 0.6f, lifetime, quad);
             RetardantStains.Enqueue(at, 0.6f, lifetime, quad);
             for (int i = 0; i < 8; i++)
@@ -671,8 +683,14 @@ namespace FireFront.Patches
     /// </summary>
     public static class RetardantSound
     {
-        private static readonly string[] RoarKeys = { "waterfall", "water_loop", "river", "rain", "splash", "water" };
-        private static readonly string[] HissKeys = { "extinguish", "steam", "hiss", "sizzle", "lava", "fire_hit", "fire" };
+        // Chosen from the candidate list a 1.0.21 game logged (2026-11-23): vanilla has no waterfall or
+        // steam sound, and the keyword pick took a cinder-rain hit and a lava blob's alert. The Frost
+        // King's twirling wind, pitched down, is the rush of a drop; the lava bomb's failed fizzle is
+        // fire dying; the water landing is the splash. Keywords stay as the fallback if one is renamed.
+        private static readonly string[] RoarKeys = { "sfx_frozenking_frozentwirl_wind", "waterfall", "water_loop", "river", "wind" };
+        private static readonly string[] HissKeys = { "sfx_bomblava_fail", "extinguish", "steam", "hiss", "sizzle", "fail" };
+        private static readonly string[] SplashKeys = { "sfx_land_water", "splash", "water" };
+        private static AudioClip _splashClip;
         private static bool _searched;
         private static AudioClip _roarClip, _hissClip;
         private static UnityEngine.Audio.AudioMixerGroup _mixer;
@@ -707,9 +725,10 @@ namespace FireFront.Patches
 
                 _roarClip = Pick(found, RoarKeys, out AudioSource roarSrc);
                 _hissClip = Pick(found, HissKeys, out AudioSource hissSrc);
+                _splashClip = Pick(found, SplashKeys, out _);
                 _mixer = roarSrc?.outputAudioMixerGroup ?? hissSrc?.outputAudioMixerGroup;
                 FireLogger.Info($"[ARROWS] dousing sound: pour '{(_roarClip != null ? _roarClip.name : "none")}', " +
-                                $"hiss '{(_hissClip != null ? _hissClip.name : "none")}', mixer '{(_mixer != null ? _mixer.name : "none")}'.");
+                                $"hiss '{(_hissClip != null ? _hissClip.name : "none")}', splash '{(_splashClip != null ? _splashClip.name : "none")}', mixer '{(_mixer != null ? _mixer.name : "none")}'.");
             }
             catch (System.Exception ex) { FireLogger.Warn($"[ARROWS] sound search threw: {ex.Message}; the drop is silent."); }
         }
@@ -747,6 +766,18 @@ namespace FireFront.Patches
             a.loop = true;
             a.Play();
             return a;
+        }
+
+        /// <summary>The load hitting the ground where the arrow lands.</summary>
+        public static void SplashAt(Vector3 at)
+        {
+            Search();
+            if (_splashClip == null) return;
+            var go = new GameObject("FireFront_Splash");
+            go.transform.position = at;
+            AudioSource a = MakeSource(go, _splashClip, 1f, 0.7f, 70f);
+            a.Play();
+            Object.Destroy(go, _splashClip.length / 0.7f + 0.2f);
         }
 
         /// <summary>A hiss where fire dies under the drop.</summary>
