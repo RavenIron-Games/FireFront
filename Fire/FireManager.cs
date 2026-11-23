@@ -2214,7 +2214,36 @@ namespace FireFront.Fire
         private const float DousingImpactScale = 1.6f;
         public const int ArrowTrailMaxPoints = 32;          // per report; the patch flushes at 16
         private const int ArrowTrailMaxPerPeerPerSecond = 10;
-        private const int FirebreakMaxCells = 2500;         // controlled-burn cells alight at once, server-wide
+        private const int FirebreakMaxCells = 800;          // controlled-burn cells alight at once, server-wide
+        private const float EmberFlameRadius = 0.6f;        // the burning line: one or two 1 m cells across
+
+        // A spent strip holds for the firebreak time plus the line's own burn, so it outlasts the flames.
+        private static float FirebreakHoldSeconds() =>
+            Mathf.Clamp(FireConfig.EmberArrowFirebreakSeconds.Value, 10f, 1800f) + FireConfig.GroundBurnDurationSeconds.Value;
+
+        /// <summary>Marks unburnt grass within radius as spent (burnt out) until now + seconds, so no fire
+        /// crosses it; cells burning there are left to burn. Returns the count.</summary>
+        private int SpendGroundNear(Vector3 point, float radius, float seconds)
+        {
+            float size = FireConfig.GroundCellSize.Value;
+            int range = Mathf.CeilToInt(radius / size);
+            float radiusSqr = radius * radius;
+            GroundCellKey originKey = KeyOf(point);
+            float until = Time.time + seconds;
+            int n = 0;
+            for (int dx = -range; dx <= range; dx++)
+            {
+                for (int dz = -range; dz <= range; dz++)
+                {
+                    var key = new GroundCellKey(originKey.X + dx, originKey.Z + dz);
+                    if ((CellCenter(key, point.y) - point).sqrMagnitude > radiusSqr) continue;
+                    if (_groundBurning.ContainsKey(key)) continue;
+                    if (!_groundExhausted.TryGetValue(key, out float held) || held < until) _groundExhausted[key] = until;
+                    n++;
+                }
+            }
+            return n;
+        }
         private readonly Dictionary<long, (float start, int count)> _arrowTrailPeerWindow = new Dictionary<long, (float, int)>();
         private readonly List<Vector3> _arrowTrailScratch = new List<Vector3>();
         private float _arrowTrailNextPrune;
@@ -2303,7 +2332,15 @@ namespace FireFront.Fire
                 for (int i = 0; i < points.Count && budget > 0; i++)
                 {
                     if (points[i].y > InteriorHeight) continue;
-                    done += LightFirebreakNear(points[i], Mathf.Clamp(FireConfig.EmberArrowFirebreakRadius.Value, 0.5f, 5f), igniterPlayerId, ref budget);
+                {
+                    // A line of real flame down the middle, and the rest of the width spent at once.
+                    // 1.0.6 test: lighting the full 5 m width put ~500 burning cells on a shot, past
+                    // what a game draws (GroundVfxMaxConcurrent 200, shared with the wildfire), so most
+                    // of the strip burned and hurt unseen. The break is as wide; only the line burns.
+                    float width = Mathf.Clamp(FireConfig.EmberArrowFirebreakRadius.Value, 0.5f, 5f);
+                    done += LightFirebreakNear(points[i], EmberFlameRadius, igniterPlayerId, ref budget);
+                    SpendGroundNear(points[i], width, FirebreakHoldSeconds());
+                }
                 }
                 FireLogger.Debug($"[ARROW-TRAIL] ember trail of {points.Count} point(s): {done} firebreak cell(s) lit (igniter {igniterPlayerId}).");
             }

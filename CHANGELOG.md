@@ -31,8 +31,8 @@
   whole flight, not only where they land, and both carry a wood arrow's damage with no fire or
   frost.
   - **Ember arrow** (8 Wood, 4 Coal, 2 Feathers): shot over grass, it drops embers under its whole flight, from 5 m in front of the shooter to where it
-    lands. They light a 5 m wide strip
-    (`EmberArrowFirebreakRadius`, 2.5 m either side) that burns out without
+    lands. A line of flame burns down the middle and the strip either side, 5 m wide in all
+    (`EmberArrowFirebreakRadius`, 2.5 m either side), is burnt out at once; the line burns out without
     spreading and without lighting the trees or buildings beside it, a controlled burn. The burnt
     strip then holds as a firebreak for 3 minutes (`EmberArrowFirebreakSeconds`): a wildfire
     that reaches it stops there.
