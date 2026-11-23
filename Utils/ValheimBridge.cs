@@ -211,6 +211,7 @@ namespace FireFront.Utils
             public ZDOID Id;
             public Vector3 Position;
             public int PrefabHash;   // 0.21.6: lets a caller match a stored prefab name without a second lookup
+            public bool IsTreeOrLog; // 1.0.6: set by CollectBurnableZdosNear only; false for a piece (built or world-generated)
         }
 
         // 1.0.7 retyped this whole call: the sector is a Vector2s now, and the two ring
@@ -366,7 +367,7 @@ namespace FireFront.Utils
 
                 Vector3 pos = zdo.GetPosition();
                 if ((pos - center).sqrMagnitude > radiusSqr) continue;
-                into.Add(new ZdoBurnable { Id = zdo.m_uid, Position = pos, PrefabHash = zdo.GetPrefab() });
+                into.Add(new ZdoBurnable { Id = zdo.m_uid, Position = pos, PrefabHash = zdo.GetPrefab(), IsTreeOrLog = isTreeOrLog });
             }
 
             return true;

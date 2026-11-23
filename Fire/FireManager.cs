@@ -2123,7 +2123,7 @@ namespace FireFront.Fire
 
         /// <summary>
         /// Server only: <paramref name="creature"/> is on fire at <paramref name="position"/>. Lights
-        /// every tree, log and burnable piece within BurningCreatureTreeRadius of the path it took
+        /// every tree and log (never a piece, since 1.0.6) within BurningCreatureTreeRadius of the path it took
         /// since its last report, and the grass along that path, booked to
         /// <paramref name="igniterPlayerId"/> (0 = nobody).
         ///
@@ -2203,6 +2203,11 @@ namespace FireFront.Fire
             for (int i = 0; i < _creatureZdoScratch.Count; i++)
             {
                 ValheimBridge.ZdoBurnable candidate = _creatureZdoScratch[i];
+                // 1.0.6: trees and logs only. A burning creature never lights a piece, built or
+                // world-generated: Fulings live among their huts and catch from each other, so one
+                // burning Fuling took the whole village, often before any player arrived. Pieces
+                // still catch the ordinary way, from fire that spreads to them.
+                if (!candidate.IsTreeOrLog) continue;
                 Vector3 c = candidate.Position;
                 if (FireMath.SqrDistanceToSegment(c.x, c.y, c.z, from.x, from.y, from.z, position.x, position.y, position.z) > objectRadiusSqr) continue;
                 // The ZDO-level refusals first, so nothing is built and claimed only to be refused.

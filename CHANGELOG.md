@@ -7,6 +7,13 @@
   server config). A config file that still holds the old default `true` moves to `false` on
   first boot (config layout version 4); a server that wants builds to burn sets it to `true`
   again after that boot. Ruins and other world structures are not player builds and still burn.
+- **A burning creature no longer lights buildings, so Fuling villages stop burning down on their
+  own.** Since 1.0.5 a creature on fire lit any tree, log or burnable piece within 4 m of its
+  path. Fulings live among their huts and catch fire from each other, so one burning Fuling took
+  the whole village, often before any player arrived. A burning creature now lights trees, logs
+  and grass only, never a piece, whether a player built it or it came with the world. A building
+  can still catch the ordinary way, from fire that spreads to it, and burning animals still set
+  forests alight as before. Needs only the server, or the player hosting, to run 1.0.6.
 
 ## 1.0.5 — 2026-11-21
 

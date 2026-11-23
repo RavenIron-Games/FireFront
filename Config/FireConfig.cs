@@ -434,9 +434,10 @@ namespace FireFront.Config
                 "Fire", "BurningCreaturesSpreadFire", true,
                 "A creature on fire (a bear hit with a torch, a skeleton shot with a fire arrow, a " +
                 "boar that ran through a blaze) lights what it passes while it burns: the grass along " +
-                "its path (within BurningCreatureFireRadius) and any tree, log or burnable piece within " +
+                "its path (within BurningCreatureFireRadius) and any tree or log within " +
                 "BurningCreatureTreeRadius of it, " +
-                "for up to BurningCreatureCarrySeconds per burn. Players and tames never carry fire. " +
+                "for up to BurningCreatureCarrySeconds per burn. It never lights a building, player-built or " +
+                "world-generated (a Fuling village). Players and tames never carry fire. " +
                 "The fire is booked to the player whose fire last hit the creature, if any. Every normal rule " +
                 "still applies (Ashlands, water, dungeons, BurnPlayerBuildings, BurnTreesAndLogs). " +
                 "Read by the server; set it there.");
@@ -444,8 +445,8 @@ namespace FireFront.Config
             BurningCreatureFireRadius = config.Bind(
                 "Fire", "BurningCreatureFireRadius", 2f,
                 new ConfigDescription(
-                    "Meters either side of a burning creature's path in which grass catches. Trees, logs " +
-                    "and pieces use BurningCreatureTreeRadius. Read by the server.",
+                    "Meters either side of a burning creature's path in which grass catches. Trees and logs " +
+                    "use BurningCreatureTreeRadius. Read by the server.",
                     new AcceptableValueRange<float>(0.5f, 4f)));
 
             BurningCreatureCarrySeconds = config.Bind(
@@ -460,7 +461,7 @@ namespace FireFront.Config
             BurningCreatureTreeRadius = config.Bind(
                 "Fire", "BurningCreatureTreeRadius", 4f,
                 new ConfigDescription(
-                    "Meters from a burning creature's path within which trees, logs and burnable pieces " +
+                    "Meters from a burning creature's path within which trees and logs (never buildings) " +
                     "catch. Wider than the grass radius because a tree is measured at its trunk and its " +
                     "branches spread a few metres out: a creature running under a canopy sets it alight. " +
                     "Read by the server.",
