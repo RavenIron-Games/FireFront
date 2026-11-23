@@ -2159,6 +2159,9 @@ namespace FireFront.Fire
         /// IgniteGroundNear and TryIgniteGroundCell. Called by the RPC handler above, and directly by
         /// the patch on a server or listen host.
         /// </summary>
+        // True only inside IgniteGroundFromProjectile: TryIgniteGroundCell then skips the per-fire cap and leash.
+        private bool _directGroundIgnite;
+
         public void IgniteGroundFromProjectile(Vector3 position, long igniterPlayerId)
         {
             if (!ValheimBridge.IsServer()) return;
@@ -2170,8 +2173,9 @@ namespace FireFront.Fire
             int before = _groundBurning.Count;
             long saved = _spreadIgniter;
             _spreadIgniter = igniterPlayerId;
+            _directGroundIgnite = true;
             try { IgniteGroundNear(position, radius); }
-            finally { _spreadIgniter = saved; }
+            finally { _spreadIgniter = saved; _directGroundIgnite = false; }
             FireLogger.Debug($"[GROUND-IGNITE] fire projectile landed at ({position.x:F1},{position.y:F1},{position.z:F1}): " +
                              $"{_groundBurning.Count - before} ground cell(s) lit within {radius:F1} m (igniter {igniterPlayerId}).");
         }
@@ -2683,14 +2687,17 @@ namespace FireFront.Fire
             // second fire could never spread.
             int cellEventId = EventForPosition(approxCenter, 0L);
             FireEvent cellEvent = EventById(cellEventId);
-            if (FireConfig.EffectiveGroundMaxSpreadDistanceEnabled && cellEvent != null)
+            if (!_directGroundIgnite && FireConfig.EffectiveGroundMaxSpreadDistanceEnabled && cellEvent != null)
             {
                 float maxDist = FireConfig.GroundMaxSpreadDistance.Value;
                 if ((approxCenter - cellEvent.Origin).sqrMagnitude > maxDist * maxDist) return;
             }
 
             int effectiveGroundMax = Mathf.Max(1, Mathf.RoundToInt(FireConfig.EffectiveGroundMaxConcurrent * GetRampFraction(cellEventId)));
-            if (GroundCountForEvent(cellEventId) >= effectiveGroundMax) return; // silent drop, natural retry next cycle
+            // A direct ignition (a fire arrow landing) is not spread: it lights its handful of cells even
+            // when the fire it lands in or beside is at its cap. 1.0.6 test: an arrow into grass beside a
+            // fire at 50/50 lit nothing, and from the player's side fire arrows simply did not work.
+            if (!_directGroundIgnite && GroundCountForEvent(cellEventId) >= effectiveGroundMax) return; // silent drop, natural retry next cycle
 
             if (_fireStartTime < 0f) _fireStartTime = Time.time;
             if (_fireOrigin == null) _fireOrigin = approxCenter;
