@@ -506,12 +506,13 @@ namespace FireFront.Config
                     new AcceptableValueRange<float>(0.5f, 5f)));
 
             DousingArrowRadius = config.Bind(
-                "Arrows", "DousingArrowRadius", 5f,
+                "Arrows", "DousingArrowRadius", 12f,
                 new ConfigDescription(
-                    "Dousing arrow, the air tanker: meters either side of its flight line in which every " +
+                    "Dousing arrow, the large air tanker: meters either side of its flight line in which every " +
                     "fire, ground or object, goes out and the ground, trees and buildings are soaked. Where " +
-                    "the arrow lands the splash reaches 1.6 times as far. Read by the server.",
-                    new AcceptableValueRange<float>(0.5f, 8f)));
+                    "the arrow lands the splash reaches 1.6 times as far. Burning trees are reached 3 m " +
+                    "further, for their canopies. Read by the server.",
+                    new AcceptableValueRange<float>(0.5f, 20f)));
 
             DousingArrowSoakSeconds = config.Bind(
                 "Arrows", "DousingArrowSoakSeconds", 120f,

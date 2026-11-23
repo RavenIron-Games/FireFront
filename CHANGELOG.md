@@ -36,13 +36,14 @@
     spreading and without lighting the trees or buildings beside it, a controlled burn. The burnt
     strip then holds as a firebreak for 3 minutes (`EmberArrowFirebreakSeconds`): a wildfire
     that reaches it stops there.
-  - **Dousing arrow** (8 Wood, 4 Resin, 2 Leather scraps, 2 Feathers): the air tanker. From the
+  - **Dousing arrow** (8 Wood, 4 Resin, 2 Leather scraps, 2 Feathers): the large air tanker. From the
     moment it is loosed a heavy dark-red retardant column pours from it and breaks into a wide
-    billowing curtain. Every fire within 5 m of its flight line goes out (`DousingArrowRadius`),
+    billowing curtain. Every fire within 12 m of its flight line goes out (`DousingArrowRadius`), a 24 m swath,
+    burning trees 3 m further for their canopies,
     from up to 30 m up, and the ground under it stays soaked for 2 minutes
     (`DousingArrowSoakSeconds`), burning or not, stained red, darkest down the middle. Trees and
     buildings under it are soaked too, so fire cannot walk across the strip from tree to tree, and
-    where the arrow lands the splash reaches 1.6 times as far (8 m), so a shot straight into a
+    where the arrow lands the splash reaches 1.6 times as far (about 19 m), so a shot straight into a
     fire puts out a wide circle. The
     curtain hangs in the air and drifts with the wind before it settles, the drop roars as it
     pours, and where it lands on fire, white steam boils up with a hiss.

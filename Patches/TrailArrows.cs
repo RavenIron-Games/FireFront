@@ -166,7 +166,7 @@ namespace FireFront.Patches
         // embers only at the shooter's feet and burned him). Starts EmberClearOfShooter out.
         private const float EmberMaxHeight = 80f;
         private const float EmberClearOfShooter = 5f;
-        private const float DousingSpacing = 2f;
+        private const float DousingSpacing = 4f;    // the drop is 24 m wide: a report every 4 m is plenty
         private const float DousingMaxHeight = 30f;  // the air tanker drops from height
         private const int FlushAt = 16;
         private const int MaxPointsPerArrow = 120;
@@ -317,13 +317,16 @@ namespace FireFront.Patches
         private Vector3 _lastStain;
         private bool _haveStain;
         private int _stains;
-        private const float StainSpacing = 2.5f;    // rows along the flight
+        private const float StainSpacing = 4f;      // rows along the flight
         private const float StainMaxHeight = 30f;   // the same height the drop works from
         private const float StainDelay = 1.8f;      // about when the curtain reaches the ground
         private const int MaxStainsPerArrow = 240;
 
         /// <summary>Half the drop's width, metres: the server's soak radius as this game knows it.</summary>
-        private static float HalfWidth => Mathf.Clamp(FireConfig.DousingArrowRadius.Value, 0.5f, 8f);
+        private static float HalfWidth => Mathf.Clamp(FireConfig.DousingArrowRadius.Value, 0.5f, 20f);
+
+        // The curtain and streaks were tuned at 5 m either side; a wider drop needs more of them.
+        private static float Volume => Mathf.Clamp(HalfWidth / 5f, 1f, 3f);
 
         public static void Attach(Projectile p)
         {
@@ -341,18 +344,18 @@ namespace FireFront.Patches
             _systems = new[]
             {
                 // The load leaving the tank: a heavy dark-red column that drops straight down fast.
-                MakeSystem("Column", mat, rate: 170f, life: (1.0f, 1.6f), size: (1.0f, 1.7f), gravity: 1.1f,
+                MakeSystem("Column", mat, rate: 170f * Volume, life: (1.0f, 1.6f), size: (1.0f * Volume, 1.7f * Volume), gravity: 1.1f,
                            c0: new Color(0.62f, 0.10f, 0.05f, 0.95f), c1: new Color(0.75f, 0.16f, 0.07f, 0.90f),
-                           width: 0.6f, height: 0.6f, stretch: false, max: 420, growth: 2.8f, noise: 0.25f, drift: 0.4f),
+                           width: 0.6f * Volume, height: 0.6f * Volume, stretch: false, max: (int)(420 * Volume), growth: 2.8f, noise: 0.25f, drift: 0.4f),
                 // The curtain it breaks into: wide across the flight, billowing, sinking slowly.
                 // Thicker and taller than before, and it hangs: slow to sink, drifting with the wind.
-                MakeSystem("Curtain", mat, rate: 160f, life: (5.0f, 8.5f), size: (2.0f, 3.6f), gravity: 0.12f,
+                MakeSystem("Curtain", mat, rate: 160f * Volume, life: (5.0f, 8.5f), size: (2.0f * Mathf.Sqrt(Volume), 3.6f * Mathf.Sqrt(Volume)), gravity: 0.12f,
                            c0: new Color(0.80f, 0.20f, 0.09f, 0.82f), c1: new Color(0.94f, 0.34f, 0.15f, 0.68f),
-                           width: w * 1.5f, height: 2.5f, stretch: false, max: 1100, growth: 4.2f, noise: 1.0f, drift: 1f),
+                           width: w * 1.5f, height: 2.5f * Volume, stretch: false, max: (int)(1100 * Volume), growth: 4.2f, noise: 1.0f, drift: 1f),
                 // Heavier streaks falling out of the curtain to the ground, the full width.
-                MakeSystem("Streaks", mat, rate: 230f, life: (1.5f, 2.8f), size: (0.08f, 0.22f), gravity: 1.25f,
+                MakeSystem("Streaks", mat, rate: 230f * Volume, life: (1.5f, 2.8f), size: (0.08f, 0.22f), gravity: 1.25f,
                            c0: new Color(0.70f, 0.14f, 0.06f, 0.85f), c1: new Color(0.88f, 0.28f, 0.12f, 0.65f),
-                           width: w * 1.6f, height: 1.5f, stretch: true, max: 700, growth: 1f, noise: 0f, drift: 0.3f),
+                           width: w * 1.6f, height: 1.5f, stretch: true, max: (int)(700 * Volume), growth: 1f, noise: 0f, drift: 0.3f),
             };
             _drift = new[] { 0.4f, 1f, 0.3f };
             ApplyWind();

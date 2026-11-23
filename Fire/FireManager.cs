@@ -2212,6 +2212,7 @@ namespace FireFront.Fire
         public const int ArrowTrailKindDousing = 1;
         public const int ArrowTrailKindDousingImpact = 2; // where a Dousing arrow lands: a wider splash
         private const float DousingImpactScale = 1.6f;
+        private const float DousingCanopyReach = 3f;
         public const int ArrowTrailMaxPoints = 32;          // per report; the patch flushes at 16
         private const int ArrowTrailMaxPerPeerPerSecond = 10;
         private const int FirebreakMaxCells = 800;          // controlled-burn cells alight at once, server-wide
@@ -2346,15 +2347,19 @@ namespace FireFront.Fire
             }
             else if (kind == ArrowTrailKindDousing || kind == ArrowTrailKindDousingImpact)
             {
-                float radius = Mathf.Clamp(FireConfig.DousingArrowRadius.Value, 0.5f, 8f);
+                float radius = Mathf.Clamp(FireConfig.DousingArrowRadius.Value, 0.5f, 20f);
                 if (kind == ArrowTrailKindDousingImpact) radius *= DousingImpactScale;
+                // A tree is measured at its trunk and burns in its canopy, metres out: a drop that
+                // covers the canopy must reach the trunk. 1.0.6 test: trees under the drop kept burning.
+                float objectRadius = radius + DousingCanopyReach;
                 float soak = Mathf.Clamp(FireConfig.DousingArrowSoakSeconds.Value, 10f, 1800f);
                 int objects = 0;
                 for (int i = 0; i < points.Count; i++)
                 {
-                    ExtinguishAt(points[i], radius);
+                    ExtinguishObjectsNear(points[i], objectRadius);
+                    ExtinguishGroundNear(points[i], radius);
                     done += SoakGroundNear(points[i], radius, soak);
-                    objects += SoakObjectsNear(points[i], radius, soak);
+                    objects += SoakObjectsNear(points[i], objectRadius, soak);
                 }
                 FireLogger.Debug($"[ARROW-TRAIL] dousing {(kind == ArrowTrailKindDousingImpact ? "impact" : "trail")} of {points.Count} point(s): " +
                                  $"{done} ground cell(s) and {objects} object(s) soaked for {soak:F0} s within {radius:F1} m.");
