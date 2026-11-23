@@ -34,10 +34,10 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 | | If… | Then… |
 |---|---|---|
 | 🤝 | you play on a **server** | install FireFront on the server **and** on every player, the same version. The server runs the fire; your game only draws it. Update them together. |
-| 🔥 | you care about **your base** | the defaults are tuned aggressive: a torched wall can take the whole build. Keep trees and grass back from walls, or turn off `BurnPlayerBuildings` (`fireset burnbuildings false`) and fire never lights anything a player built. |
+| 🔥 | you care about **your base** | by default fire never lights anything a player built (`BurnPlayerBuildings` is off since 1.0.6). Turn it on (`fireset burnbuildings true`) and a torched wall can take the whole build, so keep trees and grass back from walls. |
 | 🛤️ | you run a **dedicated server** | dirt paths and cultivated ground stop ground fire only near the world's centre, in the few zones the server keeps loaded. Everywhere else only water stops it. That is a known gap, not a setting. |
 | 🐺 | you expect **creatures to burn** | they do in single player and in a hosted game. A dedicated server has no physical world where creatures stand, so there only players burn. |
-| 🖥️ | big fires **cost you frames** | turn on `fireset lowspec true` first. Fire still spreads and still burns your base down; there is just less happening at once. |
+| 🖥️ | big fires **cost you frames** | turn on `fireset lowspec true` first. Fire still spreads as before; there is just less happening at once. |
 | 🌋 | you are in the **Ashlands** | FireFront starts no fire there by default, because the Ashlands' own fire touches wood all the time. The Ashlands' own fire works as it always did. |
 | 📏 | you change **`GroundCellSize`** | change it only while no ground fire burns, and not across a restart that saved ground fire. Burning cells move to scaled positions on the new grid. |
 
@@ -180,9 +180,9 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 
 | You | It |
 |---|---|
-| **`fireset lowspec true`** | fewer things burning at once, fewer visuals, no scorch marks, a slower spread tick. Fire still spreads and still burns your base down; there is less happening at once |
+| **`fireset lowspec true`** | fewer things burning at once, fewer visuals, no scorch marks, a slower spread tick. Fire still spreads as before; there is less happening at once |
 | **`fireset burntheworld true`** | fire catches instantly, paths and even water stop stopping it, rain does not put it out, burnt ground relights, fires start at full strength, nothing grows back, and the caps go to maximum per fire, so several blazes rage at once |
-| **`fireset burnbuildings false`** | anti-grief: fire never ignites anything a player placed, by spread, by fire arrows, by anything, while ruins and world structures still burn |
+| **`fireset burnbuildings true`** | lets fire burn what players build. It is off by default since 1.0.6: fire then never ignites anything a player placed, by spread, by fire arrows, by anything, while ruins and world structures still burn |
 
 <details>
 <summary>📖 <b>Read the saga</b> — what the presets touch</summary>

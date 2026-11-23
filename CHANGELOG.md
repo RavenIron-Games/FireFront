@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.6 — unreleased
+
+- **`BurnPlayerBuildings` is off by default: fire no longer burns what players build** unless
+  an admin turns it on (`fireset burnbuildings true`, or `BurnPlayerBuildings = true` in the
+  server config). A config file that still holds the old default `true` moves to `false` on
+  first boot (config layout version 4); a server that wants builds to burn sets it to `true`
+  again after that boot. Ruins and other world structures are not player builds and still burn.
+
 ## 1.0.5 — 2026-11-21
 
 - **A creature on fire spreads fire as it runs.** Set a bear alight with a torch, shoot a

@@ -405,10 +405,11 @@ namespace FireFront.Config
                     new AcceptableValueRange<float>(0f, 100f)));
 
             BurnPlayerBuildings = config.Bind(
-                "Fire", "BurnPlayerBuildings", true,
+                "Fire", "BurnPlayerBuildings", false,
                 "Player-built structures (anything carrying a placement creator stamp — walls, " +
-                "floors, furniture, chests you placed) can catch fire. Set false for an " +
-                "anti-grief server: fire then never ignites player builds by ANY path — spread, " +
+                "floors, furniture, chests you placed) can catch fire. Off by default since 1.0.6 " +
+                "(a config still holding the old default true moves to false once): fire never " +
+                "ignites player builds by ANY path — spread, " +
                 "fire arrows, console commands — while world-generated structures (abandoned " +
                 "villages, ruins, dungeon furniture) still burn. Wildfire still crawls past a " +
                 "protected base and still hurts anyone standing in it; only the buildings are " +
