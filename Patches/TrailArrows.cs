@@ -247,14 +247,27 @@ namespace FireFront.Patches
         public static void OnHit(Projectile p, Vector3 hitPoint)
         {
             if (!Trails.TryGetValue(p, out Trail t)) return;
-            // The landing spot counts too: an arrow dropped onto the fire line marks its end.
-            if (t.Taken < MaxPointsPerArrow && hitPoint.y < 3000f)
+            // The landing spot counts too: an Ember arrow's marks the end of its line, and a Dousing
+            // arrow's is a splash of its own, 1.6 times as wide, so a shot straight into a fire puts
+            // out a wide circle around where it hits.
+            List<Vector3> impact = null;
+            if (hitPoint.y < 3000f)
             {
                 float ground = ValheimBridge.GetGroundHeight(hitPoint, out bool sampled);
                 float max = t.Kind == FireManager.ArrowTrailKindEmber ? EmberMaxHeight : DousingMaxHeight;
-                if (sampled && hitPoint.y - ground <= max) t.Points.Add(new Vector3(hitPoint.x, ground, hitPoint.z));
+                if (sampled && hitPoint.y - ground <= max)
+                {
+                    var landing = new Vector3(hitPoint.x, ground, hitPoint.z);
+                    if (t.Kind == FireManager.ArrowTrailKindDousing) impact = new List<Vector3> { landing };
+                    else if (t.Taken < MaxPointsPerArrow) t.Points.Add(landing);
+                }
             }
             Flush(t);
+            if (impact != null)
+            {
+                if (ValheimBridge.IsServer()) FireManager.Instance?.ApplyArrowTrail(FireManager.ArrowTrailKindDousingImpact, impact, t.Igniter);
+                else ValheimBridge.SendArrowTrailToServer(FireManager.ArrowTrailKindDousingImpact, t.Igniter, impact);
+            }
             Trails.Remove(p);
         }
 
@@ -498,6 +511,25 @@ namespace FireFront.Patches
         private const float SteamSpacing = 2.5f;
         private const float SteamDelay = 1.4f;
 
+        /// <summary>Where it lands: a round stain 1.6 times the drop's width, matching the server's splash.</summary>
+        private void Splash(Vector3 pos)
+        {
+            if (pos.y > 3000f) return;
+            float ground = ValheimBridge.GetGroundHeight(pos, out bool sampled);
+            if (!sampled || pos.y - ground > StainMaxHeight) return;
+            float lifetime = Mathf.Clamp(FireConfig.DousingArrowSoakSeconds.Value, 10f, 1800f);
+            float r = HalfWidth * 1.6f;
+            float quad = Mathf.Max(1.5f, r * 0.7f);
+            Vector3 at = new Vector3(pos.x, ground, pos.z);
+            RetardantStains.Enqueue(at, 0.6f, lifetime, quad);
+            RetardantStains.Enqueue(at, 0.6f, lifetime, quad);
+            for (int i = 0; i < 8; i++)
+            {
+                float a = i * Mathf.PI / 4f;
+                RetardantStains.Enqueue(at + new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a)) * (r * 0.6f), 0.6f, lifetime, quad);
+            }
+        }
+
         private void Update()
         {
             if (_stopped || _systems == null) return;
@@ -512,6 +544,7 @@ namespace FireFront.Patches
                 _stopped = true;
                 foreach (ParticleSystem ps in _systems) if (ps != null) ps.Stop(false, ParticleSystemStopBehavior.StopEmitting);
                 if (_roar != null) _roar.Stop();
+                Splash(pos);
             }
         }
     }

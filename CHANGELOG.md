@@ -31,7 +31,8 @@
   whole flight, not only where they land, and both carry a wood arrow's damage with no fire or
   frost.
   - **Ember arrow** (8 Wood, 4 Coal, 2 Feathers): shot low over grass (within 6 m of the
-    ground), it drops embers under its flight. They light a narrow strip that burns out without
+    ground), it drops embers under its flight. They light a 5 m wide strip
+    (`EmberArrowFirebreakRadius`, 2.5 m either side) that burns out without
     spreading and without lighting the trees or buildings beside it, a controlled burn. The burnt
     strip then holds as a firebreak for 3 minutes (`EmberArrowFirebreakSeconds`): a wildfire
     that reaches it stops there.
@@ -39,7 +40,10 @@
     moment it is loosed a heavy dark-red retardant column pours from it and breaks into a wide
     billowing curtain. Every fire within 5 m of its flight line goes out (`DousingArrowRadius`),
     from up to 30 m up, and the ground under it stays soaked for 2 minutes
-    (`DousingArrowSoakSeconds`), burning or not, stained red, darkest down the middle. The
+    (`DousingArrowSoakSeconds`), burning or not, stained red, darkest down the middle. Trees and
+    buildings under it are soaked too, so fire cannot walk across the strip from tree to tree, and
+    where the arrow lands the splash reaches 1.6 times as far (8 m), so a shot straight into a
+    fire puts out a wide circle. The
     curtain hangs in the air and drifts with the wind before it settles, the drop roars as it
     pours, and where it lands on fire, white steam boils up with a hiss.
     Fire it over the front, or along a line the fire must not cross.

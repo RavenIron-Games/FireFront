@@ -2210,10 +2210,11 @@ namespace FireFront.Fire
 
         public const int ArrowTrailKindEmber = 0;
         public const int ArrowTrailKindDousing = 1;
+        public const int ArrowTrailKindDousingImpact = 2; // where a Dousing arrow lands: a wider splash
+        private const float DousingImpactScale = 1.6f;
         public const int ArrowTrailMaxPoints = 32;          // per report; the patch flushes at 16
         private const int ArrowTrailMaxPerPeerPerSecond = 10;
-        private const int FirebreakMaxCells = 800;          // controlled-burn cells alight at once, server-wide
-        private const float EmberRadius = 0.75f;            // around each ember: one to four 1 m cells
+        private const int FirebreakMaxCells = 2500;         // controlled-burn cells alight at once, server-wide
         private readonly Dictionary<long, (float start, int count)> _arrowTrailPeerWindow = new Dictionary<long, (float, int)>();
         private readonly List<Vector3> _arrowTrailScratch = new List<Vector3>();
         private float _arrowTrailNextPrune;
@@ -2247,7 +2248,7 @@ namespace FireFront.Fire
                 AuthLog.Refused(sender, "arrow-trail", "refused an arrow-trail report: the package could not be read");
                 return;
             }
-            if (kind != ArrowTrailKindEmber && kind != ArrowTrailKindDousing) return;
+            if (kind != ArrowTrailKindEmber && kind != ArrowTrailKindDousing && kind != ArrowTrailKindDousingImpact) return;
 
             float now = Time.time;
             if (now >= _arrowTrailNextPrune)
@@ -2302,20 +2303,24 @@ namespace FireFront.Fire
                 for (int i = 0; i < points.Count && budget > 0; i++)
                 {
                     if (points[i].y > InteriorHeight) continue;
-                    done += LightFirebreakNear(points[i], EmberRadius, igniterPlayerId, ref budget);
+                    done += LightFirebreakNear(points[i], Mathf.Clamp(FireConfig.EmberArrowFirebreakRadius.Value, 0.5f, 5f), igniterPlayerId, ref budget);
                 }
                 FireLogger.Debug($"[ARROW-TRAIL] ember trail of {points.Count} point(s): {done} firebreak cell(s) lit (igniter {igniterPlayerId}).");
             }
-            else if (kind == ArrowTrailKindDousing)
+            else if (kind == ArrowTrailKindDousing || kind == ArrowTrailKindDousingImpact)
             {
                 float radius = Mathf.Clamp(FireConfig.DousingArrowRadius.Value, 0.5f, 8f);
+                if (kind == ArrowTrailKindDousingImpact) radius *= DousingImpactScale;
                 float soak = Mathf.Clamp(FireConfig.DousingArrowSoakSeconds.Value, 10f, 1800f);
+                int objects = 0;
                 for (int i = 0; i < points.Count; i++)
                 {
                     ExtinguishAt(points[i], radius);
                     done += SoakGroundNear(points[i], radius, soak);
+                    objects += SoakObjectsNear(points[i], radius, soak);
                 }
-                FireLogger.Debug($"[ARROW-TRAIL] dousing trail of {points.Count} point(s): {done} ground cell(s) soaked for {soak:F0} s within {radius:F1} m.");
+                FireLogger.Debug($"[ARROW-TRAIL] dousing {(kind == ArrowTrailKindDousingImpact ? "impact" : "trail")} of {points.Count} point(s): " +
+                                 $"{done} ground cell(s) and {objects} object(s) soaked for {soak:F0} s within {radius:F1} m.");
             }
         }
 
@@ -2359,6 +2364,30 @@ namespace FireFront.Fire
                 }
             }
             return lit;
+        }
+
+        private readonly List<ValheimBridge.ZdoBurnable> _soakZdoScratch = new List<ValheimBridge.ZdoBurnable>();
+
+        /// <summary>
+        /// Soaks every tree, log and burnable piece within radius until now + seconds (never shortening
+        /// a longer hold), and drops any queued to ignite. Without this only the ground was soaked, and a
+        /// burning tree beside the strip lit the next tree across it: the fire walked over the drop.
+        /// Returns the count.
+        /// </summary>
+        private int SoakObjectsNear(Vector3 point, float radius, float seconds)
+        {
+            ValheimBridge.CollectBurnableZdosNear(point, radius, true, true, _soakZdoScratch);
+            float until = Time.time + seconds;
+            int n = 0;
+            for (int i = 0; i < _soakZdoScratch.Count; i++)
+            {
+                ZDOID id = _soakZdoScratch[i].Id;
+                if (!_dousedUntil.TryGetValue(id, out float held) || held < until) _dousedUntil[id] = until;
+                _queue.Remove(id);
+                n++;
+            }
+            _soakZdoScratch.Clear();
+            return n;
         }
 
         /// <summary>Marks every ground cell within radius as soaked until now + seconds (never shortening

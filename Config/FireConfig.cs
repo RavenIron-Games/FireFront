@@ -25,6 +25,7 @@ namespace FireFront.Config
         public static ConfigEntry<bool> BurningCreaturesSpreadFire;
         public static ConfigEntry<bool> FireProjectilesLightGrass;
         public static ConfigEntry<float> EmberArrowFirebreakSeconds;
+        public static ConfigEntry<float> EmberArrowFirebreakRadius;
         public static ConfigEntry<float> DousingArrowRadius;
         public static ConfigEntry<float> DousingArrowSoakSeconds;
         public static ConfigEntry<float> FireProjectileGrassRadius;
@@ -497,11 +498,19 @@ namespace FireFront.Config
                     "for this many seconds: no fire crosses it. Read by the server.",
                     new AcceptableValueRange<float>(10f, 1800f)));
 
+            EmberArrowFirebreakRadius = config.Bind(
+                "Arrows", "EmberArrowFirebreakRadius", 2.5f,
+                new ConfigDescription(
+                    "Ember arrow: meters either side of its flight in which the controlled burn lights the " +
+                    "grass, so the firebreak is twice this wide. Read by the server.",
+                    new AcceptableValueRange<float>(0.5f, 5f)));
+
             DousingArrowRadius = config.Bind(
                 "Arrows", "DousingArrowRadius", 5f,
                 new ConfigDescription(
                     "Dousing arrow, the air tanker: meters either side of its flight line in which every " +
-                    "fire, ground or object, goes out and the ground is soaked. Read by the server.",
+                    "fire, ground or object, goes out and the ground, trees and buildings are soaked. Where " +
+                    "the arrow lands the splash reaches 1.6 times as far. Read by the server.",
                     new AcceptableValueRange<float>(0.5f, 8f)));
 
             DousingArrowSoakSeconds = config.Bind(
