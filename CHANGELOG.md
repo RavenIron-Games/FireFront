@@ -39,7 +39,9 @@
     moment it is loosed a heavy dark-red retardant column pours from it and breaks into a wide
     billowing curtain. Every fire within 5 m of its flight line goes out (`DousingArrowRadius`),
     from up to 30 m up, and the ground under it stays soaked for 2 minutes
-    (`DousingArrowSoakSeconds`), burning or not, stained red, darkest down the middle.
+    (`DousingArrowSoakSeconds`), burning or not, stained red, darkest down the middle. The
+    curtain hangs in the air and drifts with the wind before it settles, the drop roars as it
+    pours, and where it lands on fire, white steam boils up with a hiss.
     Fire it over the front, or along a line the fire must not cross.
   The shooter and the server both need 1.0.6.
 

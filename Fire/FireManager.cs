@@ -779,6 +779,32 @@ namespace FireFront.Fire
         /// ignition Y. Meaningful on the simulation authority only: clients hold visual-only
         /// mirrors and will report an empty (or partial) picture by design.
         /// </summary>
+        /// <summary>
+        /// 1.0.6: where fire is DRAWN on this game within <paramref name="radius"/> (ground plane) of a
+        /// point: its own flames and the mirrors of the server's, objects and ground alike. For visual
+        /// reactions on any peer (the Dousing arrow's steam), never for simulation.
+        /// </summary>
+        public void CollectVisibleFiresNear(Vector3 point, float radius, List<Vector3> into)
+        {
+            if (into == null) return;
+            float r2 = radius * radius;
+            AddDrawnNear(_vfx, point, r2, into);
+            AddDrawnNear(_remoteVfx, point, r2, into);
+            AddDrawnNear(_groundVfx, point, r2, into);
+            AddDrawnNear(_remoteGroundVfx, point, r2, into);
+        }
+
+        private static void AddDrawnNear<TKey>(Dictionary<TKey, GameObject> drawn, Vector3 point, float r2, List<Vector3> into)
+        {
+            foreach (GameObject go in drawn.Values)
+            {
+                if (go == null) continue;
+                Vector3 p = go.transform.position;
+                float dx = p.x - point.x, dz = p.z - point.z;
+                if (dx * dx + dz * dz <= r2) into.Add(p);
+            }
+        }
+
         public void CollectActiveFirePositions(List<Vector3> into)
         {
             if (into == null) return;

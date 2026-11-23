@@ -317,26 +317,56 @@ namespace FireFront.Patches
             _systems = new[]
             {
                 // The load leaving the tank: a heavy dark-red column that drops straight down fast.
-                MakeSystem("Column", mat, rate: 110f, life: (0.9f, 1.4f), size: (0.7f, 1.2f), gravity: 1.1f,
+                MakeSystem("Column", mat, rate: 170f, life: (1.0f, 1.6f), size: (1.0f, 1.7f), gravity: 1.1f,
                            c0: new Color(0.62f, 0.10f, 0.05f, 0.95f), c1: new Color(0.75f, 0.16f, 0.07f, 0.90f),
-                           width: 0.4f, stretch: false, max: 260, growth: 2.6f, noise: 0.25f),
+                           width: 0.6f, height: 0.6f, stretch: false, max: 420, growth: 2.8f, noise: 0.25f, drift: 0.4f),
                 // The curtain it breaks into: wide across the flight, billowing, sinking slowly.
-                MakeSystem("Curtain", mat, rate: 90f, life: (3.5f, 6.0f), size: (1.4f, 2.6f), gravity: 0.2f,
-                           c0: new Color(0.80f, 0.20f, 0.09f, 0.80f), c1: new Color(0.94f, 0.34f, 0.15f, 0.65f),
-                           width: w * 1.4f, stretch: false, max: 520, growth: 3.4f, noise: 0.85f),
+                // Thicker and taller than before, and it hangs: slow to sink, drifting with the wind.
+                MakeSystem("Curtain", mat, rate: 160f, life: (5.0f, 8.5f), size: (2.0f, 3.6f), gravity: 0.12f,
+                           c0: new Color(0.80f, 0.20f, 0.09f, 0.82f), c1: new Color(0.94f, 0.34f, 0.15f, 0.68f),
+                           width: w * 1.5f, height: 2.5f, stretch: false, max: 1100, growth: 4.2f, noise: 1.0f, drift: 1f),
                 // Heavier streaks falling out of the curtain to the ground, the full width.
-                MakeSystem("Streaks", mat, rate: 160f, life: (1.5f, 2.6f), size: (0.08f, 0.2f), gravity: 1.25f,
+                MakeSystem("Streaks", mat, rate: 230f, life: (1.5f, 2.8f), size: (0.08f, 0.22f), gravity: 1.25f,
                            c0: new Color(0.70f, 0.14f, 0.06f, 0.85f), c1: new Color(0.88f, 0.28f, 0.12f, 0.65f),
-                           width: w * 1.6f, stretch: true, max: 480, growth: 1f, noise: 0f),
+                           width: w * 1.6f, height: 1.5f, stretch: true, max: 700, growth: 1f, noise: 0f, drift: 0.3f),
             };
+            _drift = new[] { 0.4f, 1f, 0.3f };
+            ApplyWind();
+            _roar = RetardantSound.StartRoar(gameObject);
             _last = transform.position;
+        }
+
+        // How hard the wind pushes each system (column, curtain, streaks), m/s at full wind.
+        private float[] _drift;
+        private const float WindPush = 4f;
+        private float _nextWind;
+        private AudioSource _roar;
+
+        /// <summary>The drop drifts downwind: vanilla's wind direction times its live strength.</summary>
+        private void ApplyWind()
+        {
+            if (_systems == null || _drift == null) return;
+            Vector3? dir = ValheimBridge.GetWindDirection();
+            float? strength = ValheimBridge.GetWindIntensity();
+            Vector3 wind = dir.HasValue ? new Vector3(dir.Value.x, 0f, dir.Value.z).normalized * (WindPush * Mathf.Clamp01(strength ?? 0.5f)) : Vector3.zero;
+            for (int i = 0; i < _systems.Length && i < _drift.Length; i++)
+            {
+                if (_systems[i] == null) continue;
+                var vel = _systems[i].velocityOverLifetime;
+                vel.enabled = true;
+                vel.space = ParticleSystemSimulationSpace.World;
+                // x, y and z share one curve mode or Unity logs an error every frame (FireVFXController).
+                vel.x = new ParticleSystem.MinMaxCurve(wind.x * _drift[i]);
+                vel.y = new ParticleSystem.MinMaxCurve(0f);
+                vel.z = new ParticleSystem.MinMaxCurve(wind.z * _drift[i]);
+            }
         }
 
         /// <param name="width">Full width of the emitter ACROSS the flight (the arrow's local x; vanilla
         /// points a projectile along its velocity), so the curtain spreads sideways, not along the line.</param>
         private ParticleSystem MakeSystem(string name, Material mat, float rate, (float, float) life, (float, float) size,
-                                          float gravity, Color c0, Color c1, float width, bool stretch, int max,
-                                          float growth, float noise)
+                                          float gravity, Color c0, Color c1, float width, float height, bool stretch, int max,
+                                          float growth, float noise, float drift)
         {
             var go = new GameObject(name);
             go.transform.SetParent(transform, false);
@@ -361,7 +391,7 @@ namespace FireFront.Patches
 
             var shape = ps.shape;
             shape.shapeType = ParticleSystemShapeType.Box;
-            shape.scale = new Vector3(Mathf.Max(0.2f, width), 0.4f, 0.8f);
+            shape.scale = new Vector3(Mathf.Max(0.2f, width), height, 0.8f);
 
             var col = ps.colorOverLifetime;
             col.enabled = true;
@@ -440,13 +470,40 @@ namespace FireFront.Patches
             foreach (float f in StainOffsets)
                 RetardantStains.Enqueue(at + across * (f * w), StainDelay, lifetime, quad);
             _stains += StainOffsets.Length;
+
+            // Steam where it lands on fire: whatever this game draws as burning under the row, read
+            // NOW (the server puts it out within moments), shown when the retardant gets there.
+            if (_steams < MaxSteamsPerArrow && FireManager.Instance != null)
+            {
+                _fireScratch.Clear();
+                FireManager.Instance.CollectVisibleFiresNear(at, w, _fireScratch);
+                for (int i = 0; i < _fireScratch.Count && _steams < MaxSteamsPerArrow; i++)
+                {
+                    Vector3 f = _fireScratch[i];
+                    bool near = false;
+                    foreach (Vector3 done in _steamAt)
+                        if ((done - f).sqrMagnitude < SteamSpacing * SteamSpacing) { near = true; break; }
+                    if (near) continue;
+                    _steamAt.Add(f);
+                    _steams++;
+                    RetardantStains.EnqueueSteam(f, SteamDelay);
+                }
+            }
         }
+
+        private readonly List<Vector3> _fireScratch = new List<Vector3>();
+        private readonly List<Vector3> _steamAt = new List<Vector3>();
+        private int _steams;
+        private const int MaxSteamsPerArrow = 40;
+        private const float SteamSpacing = 2.5f;
+        private const float SteamDelay = 1.4f;
 
         private void Update()
         {
             if (_stopped || _systems == null) return;
             Vector3 pos = transform.position;
             LayStain(pos);
+            if (Time.time >= _nextWind) { _nextWind = Time.time + 0.5f; ApplyWind(); }
             float moved = (pos - _last).sqrMagnitude;
             _last = pos;
             _stillFor = moved < 0.0025f ? _stillFor + Time.deltaTime : 0f;
@@ -454,6 +511,7 @@ namespace FireFront.Patches
             {
                 _stopped = true;
                 foreach (ParticleSystem ps in _systems) if (ps != null) ps.Stop(false, ParticleSystemStopBehavior.StopEmitting);
+                if (_roar != null) _roar.Stop();
             }
         }
     }
@@ -466,14 +524,25 @@ namespace FireFront.Patches
         private readonly List<(float at, Vector3 pos, float lifetime, float size)> _queue = new List<(float, Vector3, float, float)>();
         private const int MaxQueued = 1200;
 
+        private readonly List<(float at, Vector3 pos)> _steam = new List<(float, Vector3)>();
+
+        private static void EnsureInstance()
+        {
+            if (_instance != null) return;
+            var go = new GameObject("FireFront_RetardantStains");
+            Object.DontDestroyOnLoad(go);
+            _instance = go.AddComponent<RetardantStains>();
+        }
+
+        public static void EnqueueSteam(Vector3 pos, float delay)
+        {
+            EnsureInstance();
+            if (_instance._steam.Count < 200) _instance._steam.Add((Time.time + delay, pos));
+        }
+
         public static void Enqueue(Vector3 pos, float delay, float lifetime, float size)
         {
-            if (_instance == null)
-            {
-                var go = new GameObject("FireFront_RetardantStains");
-                Object.DontDestroyOnLoad(go);
-                _instance = go.AddComponent<RetardantStains>();
-            }
+            EnsureInstance();
             if (_instance._queue.Count >= MaxQueued) return;
             _instance._queue.Add((Time.time + delay, pos, lifetime, size));
         }
@@ -481,6 +550,14 @@ namespace FireFront.Patches
         private void Update()
         {
             float now = Time.time;
+            int hisses = 0;
+            for (int i = _steam.Count - 1; i >= 0; i--)
+            {
+                if (now < _steam[i].at) continue;
+                SteamBurst.Spawn(_steam[i].pos);
+                if (hisses++ < 3) RetardantSound.Hiss(_steam[i].pos); // a few per frame is plenty to hear
+                _steam.RemoveAt(i);
+            }
             int spawned = 0;
             for (int i = _queue.Count - 1; i >= 0 && spawned < 16; i--)
             {
@@ -490,6 +567,165 @@ namespace FireFront.Patches
                 _queue.RemoveAt(i);
                 spawned++;
             }
+        }
+    }
+
+    /// <summary>A one-shot burst of white steam boiling up where the retardant lands on fire.</summary>
+    public static class SteamBurst
+    {
+        public static void Spawn(Vector3 at)
+        {
+            var go = new GameObject("FireFront_Steam");
+            go.transform.position = at + Vector3.up * 0.3f;
+            go.transform.rotation = Quaternion.LookRotation(Vector3.up);
+            var ps = go.AddComponent<ParticleSystem>();
+            ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+
+            var main = ps.main;
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+            main.playOnAwake = false;
+            main.loop = false;
+            main.duration = 1.2f;
+            main.startLifetime = new ParticleSystem.MinMaxCurve(3f, 5.5f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(1.5f, 4f);
+            main.startSize = new ParticleSystem.MinMaxCurve(1.2f, 2.4f);
+            main.startColor = new ParticleSystem.MinMaxGradient(new Color(0.95f, 0.95f, 0.95f, 0.7f), new Color(0.82f, 0.82f, 0.84f, 0.55f));
+            main.gravityModifier = -0.06f; // hot: it rises
+            main.maxParticles = 60;
+
+            var emission = ps.emission;
+            emission.rateOverTime = 0f;
+            emission.SetBursts(new[] { new ParticleSystem.Burst(0f, 22), new ParticleSystem.Burst(0.35f, 14), new ParticleSystem.Burst(0.8f, 8) });
+
+            var shape = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.Cone;
+            shape.angle = 28f;
+            shape.radius = 0.9f;
+
+            var sol = ps.sizeOverLifetime;
+            sol.enabled = true;
+            sol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(new Keyframe(0f, 0.5f), new Keyframe(1f, 3.2f)));
+
+            var col = ps.colorOverLifetime;
+            col.enabled = true;
+            var g = new Gradient();
+            g.SetKeys(
+                new[] { new GradientColorKey(Color.white, 0f), new GradientColorKey(Color.white, 1f) },
+                new[] { new GradientAlphaKey(0.85f, 0f), new GradientAlphaKey(0.5f, 0.5f), new GradientAlphaKey(0f, 1f) });
+            col.color = new ParticleSystem.MinMaxGradient(g);
+
+            var noise = ps.noise;
+            noise.enabled = true;
+            noise.strength = 0.5f;
+            noise.frequency = 0.4f;
+            noise.quality = ParticleSystemNoiseQuality.Low;
+
+            var r = go.GetComponent<ParticleSystemRenderer>();
+            r.renderMode = ParticleSystemRenderMode.Billboard;
+            Material mat = FireFrontTextureGenerator.GetOrCreateSmokeMaterial();
+            if (mat != null) r.sharedMaterial = mat;
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            ps.Play();
+            Object.Destroy(go, 7f);
+        }
+    }
+
+    /// <summary>
+    /// The drop's sound, borrowed from vanilla: the game's own sound-effect prefabs (ZSFX) are
+    /// searched once by name, a rushing-water loop for the pour (pitched down for weight) and a
+    /// hiss for fire dying. The whole candidate list is logged once, so a better pick can be
+    /// named later. Plays through the game's own mixer group, so the SFX volume slider applies.
+    /// </summary>
+    public static class RetardantSound
+    {
+        private static readonly string[] RoarKeys = { "waterfall", "water_loop", "river", "rain", "splash", "water" };
+        private static readonly string[] HissKeys = { "extinguish", "steam", "hiss", "sizzle", "lava", "fire_hit", "fire" };
+        private static bool _searched;
+        private static AudioClip _roarClip, _hissClip;
+        private static UnityEngine.Audio.AudioMixerGroup _mixer;
+        private const BindingFlags Any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        private static readonly FieldInfo PrefabsField = typeof(ZNetScene).GetField("m_prefabs", Any);
+        private static readonly FieldInfo ClipsField = typeof(ZSFX).GetField("m_audioClips", Any);
+
+        private static void Search()
+        {
+            if (_searched || ZNetScene.instance == null) return;
+            _searched = true;
+            try
+            {
+                var prefabs = PrefabsField?.GetValue(ZNetScene.instance) as List<GameObject>;
+                if (prefabs == null) return;
+                var found = new List<(string name, AudioClip clip, AudioSource src)>();
+                foreach (GameObject p in prefabs)
+                {
+                    if (p == null) continue;
+                    ZSFX sfx = p.GetComponent<ZSFX>();
+                    if (sfx == null) continue;
+                    var clips = ClipsField?.GetValue(sfx) as AudioClip[];
+                    if (clips == null || clips.Length == 0 || clips[0] == null) continue;
+                    found.Add((p.name.ToLowerInvariant(), clips[0], p.GetComponent<AudioSource>()));
+                }
+                var listed = new List<string>();
+                foreach (var f in found)
+                    if (f.name.Contains("water") || f.name.Contains("splash") || f.name.Contains("rain") || f.name.Contains("steam") ||
+                        f.name.Contains("fire") || f.name.Contains("hiss") || f.name.Contains("lava") || f.name.Contains("wind") || f.name.Contains("extinguish"))
+                        listed.Add(f.name);
+                FireLogger.Info($"[ARROWS] sound candidates ({listed.Count} of {found.Count} sfx): {string.Join(", ", listed)}");
+
+                _roarClip = Pick(found, RoarKeys, out AudioSource roarSrc);
+                _hissClip = Pick(found, HissKeys, out AudioSource hissSrc);
+                _mixer = roarSrc?.outputAudioMixerGroup ?? hissSrc?.outputAudioMixerGroup;
+                FireLogger.Info($"[ARROWS] dousing sound: pour '{(_roarClip != null ? _roarClip.name : "none")}', " +
+                                $"hiss '{(_hissClip != null ? _hissClip.name : "none")}', mixer '{(_mixer != null ? _mixer.name : "none")}'.");
+            }
+            catch (System.Exception ex) { FireLogger.Warn($"[ARROWS] sound search threw: {ex.Message}; the drop is silent."); }
+        }
+
+        private static AudioClip Pick(List<(string name, AudioClip clip, AudioSource src)> found, string[] keys, out AudioSource src)
+        {
+            foreach (string key in keys)
+                foreach (var f in found)
+                    if (f.name.Contains(key)) { src = f.src; return f.clip; }
+            src = null;
+            return null;
+        }
+
+        private static AudioSource MakeSource(GameObject host, AudioClip clip, float volume, float pitch, float maxDistance)
+        {
+            var a = host.AddComponent<AudioSource>();
+            a.clip = clip;
+            a.outputAudioMixerGroup = _mixer;
+            a.volume = volume;
+            a.pitch = pitch;
+            a.spatialBlend = 1f;
+            a.rolloffMode = AudioRolloffMode.Linear;
+            a.minDistance = 6f;
+            a.maxDistance = maxDistance;
+            a.dopplerLevel = 0.3f;
+            return a;
+        }
+
+        /// <summary>The pour: a deep rushing loop riding on the arrow. Null when no clip was found.</summary>
+        public static AudioSource StartRoar(GameObject host)
+        {
+            Search();
+            if (_roarClip == null || host == null) return null;
+            AudioSource a = MakeSource(host, _roarClip, 1f, 0.55f, 90f);
+            a.loop = true;
+            a.Play();
+            return a;
+        }
+
+        /// <summary>A hiss where fire dies under the drop.</summary>
+        public static void Hiss(Vector3 at)
+        {
+            Search();
+            if (_hissClip == null) return;
+            var go = new GameObject("FireFront_Hiss");
+            go.transform.position = at;
+            AudioSource a = MakeSource(go, _hissClip, 0.9f, Random.Range(0.8f, 1.05f), 50f);
+            a.Play();
+            Object.Destroy(go, _hissClip.length / Mathf.Max(0.5f, a.pitch) + 0.2f);
         }
     }
 
