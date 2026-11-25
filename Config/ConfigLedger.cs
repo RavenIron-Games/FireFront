@@ -30,13 +30,15 @@ namespace FireFront.Config
     ///       Debug.VerboseLogging is dropped.
     ///   2 = 0.21.9: Ground.GroundVfxMaxConcurrent still at 30 moves to 200 - at 30 against a
     ///       GroundMaxConcurrent of 50, two cells in five burned invisibly.
-    ///   3 = 1.0.5: Controls.ExtinguishKey still at G moves to BackQuote (`). Current.
+    ///   3 = 1.0.5: Controls.ExtinguishKey still at G moves to BackQuote (`).
+    ///   4 = 1.0.6: Fire.BurnPlayerBuildings still at true moves to false: builds are fireproof
+    ///       by default. Current.
     /// </summary>
     public static class ConfigLedger
     {
         public const string MetaSection = "Meta";
         public const string VersionKey = "ConfigVersion";
-        public const int CurrentVersion = 3;
+        public const int CurrentVersion = 5;
 
         /// <summary>One slot's every old default, from Wings' shape. A stored value equal to ANY of them is the mod's own old default, not admin work.</summary>
         public sealed class Rebase
@@ -79,6 +81,26 @@ namespace FireFront.Config
                     // no modifiers as its KeyCode name, so a stored "G" is the mod's own old default.
                     // "G + LeftShift" or any other key is someone's choice and is kept.
                     new Rebase { Section = "Controls", Key = "ExtinguishKey", OldDefaults = new[] { "G" } },
+                }
+            },
+            { 4, new[]
+                {
+                    // 1.0.6 moved BurnPlayerBuildings true -> false: what players build is fireproof unless
+                    // an admin turns it on. BepInEx writes a bool as lower-case "true", so a stored "true"
+                    // is the mod's own old default and follows; a stored "false" already says the same.
+                    // An admin who wants builds to burn sets it to true again after this boot, once.
+                    new Rebase { Section = "Fire", Key = "BurnPlayerBuildings", OldDefaults = new[] { "true" } },
+                }
+            },
+            { 5, new[]
+                {
+                    // 1.0.6 test: "grass burns out too fast". A ground cell burns 20 s, not 8; the ground
+                    // cap and the ground damage cap rise by the same 2.5x, 50 -> 125, so the front keeps
+                    // its pace (a longer burn with the old cap would hit the cap sooner and crawl).
+                    // net472 writes the float 8 as "8" and the ints as "50".
+                    new Rebase { Section = "Ground", Key = "GroundBurnDurationSeconds", OldDefaults = new[] { "8" } },
+                    new Rebase { Section = "Ground", Key = "GroundMaxConcurrent", OldDefaults = new[] { "50" } },
+                    new Rebase { Section = "Damage", Key = "GroundDamageMaxConcurrent", OldDefaults = new[] { "50" } },
                 }
             },
         };

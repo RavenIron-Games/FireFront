@@ -1,5 +1,55 @@
 # Changelog
 
+## 1.0.6 — 2026-11-25
+
+- **`BurnPlayerBuildings` is off by default: fire no longer burns what players build** unless
+  an admin turns it on (`fireset burnbuildings true`, or `BurnPlayerBuildings = true` in the
+  server config). A config file that still holds the old default `true` moves to `false` on
+  first boot (config layout version 4); a server that wants builds to burn sets it to `true`
+  again after that boot. Ruins and other world structures are not player builds and still burn.
+- **A burning creature no longer lights buildings, so Fuling villages stop burning down on their
+  own.** Since 1.0.5 a creature on fire lit any tree, log or burnable piece within 4 m of its
+  path. Fulings live among their huts and catch fire from each other, so one burning Fuling took
+  the whole village, often before any player arrived. A burning creature now lights trees, logs
+  and grass only, never a piece, whether a player built it or it came with the world. A building
+  can still catch the ordinary way, from fire that spreads to it, and burning animals still set
+  forests alight as before. Needs only the server, or the player hosting, to run 1.0.6.
+- **Grass burns longer: 20 seconds a patch, not 8.** It burned out too fast. The limit on
+  ground cells burning at once rises with it, 50 to 125 (`GroundMaxConcurrent`, and
+  `GroundDamageMaxConcurrent` to match), so a front moves as fast as before and stays thicker.
+  A config file still holding the old 8, 50 and 50 moves to the new values on first boot
+  (config layout version 5); a value an admin chose is kept.
+- **A fire arrow that lands on the ground lights the grass there.** Before, grass caught only
+  from a burning tree, log, building or creature, so an arrow into open grass, most of the
+  Plains, did nothing. Any fire projectile a player shoots or throws counts: fire arrows, fire
+  staff bolts. It lights the grass within 1.5 m of where it lands (`FireProjectileGrassRadius`),
+  booked to that player; off with `FireProjectilesLightGrass = false` on the server. Creatures'
+  fire projectiles (a Fuling shaman's, a Surtling's) never light grass. All the usual rules hold:
+  nothing in the Ashlands, on water, on a dirt path or in a dungeon, and in rain it lights but
+  does not spread. The shooter and the server both need 1.0.6.
+- **Two new firefighting arrows, crafted at the workbench, 20 a craft.** Both act along their
+  whole flight, not only where they land, and both carry a wood arrow's damage with no fire or
+  frost.
+  - **Ember arrow** (8 Wood, 4 Coal, 2 Feathers): shot over grass, it drops embers under its whole flight, from 5 m in front of the shooter to where it
+    lands. A line of flame burns down the middle and the strip either side, 5 m wide in all
+    (`EmberArrowFirebreakRadius`, 2.5 m either side), is burnt out at once; the line burns out without
+    spreading and without lighting the trees or buildings beside it, a controlled burn. The burnt
+    strip then holds as a firebreak for 3 minutes (`EmberArrowFirebreakSeconds`): a wildfire
+    that reaches it stops there.
+  - **Dousing arrow** (8 Wood, 4 Resin, 2 Leather scraps, 2 Feathers): the large air tanker. From the
+    moment it is loosed a heavy dark-red retardant column pours from it and breaks into a wide
+    billowing curtain. Every fire within 12 m of its flight line goes out (`DousingArrowRadius`), a 24 m swath,
+    burning trees 3 m further for their canopies,
+    from as high as it flies (up to 150 m), and the ground under it stays soaked for 2 minutes
+    (`DousingArrowSoakSeconds`), burning or not, stained red, darkest down the middle. Trees and
+    buildings under it are soaked too, so fire cannot walk across the strip from tree to tree, and
+    where the arrow lands the splash reaches 1.6 times as far (about 19 m), so a shot straight into a
+    fire puts out a wide circle. The
+    curtain hangs in the air and drifts with the wind before it settles, the drop roars as it
+    pours, and where it lands on fire, white steam boils up with a hiss.
+    Fire it over the front, or along a line the fire must not cross.
+  The shooter and the server both need 1.0.6.
+
 ## 1.0.5 — 2026-11-21
 
 - **A creature on fire spreads fire as it runs.** Set a bear alight with a torch, shoot a

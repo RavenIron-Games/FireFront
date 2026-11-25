@@ -110,6 +110,34 @@ namespace FireFront.Tests
             Check("Plan: a version-3 file's G was chosen after 1.0.5 and is left alone",
                 doneKey.ResetToDefault.Count == 0 && doneKey.Kept.Count == 0);
 
+            // --- Plan: the 1.0.6 BurnPlayerBuildings default -----------------------------------
+            // A stored "true" is the old default and moves to false (builds fireproof); a stored
+            // "false" is kept as is; a version-4 file's true was set after 1.0.6 and is left alone.
+            var oldBurn = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 3", "[Fire]", "BurnPlayerBuildings = true"), 3);
+            Check("Plan: BurnPlayerBuildings still at the old default true moves (from a version-3 file)",
+                oldBurn.ResetToDefault.Count == 1 && oldBurn.ResetToDefault.Contains("Fire::BurnPlayerBuildings"));
+            var oldBurnV0 = ConfigLedger.Plan(Snapshot("[Fire]", "BurnPlayerBuildings = true"), 0);
+            Check("Plan: and from an unstamped file too", oldBurnV0.ResetToDefault.Contains("Fire::BurnPlayerBuildings"));
+            var offBurn = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 3", "[Fire]", "BurnPlayerBuildings = false"), 3);
+            Check("Plan: a stored false is kept", offBurn.ResetToDefault.Count == 0 && offBurn.Kept.Count == 1);
+            var doneBurn = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 4", "[Fire]", "BurnPlayerBuildings = true"), 4);
+            Check("Plan: a version-4 file's true was chosen after 1.0.6 and is left alone",
+                doneBurn.ResetToDefault.Count == 0 && doneBurn.Kept.Count == 0);
+            // --- Plan: the 1.0.6 longer grass burn ---------------------------------------------
+            var oldBurnTime = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 4", "[Ground]", "GroundBurnDurationSeconds = 8",
+                "GroundMaxConcurrent = 50", "[Damage]", "GroundDamageMaxConcurrent = 50"), 4);
+            Check("Plan: 8 s / 50 / 50 still at the old defaults all move (from a version-4 file)",
+                oldBurnTime.ResetToDefault.Count == 3 && oldBurnTime.ResetToDefault.Contains("Ground::GroundBurnDurationSeconds") &&
+                oldBurnTime.ResetToDefault.Contains("Ground::GroundMaxConcurrent") && oldBurnTime.ResetToDefault.Contains("Damage::GroundDamageMaxConcurrent"));
+            var tunedBurnTime = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 4", "[Ground]", "GroundBurnDurationSeconds = 12",
+                "GroundMaxConcurrent = 80"), 4);
+            Check("Plan: an admin's own burn time and cap are kept",
+                tunedBurnTime.ResetToDefault.Count == 0 && tunedBurnTime.Kept.Count == 2);
+            var doneBurnTime = ConfigLedger.Plan(Snapshot("[Meta]", "ConfigVersion = 5", "[Ground]", "GroundBurnDurationSeconds = 8"), 5);
+            Check("Plan: a version-5 file's 8 was chosen after 1.0.6 and is left alone",
+                doneBurnTime.ResetToDefault.Count == 0 && doneBurnTime.Kept.Count == 0);
+            Check("Plan: current version is 5", ConfigLedger.CurrentVersion == 5);
+
             // --- Plan: the 0.21.9 ground-visual cap -------------------------------------------
             // A stored 30 is the mod's OWN old default, not a decision: at GroundMaxConcurrent 50
             // it left two cells in five burning invisibly, which is the bug 0.21.9 fixes. Without

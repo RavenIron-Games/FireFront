@@ -23,7 +23,9 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 |---|---|
 | **Fight Brenna in the Smouldering Tomb** | Her fire still lights what will burn inside the tomb, but the trees and grass around its entrance stay untouched |
 | **Burn anything in any dungeon or crypt** | It burns and spreads inside, as before; no ground fire is lit in there, and none reaches the land outside |
-| **Set a creature alight** | A bear hit with a torch, a skeleton shot with a fire arrow, a boar that ran through a blaze: while it burns it lights the grass along its path and any tree, log or burnable piece it passes within 4 m, so a burning animal running through the forest sets it alight. One burn carries fire for up to 30 s. The fire is booked to whoever set it alight. Tames never carry fire. Off with `fireset creaturefire false` |
+| **Set a creature alight** | A bear hit with a torch, a skeleton shot with a fire arrow, a boar that ran through a blaze: while it burns it lights the grass along its path and any tree or log it passes within 4 m, so a burning animal running through the forest sets it alight. It never lights a building, yours or a Fuling village's. One burn carries fire for up to 30 s. The fire is booked to whoever set it alight. Tames never carry fire. Off with `fireset creaturefire false` |
+| **Fight it from the air** | Since 1.0.6, two arrows crafted at the workbench act along their whole flight. The **Ember arrow** lays a 5 m wide controlled burn under its whole flight, from 5 m in front of you to where it lands, that never spreads, then holds as a firebreak for 3 minutes. The **Dousing arrow** is a large air tanker: a dark-red retardant column pours from it from the moment it is loosed and breaks into a wide curtain; it roars as it pours and the curtain drifts with the wind; every fire within 12 m of its flight line (a 24 m swath) goes out in a burst of hissing steam, from as high as it flies, about 19 m around where it lands; trees and buildings under it are soaked too, and the ground stays soaked, and stained red, for 2 minutes |
+| **Shoot the grass** | Since 1.0.6 a fire arrow (or a fire staff bolt) that lands on the ground lights the grass where it lands, within 1.5 m. Creatures' fire projectiles never do. Off with `FireProjectilesLightGrass = false` on the server |
 | **Put out a fire** | Press **`` ` ``** (backquote, left of 1) instead of G. A config still on the old G moves over by itself; a key you chose stays yours |
 | **Update the server and players** | The crypt fix and the creature fire run on the server (or whoever hosts); the new key comes with each player's own 1.0.5, and so does the watch on burning creatures, since a creature is run by the game of the player near it. A 1.0.4 player can still join a 1.0.5 server, with a version notice; creatures near only them just do not carry fire |
 
@@ -34,10 +36,10 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 | | If… | Then… |
 |---|---|---|
 | 🤝 | you play on a **server** | install FireFront on the server **and** on every player, the same version. The server runs the fire; your game only draws it. Update them together. |
-| 🔥 | you care about **your base** | the defaults are tuned aggressive: a torched wall can take the whole build. Keep trees and grass back from walls, or turn off `BurnPlayerBuildings` (`fireset burnbuildings false`) and fire never lights anything a player built. |
+| 🔥 | you care about **your base** | by default fire never lights anything a player built (`BurnPlayerBuildings` is off since 1.0.6). Turn it on (`fireset burnbuildings true`) and a torched wall can take the whole build, so keep trees and grass back from walls. |
 | 🛤️ | you run a **dedicated server** | dirt paths and cultivated ground stop ground fire only near the world's centre, in the few zones the server keeps loaded. Everywhere else only water stops it. That is a known gap, not a setting. |
 | 🐺 | you expect **creatures to burn** | they do in single player and in a hosted game. A dedicated server has no physical world where creatures stand, so there only players burn. |
-| 🖥️ | big fires **cost you frames** | turn on `fireset lowspec true` first. Fire still spreads and still burns your base down; there is just less happening at once. |
+| 🖥️ | big fires **cost you frames** | turn on `fireset lowspec true` first. Fire still spreads as before; there is just less happening at once. |
 | 🌋 | you are in the **Ashlands** | FireFront starts no fire there by default, because the Ashlands' own fire touches wood all the time. The Ashlands' own fire works as it always did. |
 | 📏 | you change **`GroundCellSize`** | change it only while no ground fire burns, and not across a restart that saved ground fire. Burning cells move to scaled positions on the new grid. |
 
@@ -180,9 +182,9 @@ Fire follows the game's own wind, is doused by rain, is stopped by water, surviv
 
 | You | It |
 |---|---|
-| **`fireset lowspec true`** | fewer things burning at once, fewer visuals, no scorch marks, a slower spread tick. Fire still spreads and still burns your base down; there is less happening at once |
+| **`fireset lowspec true`** | fewer things burning at once, fewer visuals, no scorch marks, a slower spread tick. Fire still spreads as before; there is less happening at once |
 | **`fireset burntheworld true`** | fire catches instantly, paths and even water stop stopping it, rain does not put it out, burnt ground relights, fires start at full strength, nothing grows back, and the caps go to maximum per fire, so several blazes rage at once |
-| **`fireset burnbuildings false`** | anti-grief: fire never ignites anything a player placed, by spread, by fire arrows, by anything, while ruins and world structures still burn |
+| **`fireset burnbuildings true`** | lets fire burn what players build. It is off by default since 1.0.6: fire then never ignites anything a player placed, by spread, by fire arrows, by anything, while ruins and world structures still burn |
 
 <details>
 <summary>📖 <b>Read the saga</b> — what the presets touch</summary>
@@ -322,10 +324,12 @@ All safe to leave alone. They are in `BepInEx/config/com.raveniron.firefront.cfg
 | Fire | `BurnDurationSeconds` · `SpreadMaturityFraction` · `SpreadRadius` | how long a piece burns, how long before it spreads, and how far |
 | Fire | `MaxConcurrentBurning` · `QueueSize` · `SpreadCheckInterval` | how many things burn at once, how many wait, how often spread is checked |
 | Fire | `BurnTreesAndLogs` · `BurnPlayerBuildings` · `FireInAshlands` | what may catch fire, and where |
+| Arrows | `EmberArrowFirebreakSeconds` · `EmberArrowFirebreakRadius` · `DousingArrowRadius` · `DousingArrowSoakSeconds` | how long and how wide an Ember arrow's firebreak is, how wide a Dousing arrow's drop is, and how long the soaked strip holds (default 180 s, 2.5 m either side, 12 m, 120 s) |
+| Fire | `FireProjectilesLightGrass` · `FireProjectileGrassRadius` | whether a player's fire arrow landing on the ground lights the grass there, and how far around it (default on, 1.5 m) |
 | Fire | `BurningCreaturesSpreadFire` · `BurningCreatureFireRadius` · `BurningCreatureTreeRadius` · `BurningCreatureCarrySeconds` | whether a creature on fire lights what it passes, how far around its path for grass and for trees, and how long one burn carries fire (default on, 2 m, 4 m, 30 s) |
 | Fire | `TreeDestructionRate` | the chance a dead tree collapses rather than standing as a snag |
 | Fire | `FireRampEnabled` · `FireRampDurationSeconds` · `FireRampStartFraction` | how a new fire builds to full strength |
-| Ground | `GroundSpreadEnabled` · `GroundCellSize` · `GroundSpreadRadius` · `GroundBurnDurationSeconds` · `GroundMaxConcurrent` | ground fire: on or off, cell size, reach, burn time, cap |
+| Ground | `GroundSpreadEnabled` · `GroundCellSize` · `GroundSpreadRadius` · `GroundBurnDurationSeconds` · `GroundMaxConcurrent` | ground fire: on or off, cell size, reach, burn time (20 s since 1.0.6), cap (125 since 1.0.6) |
 | Ground | `GroundFuelExhaustionEnabled` · `GroundFuelRegrowSeconds` | how long burnt ground stays spent |
 | Ground | `GroundFirebreaksEnabled` · `GroundWaterBlocksSpreadEnabled` | paths, fields and water as firebreaks |
 | Ground | `WindSpreadBiasEnabled` · `WindUpwindIgniteChance` · `WindInfluence` | how much the wind shapes the fire |

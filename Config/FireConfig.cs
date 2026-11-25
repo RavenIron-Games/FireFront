@@ -23,6 +23,12 @@ namespace FireFront.Config
         public static ConfigEntry<bool> BurnPlayerBuildings;
         public static ConfigEntry<bool> FireInAshlands;
         public static ConfigEntry<bool> BurningCreaturesSpreadFire;
+        public static ConfigEntry<bool> FireProjectilesLightGrass;
+        public static ConfigEntry<float> EmberArrowFirebreakSeconds;
+        public static ConfigEntry<float> EmberArrowFirebreakRadius;
+        public static ConfigEntry<float> DousingArrowRadius;
+        public static ConfigEntry<float> DousingArrowSoakSeconds;
+        public static ConfigEntry<float> FireProjectileGrassRadius;
         public static ConfigEntry<float> BurningCreatureFireRadius;
         public static ConfigEntry<float> BurningCreatureCarrySeconds;
         public static ConfigEntry<float> BurningCreatureTreeRadius;
@@ -405,10 +411,11 @@ namespace FireFront.Config
                     new AcceptableValueRange<float>(0f, 100f)));
 
             BurnPlayerBuildings = config.Bind(
-                "Fire", "BurnPlayerBuildings", true,
+                "Fire", "BurnPlayerBuildings", false,
                 "Player-built structures (anything carrying a placement creator stamp — walls, " +
-                "floors, furniture, chests you placed) can catch fire. Set false for an " +
-                "anti-grief server: fire then never ignites player builds by ANY path — spread, " +
+                "floors, furniture, chests you placed) can catch fire. Off by default since 1.0.6 " +
+                "(a config still holding the old default true moves to false once): fire never " +
+                "ignites player builds by ANY path — spread, " +
                 "fire arrows, console commands — while world-generated structures (abandoned " +
                 "villages, ruins, dungeon furniture) still burn. Wildfire still crawls past a " +
                 "protected base and still hurts anyone standing in it; only the buildings are " +
@@ -433,9 +440,10 @@ namespace FireFront.Config
                 "Fire", "BurningCreaturesSpreadFire", true,
                 "A creature on fire (a bear hit with a torch, a skeleton shot with a fire arrow, a " +
                 "boar that ran through a blaze) lights what it passes while it burns: the grass along " +
-                "its path (within BurningCreatureFireRadius) and any tree, log or burnable piece within " +
+                "its path (within BurningCreatureFireRadius) and any tree or log within " +
                 "BurningCreatureTreeRadius of it, " +
-                "for up to BurningCreatureCarrySeconds per burn. Players and tames never carry fire. " +
+                "for up to BurningCreatureCarrySeconds per burn. It never lights a building, player-built or " +
+                "world-generated (a Fuling village). Players and tames never carry fire. " +
                 "The fire is booked to the player whose fire last hit the creature, if any. Every normal rule " +
                 "still applies (Ashlands, water, dungeons, BurnPlayerBuildings, BurnTreesAndLogs). " +
                 "Read by the server; set it there.");
@@ -443,8 +451,8 @@ namespace FireFront.Config
             BurningCreatureFireRadius = config.Bind(
                 "Fire", "BurningCreatureFireRadius", 2f,
                 new ConfigDescription(
-                    "Meters either side of a burning creature's path in which grass catches. Trees, logs " +
-                    "and pieces use BurningCreatureTreeRadius. Read by the server.",
+                    "Meters either side of a burning creature's path in which grass catches. Trees and logs " +
+                    "use BurningCreatureTreeRadius. Read by the server.",
                     new AcceptableValueRange<float>(0.5f, 4f)));
 
             BurningCreatureCarrySeconds = config.Bind(
@@ -459,11 +467,59 @@ namespace FireFront.Config
             BurningCreatureTreeRadius = config.Bind(
                 "Fire", "BurningCreatureTreeRadius", 4f,
                 new ConfigDescription(
-                    "Meters from a burning creature's path within which trees, logs and burnable pieces " +
+                    "Meters from a burning creature's path within which trees and logs (never buildings) " +
                     "catch. Wider than the grass radius because a tree is measured at its trunk and its " +
                     "branches spread a few metres out: a creature running under a canopy sets it alight. " +
                     "Read by the server.",
                     new AcceptableValueRange<float>(0.5f, 6f)));
+
+            // 1.0.6. New keys, so their defaults reach existing installs without a ledger rung.
+            FireProjectilesLightGrass = config.Bind(
+                "Fire", "FireProjectilesLightGrass", true,
+                "A player's fire arrow (or any other fire projectile a player shoots or throws) that " +
+                "lands on the ground lights the grass where it lands, within FireProjectileGrassRadius. " +
+                "Only bare ground counts: an arrow that hits a tree, a log or a building lights that the " +
+                "usual way. Creatures' fire projectiles never light grass. Every normal rule still " +
+                "applies (Ashlands, water, dirt paths, dungeons; in rain it lights but does not spread). Read by the server; set it there.");
+
+            FireProjectileGrassRadius = config.Bind(
+                "Fire", "FireProjectileGrassRadius", 1.5f,
+                new ConfigDescription(
+                    "Meters around a fire arrow's landing point in which grass catches. Read by the server.",
+                    new AcceptableValueRange<float>(0.5f, 4f)));
+
+            // 1.0.6: the trail arrows (Patches/TrailArrows.cs). New keys, no ledger rung.
+            EmberArrowFirebreakSeconds = config.Bind(
+                "Arrows", "EmberArrowFirebreakSeconds", 180f,
+                new ConfigDescription(
+                    "Ember arrow: a low shot drops embers on the ground under its flight. Each lights a " +
+                    "small patch of grass that burns out without spreading and without lighting trees or " +
+                    "buildings next to it, a controlled burn. The burnt strip then holds as a firebreak " +
+                    "for this many seconds: no fire crosses it. Read by the server.",
+                    new AcceptableValueRange<float>(10f, 1800f)));
+
+            EmberArrowFirebreakRadius = config.Bind(
+                "Arrows", "EmberArrowFirebreakRadius", 2.5f,
+                new ConfigDescription(
+                    "Ember arrow: meters either side of its flight in which the controlled burn lights the " +
+                    "grass, so the firebreak is twice this wide. Read by the server.",
+                    new AcceptableValueRange<float>(0.5f, 5f)));
+
+            DousingArrowRadius = config.Bind(
+                "Arrows", "DousingArrowRadius", 12f,
+                new ConfigDescription(
+                    "Dousing arrow, the large air tanker: meters either side of its flight line in which every " +
+                    "fire, ground or object, goes out and the ground, trees and buildings are soaked. Where " +
+                    "the arrow lands the splash reaches 1.6 times as far. Burning trees are reached 3 m " +
+                    "further, for their canopies. Read by the server.",
+                    new AcceptableValueRange<float>(0.5f, 20f)));
+
+            DousingArrowSoakSeconds = config.Bind(
+                "Arrows", "DousingArrowSoakSeconds", 120f,
+                new ConfigDescription(
+                    "Dousing arrow: seconds the soaked strip holds, burning or not, before fire can cross " +
+                    "it again. Put a line ahead of the front and it stops there. Read by the server.",
+                    new AcceptableValueRange<float>(10f, 1800f)));
 
             VfxPrefabName = config.Bind(
                 "Visuals", "VfxPrefabName", "",
@@ -564,14 +620,16 @@ namespace FireFront.Config
                     new AcceptableValueRange<float>(1f, 20f)));
 
             GroundBurnDurationSeconds = config.Bind(
-                "Ground", "GroundBurnDurationSeconds", 8f,
+                "Ground", "GroundBurnDurationSeconds", 20f,
                 new ConfigDescription(
-                    "Seconds a ground cell stays burning before it goes out.",
+                    "Seconds a ground cell stays burning before it goes out. 20 since 1.0.6 (was 8: grass " +
+                    "burned out too fast); a file still holding 8 moves to 20 on first boot.",
                     new AcceptableValueRange<float>(1f, 120f)));
 
             GroundMaxConcurrent = config.Bind(
-                "Ground", "GroundMaxConcurrent", 50,
+                "Ground", "GroundMaxConcurrent", 125,
                 new ConfigDescription(
+                    "125 since 1.0.6 (was 50, raised with the longer grass burn so the front keeps its pace). " +
                     "Hard cap on concurrently burning ground cells. Cheap (no real objects), so this can be much higher than MaxConcurrentBurning.",
                     new AcceptableValueRange<int>(1, 2000)));
 
@@ -598,8 +656,9 @@ namespace FireFront.Config
                     new AcceptableValueRange<int>(0, 2000)));
 
             GroundDamageMaxConcurrent = config.Bind(
-                "Damage", "GroundDamageMaxConcurrent", 50,
+                "Damage", "GroundDamageMaxConcurrent", 125,
                 new ConfigDescription(
+                    "125 since 1.0.6, matching GroundMaxConcurrent. " +
                     "Max ground-fire cells that get a damage zone at once, INDEPENDENT of " +
                     "GroundVfxMaxConcurrent. Was accidentally sharing the low visual cap through " +
                     "0.12.1, meaning only ~30 of up to 200 burning cells could ever hurt anyone — " +

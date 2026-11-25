@@ -211,6 +211,7 @@ namespace FireFront.Utils
             public ZDOID Id;
             public Vector3 Position;
             public int PrefabHash;   // 0.21.6: lets a caller match a stored prefab name without a second lookup
+            public bool IsTreeOrLog; // 1.0.6: set by CollectBurnableZdosNear only; false for a piece (built or world-generated)
         }
 
         // 1.0.7 retyped this whole call: the sector is a Vector2s now, and the two ring
@@ -366,7 +367,7 @@ namespace FireFront.Utils
 
                 Vector3 pos = zdo.GetPosition();
                 if ((pos - center).sqrMagnitude > radiusSqr) continue;
-                into.Add(new ZdoBurnable { Id = zdo.m_uid, Position = pos, PrefabHash = zdo.GetPrefab() });
+                into.Add(new ZdoBurnable { Id = zdo.m_uid, Position = pos, PrefabHash = zdo.GetPrefab(), IsTreeOrLog = isTreeOrLog });
             }
 
             return true;
@@ -2549,9 +2550,20 @@ namespace FireFront.Utils
         /// finding on PR #3. The quad is therefore fitted to FIVE terrain rays, centre and four
         /// corners, and lifted along the fitted normal by what its highest-standing sample needs.
         /// </summary>
-        public static bool SpawnScorchMark(Vector3 position, float size, float lifetimeSeconds)
+        public static bool SpawnScorchMark(Vector3 position, float size, float lifetimeSeconds) =>
+            SpawnGroundDecal(position, size, lifetimeSeconds, retardant: false);
+
+        /// <summary>
+        /// 1.0.6: an orange retardant stain under a Dousing arrow's drop. Same ground fit as a scorch
+        /// mark, but alpha-blended orange (the scorch multiply only darkens, it cannot colour), and
+        /// every one is kept: the stain is a strip, not a scatter.
+        /// </summary>
+        public static bool SpawnRetardantMark(Vector3 position, float size, float lifetimeSeconds) =>
+            SpawnGroundDecal(position, size, lifetimeSeconds, retardant: true);
+
+        private static bool SpawnGroundDecal(Vector3 position, float size, float lifetimeSeconds, bool retardant)
         {
-            if (!ScorchMarkKept(position)) return true; // see ScorchMarkKept: by cell, so every peer agrees; not a failure
+            if (!retardant && !ScorchMarkKept(position)) return true; // see ScorchMarkKept: by cell, so every peer agrees; not a failure
             ScorchCell(position, out int cx, out int cz);
             float jx = (SharedMedia.ProceduralTextures.Hash(cx, cz, 11) - 0.5f) * 0.8f;
             float jz = (SharedMedia.ProceduralTextures.Hash(cx, cz, 13) - 0.5f) * 0.8f;
@@ -2622,12 +2634,12 @@ namespace FireFront.Utils
             }
             pos = centre + normal * lift; // off the surface, along its normal, not straight up
 
-            var quad = new GameObject("FireFrontScorchMark");
+            var quad = new GameObject(retardant ? "FireFrontRetardantMark" : "FireFrontScorchMark");
             quad.transform.position = pos;
             quad.transform.rotation = Quaternion.FromToRotation(Vector3.up, normal) * Quaternion.Euler(90f, yaw, 0f);
             quad.transform.localScale = new Vector3(scale, scale, 1f);
 
-            Material shared = GetOrCreateScorchMaterial();
+            Material shared = retardant ? GetOrCreateRetardantMaterial() : GetOrCreateScorchMaterial();
             // The multiply decal wants BLACK vertices (its fog rides on the vertex colour, see
             // FireFrontTextureGenerator.GetOrCreateScorchMultiplyMaterial); the alpha-disc
             // fallback multiplies its texture by the vertex colour and wants white.
@@ -2638,7 +2650,7 @@ namespace FireFront.Utils
             renderer.receiveShadows = false;
             if (shared != null) renderer.sharedMaterial = shared;
 
-            if (_scorchLogged < 5)
+            if (!retardant && _scorchLogged < 5)
             {
                 _scorchLogged++;
                 FireLogger.Info($"[SCORCH] mark {_scorchLogged}: at {pos.x:F1},{pos.y:F1},{pos.z:F1} size {scale:F1} terrain-hits={1 + cornerHits}/5 lift={lift:F2}m normal-tilt={Vector3.Angle(Vector3.up, normal):F0}deg shader={(shared != null && shared.shader != null ? shared.shader.name : "none")} blend={(shared != null && shared.HasProperty("_SrcBlend") ? shared.GetFloat("_SrcBlend") + "/" + shared.GetFloat("_DstBlend") : "n/a")}");
@@ -2716,6 +2728,39 @@ namespace FireFront.Utils
 
             _cachedScorchMaterial = new Material(shader) { mainTexture = GetOrCreateScorchTexture() };
             return _cachedScorchMaterial;
+        }
+
+        private static Material _cachedRetardantMaterial;
+        private static Texture2D _cachedRetardantTexture;
+
+        /// <summary>The retardant stain: alpha-blended orange on the soot blot's shape, white vertices.</summary>
+        private static Material GetOrCreateRetardantMaterial()
+        {
+            if (_cachedRetardantMaterial != null) return _cachedRetardantMaterial;
+            Shader shader = FindUsableParticleShader();
+            if (shader == null) return null;
+            if (_cachedRetardantTexture == null)
+            {
+                const int size = 128;
+                Color32[] px = SharedMedia.ProceduralTextures.SootBlot(size, 20261122);
+                for (int i = 0; i < px.Length; i++)
+                {
+                    // The blot's grey is 255 outside and about 77 at the heart: its darkness is the stain.
+                    float stain = Mathf.Clamp01((255f - px[i].r) / 178f);
+                    px[i] = new Color32(196, 52, 26, (byte)(stain * 0.40f * 255f)); // retardant red, deeper than orange
+                }
+                _cachedRetardantTexture = new Texture2D(size, size, TextureFormat.RGBA32, true, false)
+                {
+                    name = "FireFront_retardant",
+                    wrapMode = TextureWrapMode.Clamp,
+                    filterMode = FilterMode.Trilinear,
+                };
+                _cachedRetardantTexture.SetPixels32(px);
+                _cachedRetardantTexture.Apply(true, true);
+            }
+            _cachedRetardantMaterial = new Material(shader) { name = "FireFront_retardant", mainTexture = _cachedRetardantTexture };
+            _cachedRetardantMaterial.renderQueue = 2951; // just after the scorch decal
+            return _cachedRetardantMaterial;
         }
 
         private static Texture2D _cachedSootTexture;
@@ -3911,6 +3956,8 @@ namespace FireFront.Utils
         private const string RpcObjectFireSync = "FireFront_ObjectFireSync";
         private const string RpcVersion = "FireFront_Version"; // 0.24: Fire/VersionCheck.cs
         private const string RpcCreatureFire = "FireFront_CreatureFire"; // 1.0.5: Fire/CreatureFireWatch.cs
+        private const string RpcGroundIgnite = "FireFront_GroundIgnite"; // 1.0.6: Patches/FireProjectileGroundPatch.cs
+        private const string RpcArrowTrail = "FireFront_ArrowTrail"; // 1.0.6: Patches/TrailArrows.cs
 
         /// <summary>Client → server: run this whitelisted dev command there; replies stream back on the status-response channel.</summary>
         public static void SendCommandRelayToServer(string commandLine)
@@ -4175,6 +4222,8 @@ namespace FireFront.Utils
             RpcObjectFireSync.GetStableHashCode(),
             RpcVersion.GetStableHashCode(),
             RpcCreatureFire.GetStableHashCode(),
+            RpcGroundIgnite.GetStableHashCode(),
+            RpcArrowTrail.GetStableHashCode(),
             "RPC_Damage".GetStableHashCode(),
         };
 
@@ -4361,7 +4410,9 @@ namespace FireFront.Utils
             System.Action<long, ZPackage> onPaintAssign,
             System.Action<long, ZPackage> onObjectFireSync,
             System.Action<long, string, int> onVersion,
-            System.Action<long, ZPackage> onCreatureFire)
+            System.Action<long, ZPackage> onCreatureFire,
+            System.Action<long, ZPackage> onGroundIgnite,
+            System.Action<long, ZPackage> onArrowTrail)
         {
             if (ZRoutedRpc.instance == null)
             {
@@ -4392,7 +4443,9 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.Register<ZPackage>(RpcObjectFireSync, onObjectFireSync);
                 ZRoutedRpc.instance.Register<string, int>(RpcVersion, onVersion);
                 ZRoutedRpc.instance.Register<ZPackage>(RpcCreatureFire, onCreatureFire);
-                FireLogger.Info($"[IGNITE-TRACE] All 14 FireFront RPCs registered successfully (IsServer={IsServer()}).");
+                ZRoutedRpc.instance.Register<ZPackage>(RpcGroundIgnite, onGroundIgnite);
+                ZRoutedRpc.instance.Register<ZPackage>(RpcArrowTrail, onArrowTrail);
+                FireLogger.Info($"[IGNITE-TRACE] All 16 FireFront RPCs registered successfully (IsServer={IsServer()}).");
                 if (IsServer())
                 {
                     if (RoutedSenderGuardArmed)
@@ -4499,6 +4552,43 @@ namespace FireFront.Utils
                 ZRoutedRpc.instance.InvokeRoutedRPC(GetServerPeerId(), RpcCreatureFire, pkg);
             }
             catch (System.Exception ex) { FireLogger.Debug($"SendCreatureFireToServer threw: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// 1.0.6, client -> server: points on the ground under a trail arrow's flight (kind 0 = Ember
+        /// arrow, 1 = Dousing arrow). ZPackage(kind, igniter, count, points...).
+        /// </summary>
+        public static void SendArrowTrailToServer(int kind, long igniterPlayerId, List<Vector3> points)
+        {
+            if (ZRoutedRpc.instance == null || points == null || points.Count == 0) return;
+            try
+            {
+                var pkg = new ZPackage();
+                pkg.Write(kind);
+                pkg.Write(igniterPlayerId);
+                pkg.Write(points.Count);
+                for (int i = 0; i < points.Count; i++) pkg.Write(points[i]);
+                ZRoutedRpc.instance.InvokeRoutedRPC(GetServerPeerId(), RpcArrowTrail, pkg);
+            }
+            catch (System.Exception ex) { FireLogger.Debug($"SendArrowTrailToServer threw: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// 1.0.6, client -> server: a fire projectile this player shot landed on bare ground at
+        /// <paramref name="position"/>; light the grass there. ZPackage(position, igniter), the
+        /// creature-fire shape, so an old server just drops the unknown RPC.
+        /// </summary>
+        public static void SendGroundIgniteToServer(Vector3 position, long igniterPlayerId)
+        {
+            if (ZRoutedRpc.instance == null) return;
+            try
+            {
+                var pkg = new ZPackage();
+                pkg.Write(position);
+                pkg.Write(igniterPlayerId);
+                ZRoutedRpc.instance.InvokeRoutedRPC(GetServerPeerId(), RpcGroundIgnite, pkg);
+            }
+            catch (System.Exception ex) { FireLogger.Debug($"SendGroundIgniteToServer threw: {ex.Message}"); }
         }
 
         /// <summary>
