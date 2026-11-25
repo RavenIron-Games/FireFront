@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.6 — unreleased
+## 1.0.6 — 2026-11-25
 
 - **`BurnPlayerBuildings` is off by default: fire no longer burns what players build** unless
   an admin turns it on (`fireset burnbuildings true`, or `BurnPlayerBuildings = true` in the
